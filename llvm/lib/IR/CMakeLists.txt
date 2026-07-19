@@ -66,6 +66,7 @@ add_llvm_component_library(LLVMCore
   ValueSymbolTable.cpp
   VectorBuilder.cpp
   Verifier.cpp
+  CangjieDemangleStub.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/IR
@@ -83,32 +84,8 @@ add_llvm_component_library(LLVMCore
   Support
   )
 
-if(BUILD_SHARED_LIBS)
-  target_link_libraries(LLVMCore PRIVATE ${CANGJIE_DEMANGLE_DIR}/libcangjie-demangle.a)
-else()
+if(NOT BUILD_SHARED_LIBS)
+  # cjcj: the Cangjie demangler is compiled from source into LLVMCore
+  # (CangjieDemangleStub.cpp); no prebuilt libcangjie-demangle.a to link/merge.
   target_link_libraries(LLVMCore PRIVATE -fstack-protector-all)
-  if(WIN32)
-    add_custom_command(TARGET LLVMCore
-      POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/tmp
-      COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/tmp
-      COMMAND ${CMAKE_COMMAND} -E copy ${CANGJIE_DEMANGLE_DIR}/libcangjie-demangle.a
-                                       ${CMAKE_BINARY_DIR}/lib/
-      COMMAND cd ${CMAKE_BINARY_DIR}/tmp
-      COMMAND ${CMAKE_AR} x ${CMAKE_BINARY_DIR}/lib/libLLVMCore.a
-      COMMAND ${CMAKE_AR} x ${CMAKE_BINARY_DIR}/lib/libcangjie-demangle.a
-      COMMAND ${CMAKE_AR} cr ${CMAKE_BINARY_DIR}/lib/libLLVMCore.a ${CMAKE_BINARY_DIR}/tmp/*${CMAKE_CXX_OUTPUT_EXTENSION}
-    )
-  else()
-    add_custom_command(TARGET LLVMCore
-      POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/tmp
-      COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/tmp
-      COMMAND ${CMAKE_COMMAND} -E copy ${CANGJIE_DEMANGLE_DIR}/libcangjie-demangle.a
-                                       ${CMAKE_BINARY_DIR}/lib/
-      COMMAND cd ${CMAKE_BINARY_DIR}/tmp && ${CMAKE_AR} x ${CMAKE_BINARY_DIR}/lib/libLLVMCore.a
-      COMMAND cd ${CMAKE_BINARY_DIR}/tmp && ${CMAKE_AR} x ${CMAKE_BINARY_DIR}/lib/libcangjie-demangle.a
-      COMMAND cd ${CMAKE_BINARY_DIR}/tmp && ${CMAKE_AR} cr ${CMAKE_BINARY_DIR}/lib/libLLVMCore.a *.o
-    )
-  endif()
 endif()
