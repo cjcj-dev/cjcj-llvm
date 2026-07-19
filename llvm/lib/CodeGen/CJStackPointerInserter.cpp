@@ -797,10 +797,10 @@ void CJStackPointerInserter::filterGCPointer(
       if (Regs.contains(MO.getReg())) {
         Regs.remove(MO.getReg());
       }
-    } else {
-      assert(MO.isImm() && "MO is not a Imm when parse gc stack slot!");
-      assert(MO.getImm() == StackMaps::IndirectMemRefOp &&
-             "MO is not a IndirectMemRefOp type when parse gc stack slot!");
+    } else if (MO.isImm() && MO.getImm() == StackMaps::IndirectMemRefOp) {
+      // A constant GC pointer (e.g. the sentinel produced for relocate of an
+      // undef pointer) lives in neither a register nor a stack slot, so there
+      // is nothing to track here; any such entry simply falls through.
       int FI = MI.getOperand(GCPtrIdx + 2).getIndex();   // 2: FI index
       int Offset = MI.getOperand(GCPtrIdx + 3).getImm(); // 3: Offset
       SlotInfo StackPair = std::make_pair(FI, Offset);
