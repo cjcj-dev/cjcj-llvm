@@ -132,10 +132,10 @@ entry:
 ; ON: ret void
 
 define void @sticky_static_ref(i8 addrspace(1)* %value,
-                               i8 addrspace(1)* addrspace(1)* %field) gc "cangjie" {
+                               i8 addrspace(1)** %field) gc "cangjie" {
 entry:
   call void @llvm.cj.gcwrite.static.ref(i8 addrspace(1)* %value,
-                                         i8 addrspace(1)* addrspace(1)* %field)
+                                         i8 addrspace(1)** %field)
   ret void
 }
 
@@ -161,7 +161,7 @@ entry:
 declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*,
                                   i8 addrspace(1)* addrspace(1)*)
 declare void @llvm.cj.gcwrite.static.ref(i8 addrspace(1)*,
-                                         i8 addrspace(1)* addrspace(1)*)
+                                         i8 addrspace(1)**)
 declare void @llvm.cj.gcwrite.struct.p0i8(i8 addrspace(1)*,
                                          i8 addrspace(1)*, i8*, i64)
 declare void @llvm.cj.array.copy.ref.i64(i8 addrspace(1)*,
