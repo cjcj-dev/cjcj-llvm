@@ -63,6 +63,7 @@ namespace {
 constexpr uint64_t StickyLineShift = 8;
 constexpr StringRef StickyLoggedBaseName = "__cj_sticky_logged_base";
 constexpr StringRef StickyHeapBaseName = "__cj_sticky_heap_base";
+constexpr StringRef StickyHeapSizeName = "__cj_sticky_heap_size";
 
 const static StringRef NewObjFastStr = "CJ_MCC_NewObjectFast";
 const static StringRef NewObjFinalizerFastStr = "CJ_MCC_NewFinalizerFast";
@@ -495,8 +496,11 @@ private:
     }
   }
 
-  Value *createStickyLoggedCheck(IRBuilder<> &Builder, CallBase *CI,
-                                 Value *SourceObj) {
+  void createStickyLoggedCheck(CallBase *CI, Value *SourceObj,
+                               BasicBlock *MapReadyBranch,
+                               BasicBlock *TrueBranch,
+                               BasicBlock *FalseBranch,
+                               const DebugLoc &CurDbg) {
     Module *M = CI->getModule();
     Type *I8 = Type::getInt8Ty(C);
     Type *I8Ptr = Type::getInt8PtrTy(C);
@@ -511,6 +515,15 @@ private:
     assert(HeapBase->getValueType() == IntPtr &&
            "sticky heap base has an unexpected type");
 
+    GlobalVariable *HeapSize = M->getGlobalVariable(StickyHeapSizeName);
+    if (HeapSize == nullptr) {
+      HeapSize = new GlobalVariable(*M, IntPtr, false,
+                                    GlobalValue::ExternalLinkage, nullptr,
+                                    StickyHeapSizeName);
+    }
+    assert(HeapSize->getValueType() == IntPtr &&
+           "sticky heap size has an unexpected type");
+
     GlobalVariable *LoggedBase = M->getGlobalVariable(StickyLoggedBaseName);
     if (LoggedBase == nullptr) {
       LoggedBase = new GlobalVariable(*M, I8Ptr, false,
@@ -520,20 +533,44 @@ private:
     assert(LoggedBase->getValueType() == I8Ptr &&
            "sticky logged base has an unexpected type");
 
-    Value *SourceAddr = Builder.CreatePtrToInt(SourceObj, IntPtr,
-                                               "sticky.source.addr");
-    Value *HeapAddr = Builder.CreateLoad(IntPtr, HeapBase, "sticky.heap.base");
-    Value *LineIndex = Builder.CreateLShr(
-        Builder.CreateSub(SourceAddr, HeapAddr, "sticky.heap.offset"),
-        StickyLineShift, "sticky.line.index");
-    Value *MapBase =
-        Builder.CreateLoad(I8Ptr, LoggedBase, "sticky.logged.base");
-    Value *LoggedAddr = Builder.CreateInBoundsGEP(
+    BasicBlock *RangeCheckBranch = BasicBlock::Create(
+        C, "stickyRangeCheck", MapReadyBranch->getParent(), TrueBranch);
+    BasicBlock *MapCheckBranch = BasicBlock::Create(
+        C, "stickyMapCheck", MapReadyBranch->getParent(), TrueBranch);
+
+    IRBuilder<> ReadyBuilder(MapReadyBranch);
+    ReadyBuilder.SetCurrentDebugLocation(CurDbg);
+    Value *MapBase = ReadyBuilder.CreateLoad(I8Ptr, LoggedBase,
+                                             "sticky.logged.base");
+    ReadyBuilder.CreateCondBr(ReadyBuilder.CreateIsNull(MapBase), FalseBranch,
+                              RangeCheckBranch);
+
+    IRBuilder<> RangeBuilder(RangeCheckBranch);
+    RangeBuilder.SetCurrentDebugLocation(CurDbg);
+    Value *SourceAddr = RangeBuilder.CreatePtrToInt(SourceObj, IntPtr,
+                                                    "sticky.source.addr");
+    Value *HeapAddr =
+        RangeBuilder.CreateLoad(IntPtr, HeapBase, "sticky.heap.base");
+    Value *HeapOffset =
+        RangeBuilder.CreateSub(SourceAddr, HeapAddr, "sticky.heap.offset");
+    Value *HeapBytes =
+        RangeBuilder.CreateLoad(IntPtr, HeapSize, "sticky.heap.size");
+    Value *IsInHeap =
+        RangeBuilder.CreateICmpULT(HeapOffset, HeapBytes, "sticky.is.in.heap");
+    RangeBuilder.CreateCondBr(IsInHeap, MapCheckBranch, FalseBranch);
+
+    IRBuilder<> MapBuilder(MapCheckBranch);
+    MapBuilder.SetCurrentDebugLocation(CurDbg);
+    Value *LineIndex = MapBuilder.CreateLShr(
+        HeapOffset, StickyLineShift, "sticky.line.index");
+    Value *LoggedAddr = MapBuilder.CreateInBoundsGEP(
         I8, MapBase, LineIndex, "sticky.logged.addr");
     LoadInst *LoggedByte =
-        Builder.CreateLoad(I8, LoggedAddr, "sticky.logged.byte");
+        MapBuilder.CreateLoad(I8, LoggedAddr, "sticky.logged.byte");
     LoggedByte->setVolatile(true);
-    return Builder.CreateIsNotNull(LoggedByte, "sticky.is.logged");
+    Value *IsLogged =
+        MapBuilder.CreateIsNotNull(LoggedByte, "sticky.is.logged");
+    MapBuilder.CreateCondBr(IsLogged, TrueBranch, FalseBranch);
   }
 
   void handleSuccPhi(CallBase *CI, BasicBlock *FalseBranch, Instruction *New,
@@ -583,20 +620,18 @@ private:
     BasicBlock *PhaseFastBranch = TrueBranch;
     Value *SourceObj = EnableStickyLoggedMap ? getStickySource(CurInst) : nullptr;
     if (SourceObj != nullptr && !isNullPointer(SourceObj)) {
-      BasicBlock *MapCheckBranch = BasicBlock::Create(
-          C, "stickyMapCheck", SplitBB->getParent(), TrueBranch);
+      BasicBlock *MapReadyBranch = BasicBlock::Create(
+          C, "stickyMapReadyCheck", SplitBB->getParent(), TrueBranch);
       PhaseFastBranch = BasicBlock::Create(
-          C, "stickySourceCheck", SplitBB->getParent(), MapCheckBranch);
+          C, "stickySourceCheck", SplitBB->getParent(), MapReadyBranch);
 
       IRBuilder<> SourceBuilder(PhaseFastBranch);
       SourceBuilder.SetCurrentDebugLocation(CurDbg);
       Value *SourceIsNull = SourceBuilder.CreateIsNull(SourceObj);
-      SourceBuilder.CreateCondBr(SourceIsNull, TrueBranch, MapCheckBranch);
+      SourceBuilder.CreateCondBr(SourceIsNull, TrueBranch, MapReadyBranch);
 
-      IRBuilder<> MapBuilder(MapCheckBranch);
-      MapBuilder.SetCurrentDebugLocation(CurDbg);
-      Value *IsLogged = createStickyLoggedCheck(MapBuilder, CurInst, SourceObj);
-      MapBuilder.CreateCondBr(IsLogged, TrueBranch, FalseBranch);
+      createStickyLoggedCheck(CurInst, SourceObj, MapReadyBranch, TrueBranch,
+                              FalseBranch, CurDbg);
     }
 
     Instruction *OriginBr = SplitBB->getTerminator();
