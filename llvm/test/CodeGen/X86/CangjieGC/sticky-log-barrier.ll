@@ -188,6 +188,7 @@ entry:
 }
 
 %StickyAgg = type { i8 addrspace(1)* }
+@sticky.type.anchor = external global %StickyAgg
 
 declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*,
                                   i8 addrspace(1)* addrspace(1)*)
