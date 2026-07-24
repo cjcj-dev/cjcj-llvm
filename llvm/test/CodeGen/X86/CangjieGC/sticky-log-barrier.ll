@@ -10,7 +10,7 @@
 ; OFF-NOT: stickySourceCheck
 
 ; ON-LABEL: define void @sticky_gcwrite_ref_1
-; ON: call cangjiegc i32 @GetGCPhase()
+; ON: call cangjiegccc i32 @GetGCPhase()
 ; ON: icmp sle i32 {{.*}}, 8
 ; ON: br i1 {{.*}}, label %stickySourceCheck, label %gcRunning
 ; ON: gcRunning:
