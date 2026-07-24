@@ -542,7 +542,7 @@ private:
     ReadyBuilder.SetCurrentDebugLocation(CurDbg);
     Value *MapBase = ReadyBuilder.CreateLoad(I8Ptr, LoggedBase,
                                              "sticky.logged.base");
-    ReadyBuilder.CreateCondBr(ReadyBuilder.CreateIsNull(MapBase), FalseBranch,
+    ReadyBuilder.CreateCondBr(ReadyBuilder.CreateIsNull(MapBase), TrueBranch,
                               RangeCheckBranch);
 
     IRBuilder<> RangeBuilder(RangeCheckBranch);
@@ -557,7 +557,7 @@ private:
         RangeBuilder.CreateLoad(IntPtr, HeapSize, "sticky.heap.size");
     Value *IsInHeap =
         RangeBuilder.CreateICmpULT(HeapOffset, HeapBytes, "sticky.is.in.heap");
-    RangeBuilder.CreateCondBr(IsInHeap, MapCheckBranch, FalseBranch);
+    RangeBuilder.CreateCondBr(IsInHeap, MapCheckBranch, TrueBranch);
 
     IRBuilder<> MapBuilder(MapCheckBranch);
     MapBuilder.SetCurrentDebugLocation(CurDbg);
