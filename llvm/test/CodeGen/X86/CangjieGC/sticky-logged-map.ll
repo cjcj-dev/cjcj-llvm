@@ -22,14 +22,14 @@
 ; ON: stickyMapReadyCheck:
 ; ON: load i8*, i8** @__cj_sticky_logged_base
 ; ON: icmp eq i8* {{.*}}, null
-; ON: br i1 {{.*}}, label %gcRunning, label %stickyRangeCheck
+; ON: br i1 {{.*}}, label %gcNoRunning, label %stickyRangeCheck
 ; ON: stickyRangeCheck:
 ; ON: ptrtoint i8 addrspace(1)* %obj to i64
 ; ON: load i64, i64* @__cj_sticky_heap_base
 ; ON: sub i64
 ; ON: load i64, i64* @__cj_sticky_heap_size
 ; ON: icmp ult i64
-; ON: br i1 {{.*}}, label %stickyMapCheck, label %gcRunning
+; ON: br i1 {{.*}}, label %stickyMapCheck, label %gcNoRunning
 ; ON: stickyMapCheck:
 ; ON: lshr i64 {{.*}}, 8
 ; ON: getelementptr inbounds i8, i8* {{.*}}, i64
