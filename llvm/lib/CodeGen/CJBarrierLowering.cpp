@@ -48,6 +48,9 @@ static cl::opt<bool> EnableGCFastPath("enable-gc-fast-path", cl::init(true),
                                       cl::Hidden);
 static cl::opt<bool> EnableGCStateLoop("cj-gcstate-dup-loop", cl::init(false),
                                        cl::ReallyHidden);
+static cl::opt<bool> EnableStickyLogBarrier(
+    "cjcj-sticky-log-barrier", cl::init(false), cl::Hidden,
+    cl::desc("Check the sticky logged bit in the GC phase fast path"));
 
 namespace llvm {
 extern cl::opt<bool> CangjieJIT;
@@ -57,6 +60,21 @@ extern cl::opt<bool> EnableSafepointOutline;
 } // namespace llvm
 
 namespace {
+// Keep these constants mechanically tied to the runtime layout in
+// cangjie_runtime/runtime/src/Common/StateWord.h:32-35, 93-102, 190-192.
+// Bit 2 is selected by the rtstickybudget reusable-bit inventory.
+constexpr unsigned RuntimeStateBitCount = 2;
+constexpr unsigned RuntimeLoggedBitPosition = RuntimeStateBitCount;
+constexpr uint16_t RuntimeLoggedBit = 1U << RuntimeLoggedBitPosition;
+constexpr uint64_t RuntimeTypeInfoLowBitCount = 32;
+constexpr uint64_t RuntimeTypeInfoHighBitCount = 16;
+constexpr uint64_t RuntimeObjectStateOffset =
+    (RuntimeTypeInfoLowBitCount + RuntimeTypeInfoHighBitCount) / 8;
+static_assert(RuntimeObjectStateOffset == 6,
+              "runtime ObjectState offset must remain six bytes");
+static_assert(RuntimeLoggedBit == 0x4,
+              "runtime sticky logged bit must remain bit two");
+
 const static StringRef NewObjFastStr = "CJ_MCC_NewObjectFast";
 const static StringRef NewObjFinalizerFastStr = "CJ_MCC_NewFinalizerFast";
 constexpr StringRef SafepointStub = "CJ_Safepoint_Stub";
@@ -517,9 +535,58 @@ private:
     BranchInst::Create(Succ, TrueBranch);
     Instruction *NewInst = createFastInstr(TrueBranch, CurInst, CurDbg);
 
+    BasicBlock *PhaseFastBranch = TrueBranch;
+    Value *SourceObj = nullptr;
+    if (EnableStickyLogBarrier) {
+      switch (CurInst->getIntrinsicID()) {
+      case Intrinsic::cj_gcwrite_ref:
+      case Intrinsic::cj_gcwrite_struct:
+        SourceObj = getBaseObj(CurInst);
+        break;
+      case Intrinsic::cj_array_copy_ref:
+      case Intrinsic::cj_array_copy_struct:
+        SourceObj = CurInst->getArgOperand(ArrayCopy::DstObj);
+        break;
+      case Intrinsic::cj_atomic_store:
+        SourceObj = CurInst->getArgOperand(AtomicStore::Obj);
+        break;
+      default:
+        break;
+      }
+    }
+    if (SourceObj != nullptr && !isNullPointer(SourceObj)) {
+      BasicBlock *StateCheckBranch = BasicBlock::Create(
+          C, "stickyStateCheck", SplitBB->getParent(), TrueBranch);
+      PhaseFastBranch = BasicBlock::Create(
+          C, "stickySourceCheck", SplitBB->getParent(), StateCheckBranch);
+
+      IRBuilder<> SourceBuilder(PhaseFastBranch);
+      Value *SourceIsNull = SourceBuilder.CreateIsNull(SourceObj);
+      SourceBuilder.CreateCondBr(SourceIsNull, TrueBranch, StateCheckBranch);
+
+      IRBuilder<> StateBuilder(StateCheckBranch);
+      Value *StateAddr = StateBuilder.CreateInBoundsGEP(
+          Type::getInt8Ty(C), SourceObj,
+          ConstantInt::get(Type::getInt64Ty(C), RuntimeObjectStateOffset),
+          "objectState.addr");
+      Value *StateAddr16 = StateBuilder.CreateBitCast(
+          StateAddr, Type::getInt16PtrTy(C, 1), "objectState.addr16");
+      LoadInst *StateBits = StateBuilder.CreateLoad(
+          Type::getInt16Ty(C), StateAddr16, "objectState.bits");
+      StateBits->setAtomic(AtomicOrdering::Acquire);
+      StateBits->setAlignment(Align(2));
+      Value *LoggedBits = StateBuilder.CreateAnd(
+          StateBits, ConstantInt::get(Type::getInt16Ty(C), RuntimeLoggedBit),
+          "objectState.loggedBits");
+      Value *IsLogged = StateBuilder.CreateIsNotNull(LoggedBits);
+      StateBuilder.CreateCondBr(IsLogged, TrueBranch, FalseBranch);
+      PhaseFastBranch->getTerminator()->setDebugLoc(CurDbg);
+      StateCheckBranch->getTerminator()->setDebugLoc(CurDbg);
+    }
+
     Instruction *OriginBr = SplitBB->getTerminator();
     IRBuilder<> BuilderBr(OriginBr);
-    BuilderBr.CreateCondBr(CondVal, TrueBranch, FalseBranch);
+    BuilderBr.CreateCondBr(CondVal, PhaseFastBranch, FalseBranch);
     OriginBr->eraseFromParent();
     FalseBranch->getTerminator()->setDebugLoc(CurDbg);
     TrueBranch->getTerminator()->setDebugLoc(CurDbg);
