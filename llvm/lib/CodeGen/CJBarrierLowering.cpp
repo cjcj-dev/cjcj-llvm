@@ -48,6 +48,9 @@ static cl::opt<bool> EnableGCFastPath("enable-gc-fast-path", cl::init(true),
                                       cl::Hidden);
 static cl::opt<bool> EnableGCStateLoop("cj-gcstate-dup-loop", cl::init(false),
                                        cl::ReallyHidden);
+static cl::opt<bool> EnableStickyLoggedMap(
+    "cjcj-sticky-logged-map", cl::init(false), cl::Hidden,
+    cl::desc("Check the sticky logged byte map in the GC phase fast path"));
 
 namespace llvm {
 extern cl::opt<bool> CangjieJIT;
@@ -57,6 +60,10 @@ extern cl::opt<bool> EnableSafepointOutline;
 } // namespace llvm
 
 namespace {
+constexpr uint64_t StickyLineShift = 8;
+constexpr StringRef StickyLoggedBaseName = "__cj_sticky_logged_base";
+constexpr StringRef StickyHeapBaseName = "__cj_sticky_heap_base";
+
 const static StringRef NewObjFastStr = "CJ_MCC_NewObjectFast";
 const static StringRef NewObjFinalizerFastStr = "CJ_MCC_NewFinalizerFast";
 constexpr StringRef SafepointStub = "CJ_Safepoint_Stub";
@@ -473,6 +480,62 @@ private:
     return NewInst;
   }
 
+  Value *getStickySource(CallBase *CI) {
+    switch (CI->getIntrinsicID()) {
+    case Intrinsic::cj_gcwrite_ref:
+    case Intrinsic::cj_gcwrite_struct:
+      return getBaseObj(CI);
+    case Intrinsic::cj_array_copy_ref:
+    case Intrinsic::cj_array_copy_struct:
+      return CI->getArgOperand(ArrayCopy::DstObj);
+    case Intrinsic::cj_atomic_store:
+      return CI->getArgOperand(AtomicStore::Obj);
+    default:
+      return nullptr;
+    }
+  }
+
+  Value *createStickyLoggedCheck(IRBuilder<> &Builder, CallBase *CI,
+                                 Value *SourceObj) {
+    Module *M = CI->getModule();
+    Type *I8 = Type::getInt8Ty(C);
+    Type *I8Ptr = Type::getInt8PtrTy(C);
+    Type *IntPtr = M->getDataLayout().getIntPtrType(C);
+
+    GlobalVariable *HeapBase = M->getGlobalVariable(StickyHeapBaseName);
+    if (HeapBase == nullptr) {
+      HeapBase = new GlobalVariable(*M, IntPtr, false,
+                                    GlobalValue::ExternalLinkage, nullptr,
+                                    StickyHeapBaseName);
+    }
+    assert(HeapBase->getValueType() == IntPtr &&
+           "sticky heap base has an unexpected type");
+
+    GlobalVariable *LoggedBase = M->getGlobalVariable(StickyLoggedBaseName);
+    if (LoggedBase == nullptr) {
+      LoggedBase = new GlobalVariable(*M, I8Ptr, false,
+                                      GlobalValue::ExternalLinkage, nullptr,
+                                      StickyLoggedBaseName);
+    }
+    assert(LoggedBase->getValueType() == I8Ptr &&
+           "sticky logged base has an unexpected type");
+
+    Value *SourceAddr = Builder.CreatePtrToInt(SourceObj, IntPtr,
+                                               "sticky.source.addr");
+    Value *HeapAddr = Builder.CreateLoad(IntPtr, HeapBase, "sticky.heap.base");
+    Value *LineIndex = Builder.CreateLShr(
+        Builder.CreateSub(SourceAddr, HeapAddr, "sticky.heap.offset"),
+        StickyLineShift, "sticky.line.index");
+    Value *MapBase =
+        Builder.CreateLoad(I8Ptr, LoggedBase, "sticky.logged.base");
+    Value *LoggedAddr = Builder.CreateInBoundsGEP(
+        I8, MapBase, LineIndex, "sticky.logged.addr");
+    LoadInst *LoggedByte =
+        Builder.CreateLoad(I8, LoggedAddr, "sticky.logged.byte");
+    LoggedByte->setVolatile(true);
+    return Builder.CreateIsNotNull(LoggedByte, "sticky.is.logged");
+  }
+
   void handleSuccPhi(CallBase *CI, BasicBlock *FalseBranch, Instruction *New,
                      BasicBlock *TrueBranch, BasicBlock *Succ) {
     Intrinsic::ID IID = CI->getIntrinsicID();
@@ -517,9 +580,28 @@ private:
     BranchInst::Create(Succ, TrueBranch);
     Instruction *NewInst = createFastInstr(TrueBranch, CurInst, CurDbg);
 
+    BasicBlock *PhaseFastBranch = TrueBranch;
+    Value *SourceObj = EnableStickyLoggedMap ? getStickySource(CurInst) : nullptr;
+    if (SourceObj != nullptr && !isNullPointer(SourceObj)) {
+      BasicBlock *MapCheckBranch = BasicBlock::Create(
+          C, "stickyMapCheck", SplitBB->getParent(), TrueBranch);
+      PhaseFastBranch = BasicBlock::Create(
+          C, "stickySourceCheck", SplitBB->getParent(), MapCheckBranch);
+
+      IRBuilder<> SourceBuilder(PhaseFastBranch);
+      SourceBuilder.SetCurrentDebugLocation(CurDbg);
+      Value *SourceIsNull = SourceBuilder.CreateIsNull(SourceObj);
+      SourceBuilder.CreateCondBr(SourceIsNull, TrueBranch, MapCheckBranch);
+
+      IRBuilder<> MapBuilder(MapCheckBranch);
+      MapBuilder.SetCurrentDebugLocation(CurDbg);
+      Value *IsLogged = createStickyLoggedCheck(MapBuilder, CurInst, SourceObj);
+      MapBuilder.CreateCondBr(IsLogged, TrueBranch, FalseBranch);
+    }
+
     Instruction *OriginBr = SplitBB->getTerminator();
     IRBuilder<> BuilderBr(OriginBr);
-    BuilderBr.CreateCondBr(CondVal, TrueBranch, FalseBranch);
+    BuilderBr.CreateCondBr(CondVal, PhaseFastBranch, FalseBranch);
     OriginBr->eraseFromParent();
     FalseBranch->getTerminator()->setDebugLoc(CurDbg);
     TrueBranch->getTerminator()->setDebugLoc(CurDbg);
