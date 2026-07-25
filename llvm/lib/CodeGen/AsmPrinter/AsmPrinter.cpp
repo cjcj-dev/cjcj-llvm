@@ -158,6 +158,7 @@ namespace llvm {
 extern cl::opt<bool> CJPipeline;
 extern cl::opt<bool> EnableStackGrow;
 extern cl::opt<bool> EnableSafepointOutline;
+extern cl::opt<bool> EnableStickyLoggedMap;
 
 // Warning: The following values must be synchronized with
 // the data struct `ThreadLocalData` in runtime
@@ -168,6 +169,11 @@ constexpr int64_t ScheduleOffsetInCJTLS = CJThreadOffsetInCJTLS + 8;
 constexpr int64_t PreemptFlagOffsetInCJTLS = ScheduleOffsetInCJTLS + 8;
 constexpr int64_t ProtectAddrOffsetInCJTLS = PreemptFlagOffsetInCJTLS + 8;
 constexpr int64_t SafePollingAddrOffsetInCJTLS = ProtectAddrOffsetInCJTLS + 8;
+// These values are checked against Mutator's fixed prefix by the runtime.
+constexpr int64_t DeferredLogRingOffsetInMutator = 8;
+constexpr uint64_t DeferredLogRingSize = 32;
+constexpr int64_t DeferredLogRingIndexOffsetInMutator =
+    DeferredLogRingOffsetInMutator + DeferredLogRingSize * 8;
 } // end anonymous namespace
 
 char AsmPrinter::ID = 0;
@@ -4211,6 +4217,22 @@ int64_t AsmPrinter::getAllocBufferOffsetInCJTLS() const {
 
 int64_t AsmPrinter::getMutatorOffsetInCJTLS() const {
   return MutatorOffsetInCJTLS;
+}
+
+bool AsmPrinter::shouldEmitStickyDeferredLog() const {
+  return EnableStickyLoggedMap;
+}
+
+int64_t AsmPrinter::getDeferredLogRingOffsetInMutator() const {
+  return DeferredLogRingOffsetInMutator;
+}
+
+int64_t AsmPrinter::getDeferredLogRingIndexOffsetInMutator() const {
+  return DeferredLogRingIndexOffsetInMutator;
+}
+
+uint64_t AsmPrinter::getDeferredLogRingSize() const {
+  return DeferredLogRingSize;
 }
 
 int64_t AsmPrinter::getCJThreadOffsetInCJTLS() const {

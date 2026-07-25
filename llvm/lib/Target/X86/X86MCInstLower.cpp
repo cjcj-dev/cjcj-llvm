@@ -3268,6 +3268,76 @@ void X86AsmPrinter::reloadSPForEpilogue(MachineFunction &MF) {
 //   callq   MCC_NewObjectStub
 // LNewObjFin
 // endif
+void X86AsmPrinter::emitStickyDeferredLog(const MachineInstr *MI,
+                                          const MachineOperand &MOSym) {
+  if (!shouldEmitStickyDeferredLog())
+    return;
+
+  const Function *FlushFunc = MI->getMF()->getFunction().getParent()->
+      getFunction("CJ_MCC_FlushDeferredLogRing");
+  assert(FlushFunc && "missing deferred log ring flush declaration");
+
+  unsigned ArgReg0 = getSubtargetInfo().getTargetTriple().isOSWindows()
+                         ? X86::RCX
+                         : X86::RDI;
+  unsigned MutatorReg = X86::R9;
+  unsigned IndexReg = X86::R10;
+  X86MCInstLower MCInstLowering(*MF, *this);
+  MachineOperand FlushMO(MOSym);
+  FlushMO.ChangeToGA(FlushFunc, 0);
+  MCOperand FlushTarget =
+      MCInstLowering.LowerMachineOperand(MI, FlushMO).getValue();
+  MCSymbol *SkipFlush =
+      OutContext.createTempSymbol("DeferredLogRingReady", true);
+  const MCSymbolRefExpr *SkipFlushExpr =
+      MCSymbolRefExpr::create(SkipFlush, OutContext);
+
+  EmitAndCountInstruction(MCInstBuilder(X86::MOV64rm)
+                              .addReg(MutatorReg)
+                              .addReg(X86::R15)
+                              .addImm(1)
+                              .addReg(0)
+                              .addImm(getMutatorOffsetInCJTLS())
+                              .addReg(0));
+  EmitAndCountInstruction(MCInstBuilder(X86::MOV64rm)
+                              .addReg(IndexReg)
+                              .addReg(MutatorReg)
+                              .addImm(1)
+                              .addReg(0)
+                              .addImm(getDeferredLogRingIndexOffsetInMutator())
+                              .addReg(0));
+  EmitAndCountInstruction(MCInstBuilder(X86::MOV64mr)
+                              .addReg(MutatorReg)
+                              .addImm(8)
+                              .addReg(IndexReg)
+                              .addImm(getDeferredLogRingOffsetInMutator())
+                              .addReg(0)
+                              .addReg(X86::RAX));
+  EmitAndCountInstruction(MCInstBuilder(X86::ADD64ri8)
+                              .addReg(IndexReg)
+                              .addReg(IndexReg)
+                              .addImm(1));
+  EmitAndCountInstruction(MCInstBuilder(X86::MOV64mr)
+                              .addReg(MutatorReg)
+                              .addImm(1)
+                              .addReg(0)
+                              .addImm(getDeferredLogRingIndexOffsetInMutator())
+                              .addReg(0)
+                              .addReg(IndexReg));
+  EmitAndCountInstruction(MCInstBuilder(X86::CMP64ri8)
+                              .addReg(IndexReg)
+                              .addImm(getDeferredLogRingSize()));
+  EmitAndCountInstruction(MCInstBuilder(X86::JCC_1)
+                              .addExpr(SkipFlushExpr)
+                              .addImm(X86::COND_NE));
+  if (ArgReg0 != X86::RAX)
+    EmitAndCountInstruction(
+        MCInstBuilder(X86::MOV64rr).addReg(ArgReg0).addReg(X86::RAX));
+  EmitAndCountInstruction(
+      MCInstBuilder(X86::CALL64pcrel32).addOperand(FlushTarget));
+  OutStreamer->emitLabel(SkipFlush);
+}
+
 void X86AsmPrinter::emitMccNewObjectForCopyGC(ParamForEmitNewObj &Param) {
   unsigned AllocBufferReg;
   unsigned RegionInfoReg;
@@ -3359,6 +3429,7 @@ void X86AsmPrinter::emitMccNewObjectForCopyGC(ParamForEmitNewObj &Param) {
   EmitAndCountInstruction(Param.CallNewObjSlowPath);
   EmitAndCountInstruction(SetKlass);
   EmitAndCountInstruction(StoreNewAllocPtr);
+  emitStickyDeferredLog(Param.MI, Param.MOSym);
   if (Param.FastFuncName.equals("CJ_MCC_NewFinalizerFast")) {
     MCInst CopyAllocPtrToArg0 =
         MCInstBuilder(X86::MOV64rr).addReg(ArgReg0).addReg(AllocPtrReg);
@@ -3549,6 +3620,7 @@ void X86AsmPrinter::emitCJNewArrayFastPath(const MachineInstr &MI,
   EmitAndCountInstruction(SetKlass);
   EmitAndCountInstruction(StoreArrayLength);
   EmitAndCountInstruction(StoreNewAllocPtr);
+  emitStickyDeferredLog(&MI, MOSym);
   EmitAndCountInstruction(JmpToLFin);
   OutStreamer->emitLabel(LSlow);
   EmitAndCountInstruction(CallNewArraySlowPath);

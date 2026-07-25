@@ -48,11 +48,10 @@ static cl::opt<bool> EnableGCFastPath("enable-gc-fast-path", cl::init(true),
                                       cl::Hidden);
 static cl::opt<bool> EnableGCStateLoop("cj-gcstate-dup-loop", cl::init(false),
                                        cl::ReallyHidden);
-static cl::opt<bool> EnableStickyLoggedMap(
+namespace llvm {
+cl::opt<bool> EnableStickyLoggedMap(
     "cjcj-sticky-logged-map", cl::init(false), cl::Hidden,
     cl::desc("Check the sticky logged byte map in the GC phase fast path"));
-
-namespace llvm {
 extern cl::opt<bool> CangjieJIT;
 extern cl::opt<bool> DisableGCSupport;
 extern cl::opt<bool> EnableSafepointOnly;
@@ -880,17 +879,23 @@ void CJBarrierLowering::getAnalysisUsage(AnalysisUsage &AU) const {
 /// doInitialization - If this module uses the GC intrinsics, find them now.
 bool CJBarrierLowering::doInitialization(Module &M) {
   Function *GCStateCheckFunc = M.getFunction("GetGCPhase");
-  if (GCStateCheckFunc != nullptr) { // have GetGCPhase in module
-    return false;
-  }
   LLVMContext &C = M.getContext();
-  FunctionType *FuncType = FunctionType::get(Type::getInt32Ty(C), false);
-  GCStateCheckFunc =
-      cast<Function>(M.getOrInsertFunction("GetGCPhase", FuncType).getCallee());
-  GCStateCheckFunc->addFnAttr(Attribute::get(C, "gc-leaf-function"));
-  GCStateCheckFunc->addFnAttr(Attribute::get(C, "cj-runtime"));
-  GCStateCheckFunc->setCallingConv(CallingConv::CangjieGC);
-  GCStateCheckFunc->setUnnamedAddr(GlobalValue::UnnamedAddr::Local);
+  if (GCStateCheckFunc == nullptr) {
+    FunctionType *FuncType = FunctionType::get(Type::getInt32Ty(C), false);
+    GCStateCheckFunc =
+        cast<Function>(M.getOrInsertFunction("GetGCPhase", FuncType).getCallee());
+    GCStateCheckFunc->addFnAttr(Attribute::get(C, "gc-leaf-function"));
+    GCStateCheckFunc->addFnAttr(Attribute::get(C, "cj-runtime"));
+    GCStateCheckFunc->setCallingConv(CallingConv::CangjieGC);
+    GCStateCheckFunc->setUnnamedAddr(GlobalValue::UnnamedAddr::Local);
+  }
+
+  if (EnableStickyLoggedMap) {
+    Type *ObjectPtr = Type::getInt8PtrTy(C, 1);
+    FunctionType *FlushType =
+        FunctionType::get(ObjectPtr, {ObjectPtr}, false);
+    M.declareCJRuntimeFunc("CJ_MCC_FlushDeferredLogRing", FlushType, true);
+  }
   return false;
 }
 
