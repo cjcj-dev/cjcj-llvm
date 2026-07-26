@@ -1328,8 +1328,10 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
     return Changed;
   }
 
-  if (OptLevel != CodeGenOpt::None) {
+  if (OptLevel != CodeGenOpt::None || EnableStickyLoggedMap) {
     writeBarrierFastPath(F, Barriers);
+  }
+  if (OptLevel != CodeGenOpt::None) {
     readBarrierFastPath(F, Barriers);
   }
   doLowering(F);
