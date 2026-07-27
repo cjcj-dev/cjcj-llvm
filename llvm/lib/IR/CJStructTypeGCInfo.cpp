@@ -152,7 +152,13 @@ Constant *CommonBitmap::insertBitMapU64(const std::string &BMStr,
 Constant *CommonBitmap::insertBitMapGV(const std::string &BMStr,
                                        Type *CommonBMType,
                                        const std::string &BitMapName) {
-  unsigned BodySize = BMStr.length() / 8; // 8: to calculate Bytes
+  std::string AlignedBMStr = BMStr;
+  unsigned BMStrLen = AlignedBMStr.length();
+  unsigned AlignStrLen = ((BMStrLen + 7) & (~7)) - BMStrLen;
+  if (AlignStrLen != 0) {
+    AlignedBMStr += std::string(AlignStrLen, '0');
+  }
+  unsigned BodySize = AlignedBMStr.length() / 8; // 8: to calculate Bytes
   // create ST: {int32, int8[]}
   SmallVector<Type *, 8> TypeBody(BodySize + 1,
                                   Type::getInt8Ty(M.getContext()));
@@ -165,8 +171,8 @@ Constant *CommonBitmap::insertBitMapGV(const std::string &BMStr,
   BMBody[CurIdx++] =
       ConstantInt::get(Type::getInt32Ty(M.getContext()), BodySize);
   unsigned Value = 0;
-  for (unsigned I = 0, J = BMStr.length(); I < J; ++I) {
-    if (BMStr[I] == '1') {
+  for (unsigned I = 0, J = AlignedBMStr.length(); I < J; ++I) {
+    if (AlignedBMStr[I] == '1') {
       Value |= 1 << (I % 8); // 8: string to char, 8 bits of every char
     }
     if ((I + 1) % 8 == 0) { // 8: string to char, 8 bits of every char
