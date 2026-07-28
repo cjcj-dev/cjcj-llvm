@@ -4219,6 +4219,8 @@ int64_t AsmPrinter::getMutatorOffsetInCJTLS() const {
   return MutatorOffsetInCJTLS;
 }
 
+bool AsmPrinter::isCangjiePipeline() const { return CJPipeline; }
+
 bool AsmPrinter::shouldEmitStickyDeferredLog() const {
   return EnableStickyLoggedMap;
 }

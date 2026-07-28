@@ -5,6 +5,7 @@
 ; RUN: llc < %s -mtriple x86_64-pc-win32 | FileCheck %s --check-prefix WIN64
 ; RUN: llc < %s -O0 -mtriple i686-pc-win32 | FileCheck %s --check-prefix WIN32
 ; RUN: llc < %s -O0 -mtriple x86_64-pc-win32 | FileCheck %s --check-prefix WIN64
+; RUN: llc < %s --cangjie-pipeline -mtriple x86_64-pc-win32 | FileCheck %s --check-prefix CANGJIE
 
 @.str = private constant [4 x i8] c"%f\0A\00"
 
@@ -18,3 +19,7 @@ declare i32 @printf(ptr nocapture, ...) nounwind
 
 ; WIN32: .globl __fltused
 ; WIN64: .globl _fltused
+; WIN32-NOT: .cjgcflg
+; WIN64-NOT: .cjgcflg
+; CANGJIE: .globl _fltused
+; CANGJIE: .section .cjgcflg

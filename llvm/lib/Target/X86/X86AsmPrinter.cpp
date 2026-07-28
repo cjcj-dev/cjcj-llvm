@@ -834,7 +834,8 @@ void X86AsmPrinter::emitEndOfAsmFile(Module &M) {
           (TT.getArch() == Triple::x86) ? "__fltused" : "_fltused";
       MCSymbol *S = MMI->getContext().getOrCreateSymbol(SymbolName);
       OutStreamer->emitSymbolAttribute(S, MCSA_Global);
-      return;
+      if (!isCangjiePipeline())
+        return;
     }
     emitCJMetadataInfo(CMI, M);
     emitStackMaps(SM);
