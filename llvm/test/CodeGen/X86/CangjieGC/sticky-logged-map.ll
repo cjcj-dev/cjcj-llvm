@@ -1,6 +1,10 @@
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O2 \
-; RUN:   -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 \
+; RUN:   -cjcj-sticky-logged-map=false -print-after=cj-barrier-lowering \
+; RUN:   -o /dev/null < %s 2>&1 \
 ; RUN:   | FileCheck %s --check-prefix=OFF
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O2 \
+; RUN:   -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 \
+; RUN:   | FileCheck %s --check-prefix=ON
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O2 \
 ; RUN:   -cjcj-sticky-logged-map -print-after=cj-barrier-lowering \
 ; RUN:   -o /dev/null < %s 2>&1 | FileCheck %s --check-prefix=ON
