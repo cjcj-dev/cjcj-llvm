@@ -37,6 +37,7 @@
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/CodeGen/CJDeferredLogRingABI.h"
 #include "llvm/CodeGen/CJMetadata.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/GCMetadataPrinter.h"
@@ -170,10 +171,6 @@ constexpr int64_t PreemptFlagOffsetInCJTLS = ScheduleOffsetInCJTLS + 8;
 constexpr int64_t ProtectAddrOffsetInCJTLS = PreemptFlagOffsetInCJTLS + 8;
 constexpr int64_t SafePollingAddrOffsetInCJTLS = ProtectAddrOffsetInCJTLS + 8;
 // These values are checked against Mutator's fixed prefix by the runtime.
-constexpr int64_t DeferredLogRingOffsetInMutator = 8;
-constexpr uint64_t DeferredLogRingSize = 32;
-constexpr int64_t DeferredLogRingIndexOffsetInMutator =
-    DeferredLogRingOffsetInMutator + DeferredLogRingSize * 8;
 } // end anonymous namespace
 
 char AsmPrinter::ID = 0;
@@ -4224,15 +4221,19 @@ bool AsmPrinter::shouldEmitStickyDeferredLog() const {
 }
 
 int64_t AsmPrinter::getDeferredLogRingOffsetInMutator() const {
-  return DeferredLogRingOffsetInMutator;
+  return CangjieDeferredLogRingABI::Offset;
 }
 
 int64_t AsmPrinter::getDeferredLogRingIndexOffsetInMutator() const {
-  return DeferredLogRingIndexOffsetInMutator;
+  return CangjieDeferredLogRingABI::IndexOffset;
 }
 
 uint64_t AsmPrinter::getDeferredLogRingSize() const {
-  return DeferredLogRingSize;
+  return CangjieDeferredLogRingABI::Capacity;
+}
+
+const char *AsmPrinter::getDeferredLogRingFlushFunctionName() const {
+  return CangjieDeferredLogRingABI::FlushFunctionName;
 }
 
 int64_t AsmPrinter::getCJThreadOffsetInCJTLS() const {

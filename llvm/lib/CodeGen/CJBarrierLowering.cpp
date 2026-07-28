@@ -15,6 +15,7 @@
 #include "llvm/ADT/PriorityWorklist.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/CodeGen/CJDeferredLogRingABI.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/CJIntrinsics.h"
 #include "llvm/IR/Constants.h"
@@ -894,7 +895,8 @@ bool CJBarrierLowering::doInitialization(Module &M) {
     Type *ObjectPtr = Type::getInt8PtrTy(C, 1);
     FunctionType *FlushType =
         FunctionType::get(ObjectPtr, {ObjectPtr}, false);
-    M.declareCJRuntimeFunc("CJ_MCC_FlushDeferredLogRing", FlushType, true);
+    M.declareCJRuntimeFunc(CangjieDeferredLogRingABI::FlushFunctionName,
+                           FlushType, true);
   }
   return false;
 }

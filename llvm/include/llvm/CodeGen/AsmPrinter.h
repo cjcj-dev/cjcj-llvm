@@ -263,6 +263,7 @@ protected:
   int64_t getDeferredLogRingOffsetInMutator() const;
   int64_t getDeferredLogRingIndexOffsetInMutator() const;
   uint64_t getDeferredLogRingSize() const;
+  const char *getDeferredLogRingFlushFunctionName() const;
 
 public:
   ~AsmPrinter() override;

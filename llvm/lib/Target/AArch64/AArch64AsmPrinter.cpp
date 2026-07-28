@@ -2051,7 +2051,7 @@ void AArch64AsmPrinter::emitStickyDeferredLog(const MachineInstr *MI,
     return;
 
   const Function *FlushFunc = MI->getMF()->getFunction().getParent()->
-      getFunction("CJ_MCC_FlushDeferredLogRing");
+      getFunction(getDeferredLogRingFlushFunctionName());
   assert(FlushFunc && "missing deferred log ring flush declaration");
   MCOperand FlushTarget = setGAAndLower(MOSym, FlushFunc);
   MCSymbol *SkipFlush =

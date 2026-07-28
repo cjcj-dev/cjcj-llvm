@@ -3274,7 +3274,7 @@ void X86AsmPrinter::emitStickyDeferredLog(const MachineInstr *MI,
     return;
 
   const Function *FlushFunc = MI->getMF()->getFunction().getParent()->
-      getFunction("CJ_MCC_FlushDeferredLogRing");
+      getFunction(getDeferredLogRingFlushFunctionName());
   assert(FlushFunc && "missing deferred log ring flush declaration");
 
   unsigned ArgReg0 = getSubtargetInfo().getTargetTriple().isOSWindows()
