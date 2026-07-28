@@ -59,6 +59,11 @@ static uint32_t StrPoolDictSplitMinSize = 1000;
 namespace {
 const std::string StrPool(".Lstr_pool.");
 const std::string StrPoolDict(".Lstr_pool_dict.");
+constexpr uint32_t StickyBarrierMetadataMagic = 0x53424A43;
+constexpr uint32_t StickyBarrierMetadataVersion = 1;
+constexpr uint32_t StickyBarrierRecordSize = 3 + 1 + 4 * 4;
+static_assert(StickyBarrierRecordSize == 20,
+              "sticky barrier metadata record must remain 20 bytes");
 } // namespace
 CJMetadataInfo::CJMetadataInfo(AsmPrinter &AP, StackMaps &SM)
     : AP(AP), SM(SM), OS(*AP.OutStreamer), Context(AP.OutContext),
@@ -642,9 +647,11 @@ void CJMetadataInfo::emitGCFlags() {
   } else {
     OS.emitIntValue(0, 1);
   }
+  // Each Module contributes exactly one fixed-size record. Linkers concatenate
+  // the records in the CFile section, so consumers must validate every record.
   OS.emitIntValue(0, 1);
-  OS.emitIntValue(0x53424A43, 4);
-  OS.emitIntValue(1, 4);
+  OS.emitIntValue(StickyBarrierMetadataMagic, 4);
+  OS.emitIntValue(StickyBarrierMetadataVersion, 4);
   uint32_t barrierKind = 0;
   if (!DisableGCSupport && !EnableSafepointOnly)
     barrierKind = EnableStickyLoggedMap ? 2 : 1;
