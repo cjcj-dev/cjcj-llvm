@@ -46,6 +46,7 @@ extern cl::opt<bool> DisableGCSupport;
 extern cl::opt<bool> EnableBarrierOnly;
 extern cl::opt<bool> EnableSafepointOnly;
 extern cl::opt<bool> EnableStackGrow;
+extern cl::opt<bool> EnableStickyLoggedMap;
 
 // StrPoolDictSplitSize is defined through elapsed time test on dict loading
 // and string decoding. The maximum size of 5000 can keep the elapsed time below
@@ -641,6 +642,14 @@ void CJMetadataInfo::emitGCFlags() {
   } else {
     OS.emitIntValue(0, 1);
   }
+  OS.emitIntValue(0, 1);
+  OS.emitIntValue(0x53424A43, 4);
+  OS.emitIntValue(1, 4);
+  uint32_t barrierKind = 0;
+  if (!DisableGCSupport && !EnableSafepointOnly)
+    barrierKind = EnableStickyLoggedMap ? 2 : 1;
+  OS.emitIntValue(barrierKind, 4);
+  OS.emitIntValue(0x53544B59, 4);
   OS.addBlankLine();
 }
 
