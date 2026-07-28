@@ -15,6 +15,7 @@
 #include "llvm/ADT/PriorityWorklist.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/CodeGen/CJMetadata.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/CJIntrinsics.h"
 #include "llvm/IR/Constants.h"
@@ -834,6 +835,7 @@ public:
   void getAnalysisUsage(AnalysisUsage &AU) const override;
 
   bool doInitialization(Module &M) override;
+  bool doFinalization(Module &M) override;
   bool runOnFunction(Function &F) override;
 };
 } // namespace
@@ -897,6 +899,31 @@ bool CJBarrierLowering::doInitialization(Module &M) {
     M.declareCJRuntimeFunc("CJ_MCC_FlushDeferredLogRing", FlushType, true);
   }
   return false;
+}
+
+bool CJBarrierLowering::doFinalization(Module &M) {
+  CJBarrierKind BarrierKind = CJBarrierKind::None;
+  if (!DisableGCSupport && !EnableSafepointOnly) {
+    BarrierKind = CJBarrierKind::Ordinary;
+    if (EnableStickyLoggedMap) {
+      BarrierKind = CJBarrierKind::Sticky;
+      for (Function &F : M) {
+        for (Instruction &I : instructions(F)) {
+          if (isCJBarrier(&I)) {
+            BarrierKind = CJBarrierKind::Ordinary;
+            break;
+          }
+        }
+        if (BarrierKind != CJBarrierKind::Sticky)
+          break;
+      }
+    }
+  }
+  Metadata *Kind = ConstantAsMetadata::get(ConstantInt::get(
+      Type::getInt32Ty(M.getContext()), static_cast<uint32_t>(BarrierKind)));
+  M.setModuleFlag(Module::ModFlagBehavior::Override,
+                  CJStickyBarrierKindModuleFlag, Kind);
+  return true;
 }
 
 static bool fastBarrierInline(Function &F, GCPhaseCheck &GCPhase) {

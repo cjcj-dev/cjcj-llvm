@@ -22,6 +22,15 @@
 #include <cstdint>
 
 namespace llvm {
+constexpr char CJStickyBarrierKindModuleFlag[] =
+    "Cangjie_STICKY_BARRIER_KIND";
+
+enum class CJBarrierKind : uint32_t {
+  None = 0,
+  Ordinary = 1,
+  Sticky = 2,
+};
+
 class AsmPrinter;
 class Function;
 class GCStrategy;
