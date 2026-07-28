@@ -247,6 +247,7 @@ add_llvm_component_library(LLVMCodeGen
 
   DEPENDS
   intrinsics_gen
+  llvm_vcsrevision_h
   ${MLDeps}
 
   LINK_COMPONENTS

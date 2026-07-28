@@ -18,6 +18,7 @@
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/StackMaps.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/MC/MCContext.h"
@@ -26,6 +27,7 @@
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/Support/VCSRevision.h"
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
@@ -63,6 +65,25 @@ constexpr uint32_t StickyBarrierMetadataVersion = 1;
 constexpr uint32_t StickyBarrierRecordSize = 3 + 1 + 4 * 4;
 static_assert(StickyBarrierRecordSize == 20,
               "sticky barrier metadata record must remain 20 bytes");
+
+uint32_t getProducerFingerprint() {
+  constexpr uint32_t FNVOffsetBasis = 2166136261U;
+  constexpr uint32_t FNVPrime = 16777619U;
+  uint32_t Hash = FNVOffsetBasis;
+  auto HashText = [&Hash](StringRef Text) {
+    for (char C : Text) {
+      Hash ^= static_cast<uint8_t>(C);
+      Hash *= FNVPrime;
+    }
+    Hash ^= 0;
+    Hash *= FNVPrime;
+  };
+  HashText(LLVM_VERSION_STRING);
+#ifdef LLVM_REVISION
+  HashText(LLVM_REVISION);
+#endif
+  return Hash == 0 ? 1 : Hash;
+}
 } // namespace
 CJMetadataInfo::CJMetadataInfo(AsmPrinter &AP, StackMaps &SM)
     : AP(AP), SM(SM), OS(*AP.OutStreamer), Context(AP.OutContext),
@@ -656,7 +677,7 @@ void CJMetadataInfo::emitGCFlags() {
           M->getModuleFlag(CJStickyBarrierKindModuleFlag)))
     barrierKind = Kind->getZExtValue();
   OS.emitIntValue(barrierKind, 4);
-  OS.emitIntValue(0x53544B59, 4);
+  OS.emitIntValue(getProducerFingerprint(), 4);
   OS.addBlankLine();
 }
 
