@@ -86,7 +86,8 @@ entry:
 define void @gep_poison() gc "cangjie" {
 ; CHECK-LABEL: @gep_poison(
 ; CHECK: %value = getelementptr i8, i8 addrspace(1)* null, i64 0
-; CHECK: @llvm.cj.gc.statepoint{{.*}}[ "gc-live"({{.*}}%value{{.*}}) ]
+; CHECK: @llvm.cj.gc.statepoint
+; CHECK-NOT: "gc-live"
 entry:
   %value = getelementptr i8, i8 addrspace(1)* poison, i64 0
   call void @safepoint()
@@ -108,7 +109,8 @@ entry:
 define void @bitcast_poison() gc "cangjie" {
 ; CHECK-LABEL: @bitcast_poison(
 ; CHECK: %value = bitcast i32 addrspace(1)* null to i8 addrspace(1)*
-; CHECK: @llvm.cj.gc.statepoint{{.*}}[ "gc-live"({{.*}}%value{{.*}}) ]
+; CHECK: @llvm.cj.gc.statepoint
+; CHECK-NOT: "gc-live"
 entry:
   %value = bitcast i32 addrspace(1)* poison to i8 addrspace(1)*
   call void @safepoint()
