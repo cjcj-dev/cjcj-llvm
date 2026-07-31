@@ -2523,6 +2523,8 @@ static void printBases(PointerToBaseTy &PointerToBase, bool Before) {
 static Constant *normalizeUndefOrPoisonConstant(Constant *C) {
   if (isa<UndefValue>(C) || isa<PoisonValue>(C))
     return Constant::getNullValue(C->getType());
+  if (isa<GlobalValue>(C) || isa<BlockAddress>(C))
+    return C;
 
   SmallVector<Constant *, 8> NormalizedOperands;
   bool Changed = false;
