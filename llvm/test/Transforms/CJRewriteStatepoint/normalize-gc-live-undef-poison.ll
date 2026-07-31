@@ -50,6 +50,28 @@ merge:
   ret void
 }
 
+define i8 addrspace(1)* @phi_only_undefined(i1 %condition) gc "cangjie" {
+; CHECK-LABEL: @phi_only_undefined(
+; CHECK: merge:
+; CHECK: %value = phi i8 addrspace(1)* [ null, %left ], [ null, %right ]
+; CHECK: @llvm.cj.gc.statepoint
+; CHECK-NOT: "gc-live"
+; CHECK: ret i8 addrspace(1)* %value
+entry:
+  br i1 %condition, label %left, label %right
+
+left:
+  br label %merge
+
+right:
+  br label %merge
+
+merge:
+  %value = phi i8 addrspace(1)* [ undef, %left ], [ poison, %right ]
+  call void @safepoint()
+  ret i8 addrspace(1)* %value
+}
+
 define void @select_poison(i1 %condition, i8 addrspace(1)* %pointer) gc "cangjie" {
 ; CHECK-LABEL: @select_poison(
 ; CHECK: %value = select i1 %condition, i8 addrspace(1)* %pointer, i8 addrspace(1)* null
