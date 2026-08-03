@@ -51,7 +51,7 @@ static cl::opt<bool> EnableGCStateLoop("cj-gcstate-dup-loop", cl::init(false),
                                        cl::ReallyHidden);
 namespace llvm {
 cl::opt<bool> EnableStickyLoggedMap(
-    "cjcj-sticky-logged-map", cl::init(true), cl::Hidden,
+    "cjcj-sticky-logged-map", cl::init(false), cl::Hidden,
     cl::desc("Check the sticky logged byte map in the GC phase fast path"));
 extern cl::opt<bool> CangjieJIT;
 extern cl::opt<bool> DisableGCSupport;
