@@ -175,7 +175,7 @@ entry:
 ; ON-NOT: stickySourceCheck
 ; ON: ret void
 ; GEN-LABEL: define void @sticky_static_ref
-; GEN-NOT: call void @CJ_MCC_WriteStaticRef
+; GEN: gcNoRunning:
 ; GEN: store i8 addrspace(1)* %value
 ; GEN: ret void
 
