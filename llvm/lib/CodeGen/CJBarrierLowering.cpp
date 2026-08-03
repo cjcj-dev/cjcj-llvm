@@ -1105,7 +1105,8 @@ static void checkLoopBarrier(Function &F, LoopInfo &LI, DominatorTree &DT,
     if (!containBarrier(*L, containSafepoint)) {
       continue;
     }
-    if (!containSafepoint && EnableGCStateLoop) {
+    if (!containSafepoint && EnableGCStateLoop &&
+        !EnableGenerationalPostBarrier) {
       Loop &New = cloneLoop(L, F, LI);
       handleGCStateLoop(New, *L, GCPhase);
       replaceBarriers();
