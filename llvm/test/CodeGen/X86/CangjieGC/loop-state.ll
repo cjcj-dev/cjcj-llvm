@@ -1,4 +1,7 @@
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -cj-gcstate-dup-loop=true < %s | FileCheck %s
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 -cj-gcstate-dup-loop=true \
+; RUN:   -cj-generational-post-barrier -print-after=cj-barrier-lowering \
+; RUN:   -o /dev/null < %s 2>&1 | FileCheck %s --check-prefix=GEN
 
 define void @foo1(i8 addrspace(1)* %arg0, i64 %arg1, i8 addrspace(1)* %arg2) gc "cangjie" {
 ; CHECK: foo1
@@ -16,6 +19,11 @@ define void @foo1(i8 addrspace(1)* %arg0, i64 %arg1, i8 addrspace(1)* %arg2) gc 
 ; CHECK: cmpl    $9, %eax
 ; CHECK: %gcRunning
 ; CHECK: callq   CJ_MCC_WriteRefField@PLT
+; GEN-LABEL: define void @foo1
+; GEN-NOT: .pin
+; GEN-NOT: gcNoRunning
+; GEN: call void @CJ_MCC_WriteRefField
+; GEN: ret void
 
 entry:
   %a = bitcast i8 addrspace(1)* %arg0 to i8 addrspace(1)* addrspace(1) *
