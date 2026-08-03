@@ -11,6 +11,10 @@
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O0 \
 ; RUN:   -cjcj-sticky-logged-map -print-after=cj-barrier-lowering \
 ; RUN:   -o /dev/null < %s 2>&1 | FileCheck %s --check-prefix=ON
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O2 \
+; RUN:   -cjcj-sticky-logged-map=false -cj-generational-post-barrier \
+; RUN:   -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 \
+; RUN:   | FileCheck %s --check-prefix=GEN
 
 ; OFF-NOT: stickySourceCheck
 ; OFF-NOT: __cj_sticky_logged_base
@@ -45,6 +49,11 @@
 ; ON: br i1 {{.*}}, label %gcNoRunning, label %gcRunning
 ; ON: gcNoRunning:
 ; ON: store i8 addrspace(1)* %value
+; GEN-LABEL: define void @sticky_gcwrite_ref
+; GEN-NOT: gcNoRunning
+; GEN: call void @CJ_MCC_WriteRefField
+; GEN-NOT: store i8 addrspace(1)* %value
+; GEN: ret void
 
 define void @sticky_gcwrite_ref(i8 addrspace(1)* %obj,
                                 i8 addrspace(1)* %value,
@@ -64,6 +73,11 @@ entry:
 ; ON: br i1 {{.*}}, label %gcNoRunning, label %gcRunning
 ; ON: gcNoRunning:
 ; ON: call void @llvm.memcpy
+; GEN-LABEL: define void @sticky_gcwrite_struct
+; GEN-NOT: gcNoRunning
+; GEN: call void @CJ_MCC_WriteStructField
+; GEN-NOT: call void @llvm.memcpy
+; GEN: ret void
 
 define void @sticky_gcwrite_struct(i8 addrspace(1)* %obj,
                                    i8 addrspace(1)* %dst,
@@ -85,6 +99,11 @@ entry:
 ; ON: br i1 {{.*}}, label %gcNoRunning, label %gcRunning
 ; ON: gcNoRunning:
 ; ON: call void @llvm.memmove
+; GEN-LABEL: define void @sticky_array_copy_ref
+; GEN-NOT: gcNoRunning
+; GEN: call void @CJ_MCC_ArrayCopyRef
+; GEN-NOT: call void @llvm.memmove
+; GEN: ret void
 
 define void @sticky_array_copy_ref(i8 addrspace(1)* %dst.obj,
                                    i8 addrspace(1)* %dst,
@@ -105,6 +124,11 @@ entry:
 ; ON: br i1 {{.*}}, label %gcNoRunning, label %gcRunning
 ; ON: gcNoRunning:
 ; ON: call void @llvm.memmove
+; GEN-LABEL: define void @sticky_array_copy_struct
+; GEN-NOT: gcNoRunning
+; GEN: call void @CJ_MCC_ArrayCopyStruct
+; GEN-NOT: call void @llvm.memmove
+; GEN: ret void
 
 define void @sticky_array_copy_struct(i8 addrspace(1)* %dst.obj,
                                       i8 addrspace(1)* %dst,
@@ -127,6 +151,11 @@ entry:
 ; ON: br i1 {{.*}}, label %gcNoRunning, label %gcRunning
 ; ON: gcNoRunning:
 ; ON: store atomic i8 addrspace(1)* %value{{.*}}seq_cst
+; GEN-LABEL: define void @sticky_atomic_store
+; GEN-NOT: gcNoRunning
+; GEN: call void @CJ_MCC_AtomicWriteReference
+; GEN-NOT: store atomic i8 addrspace(1)* %value
+; GEN: ret void
 
 define void @sticky_atomic_store(i8 addrspace(1)* %obj,
                                  i8 addrspace(1)* %value,
@@ -145,6 +174,10 @@ entry:
 ; ON: store i8 addrspace(1)* %value
 ; ON-NOT: stickySourceCheck
 ; ON: ret void
+; GEN-LABEL: define void @sticky_static_ref
+; GEN-NOT: call void @CJ_MCC_WriteStaticRef
+; GEN: store i8 addrspace(1)* %value
+; GEN: ret void
 
 define void @sticky_static_ref(i8 addrspace(1)* %value,
                                i8 addrspace(1)** %field) gc "cangjie" {
@@ -160,6 +193,10 @@ entry:
 ; ON: store i8 addrspace(1)* %value
 ; ON-NOT: stickySourceCheck
 ; ON: ret void
+; GEN-LABEL: define void @sticky_null_owner
+; GEN-NOT: call void @CJ_MCC_WriteRefField
+; GEN: store i8 addrspace(1)* %value
+; GEN: ret void
 
 define void @sticky_null_owner(i8 addrspace(1)* %value,
                                i8 addrspace(1)* addrspace(1)* %field) gc "cangjie" {
