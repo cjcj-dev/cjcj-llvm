@@ -5,8 +5,8 @@
 
 declare void @safepoint()
 declare void @use_ptr(i8 addrspace(1)*) "gc-leaf-function"
-declare void @use_vector(<2 x i8 addrspace(1)*>) "gc-leaf-function"
-declare void @use_struct({ i8 addrspace(1)*, i64 }) "gc-leaf-function"
+
+; cjcj keeps managed-ref aggregates in memory for struct-live and does not emit managed-ref vectors; gc-live carriers below are scalar pointers.
 
 define void @phi_undef(i1 %condition, i8 addrspace(1)* %pointer) gc "cangjie" {
 ; CHECK-LABEL: @phi_undef(
@@ -50,6 +50,28 @@ merge:
   ret void
 }
 
+define i8 addrspace(1)* @phi_only_undefined(i1 %condition) gc "cangjie" {
+; CHECK-LABEL: @phi_only_undefined(
+; CHECK: merge:
+; CHECK: %value = phi i8 addrspace(1)* [ null, %left ], [ null, %right ]
+; CHECK: @llvm.cj.gc.statepoint
+; CHECK-NOT: "gc-live"
+; CHECK: ret i8 addrspace(1)* %value
+entry:
+  br i1 %condition, label %left, label %right
+
+left:
+  br label %merge
+
+right:
+  br label %merge
+
+merge:
+  %value = phi i8 addrspace(1)* [ undef, %left ], [ poison, %right ]
+  call void @safepoint()
+  ret i8 addrspace(1)* %value
+}
+
 define void @select_poison(i1 %condition, i8 addrspace(1)* %pointer) gc "cangjie" {
 ; CHECK-LABEL: @select_poison(
 ; CHECK: %value = select i1 %condition, i8 addrspace(1)* %pointer, i8 addrspace(1)* null
@@ -61,23 +83,24 @@ entry:
   ret void
 }
 
-define void @vector_poison(i8 addrspace(1)* %pointer) gc "cangjie" {
-; CHECK-LABEL: @vector_poison(
-; CHECK: %value = insertelement <2 x i8 addrspace(1)*> zeroinitializer, i8 addrspace(1)* %pointer, i32 0
-; CHECK: @llvm.cj.gc.statepoint{{.*}}[ "gc-live"({{.*}}%value{{.*}}) ]
+define void @gep_poison() gc "cangjie" {
+; CHECK-LABEL: @gep_poison(
+; CHECK: %value = getelementptr i8, i8 addrspace(1)* null, i64 0
+; CHECK: @llvm.cj.gc.statepoint
+; CHECK-NOT: "gc-live"
 entry:
-  %value = insertelement <2 x i8 addrspace(1)*> poison, i8 addrspace(1)* %pointer, i32 0
+  %value = getelementptr i8, i8 addrspace(1)* poison, i64 0
   call void @safepoint()
-  call void @use_vector(<2 x i8 addrspace(1)*> %value)
+  call void @use_ptr(i8 addrspace(1)* %value)
   ret void
 }
 
 define void @extract_undef() gc "cangjie" {
 ; CHECK-LABEL: @extract_undef(
-; CHECK: %value = extractelement <2 x i8 addrspace(1)*> zeroinitializer, i32 1
+; CHECK: %value = extractvalue { i8 addrspace(1)*, i64 } zeroinitializer, 0
 ; CHECK: @llvm.cj.gc.statepoint{{.*}}[ "gc-live"({{.*}}%value{{.*}}) ]
 entry:
-  %value = extractelement <2 x i8 addrspace(1)*> undef, i32 1
+  %value = extractvalue { i8 addrspace(1)*, i64 } undef, 0
   call void @safepoint()
   call void @use_ptr(i8 addrspace(1)* %value)
   ret void
@@ -85,33 +108,36 @@ entry:
 
 define void @bitcast_poison() gc "cangjie" {
 ; CHECK-LABEL: @bitcast_poison(
-; CHECK: %value = bitcast <2 x i32 addrspace(1)*> zeroinitializer to <2 x i8 addrspace(1)*>
-; CHECK: @llvm.cj.gc.statepoint{{.*}}[ "gc-live"({{.*}}%value{{.*}}) ]
+; CHECK: %value = bitcast i32 addrspace(1)* null to i8 addrspace(1)*
+; CHECK: @llvm.cj.gc.statepoint
+; CHECK-NOT: "gc-live"
 entry:
-  %value = bitcast <2 x i32 addrspace(1)*> poison to <2 x i8 addrspace(1)*>
+  %value = bitcast i32 addrspace(1)* poison to i8 addrspace(1)*
   call void @safepoint()
-  call void @use_vector(<2 x i8 addrspace(1)*> %value)
+  call void @use_ptr(i8 addrspace(1)* %value)
   ret void
 }
 
 define void @insertvalue_poison(i8 addrspace(1)* %pointer) gc "cangjie" {
 ; CHECK-LABEL: @insertvalue_poison(
-; CHECK: %value = insertvalue { i8 addrspace(1)*, i64 } zeroinitializer, i8 addrspace(1)* %pointer, 0
+; CHECK: %aggregate = insertvalue { i8 addrspace(1)*, i64 } zeroinitializer, i8 addrspace(1)* %pointer, 0
 ; CHECK: @llvm.cj.gc.statepoint{{.*}}[ "gc-live"({{.*}}%value{{.*}}) ]
 entry:
-  %value = insertvalue { i8 addrspace(1)*, i64 } poison, i8 addrspace(1)* %pointer, 0
+  %aggregate = insertvalue { i8 addrspace(1)*, i64 } poison, i8 addrspace(1)* %pointer, 0
+  %value = extractvalue { i8 addrspace(1)*, i64 } %aggregate, 0
   call void @safepoint()
-  call void @use_struct({ i8 addrspace(1)*, i64 } %value)
+  call void @use_ptr(i8 addrspace(1)* %value)
   ret void
 }
 
-define void @mixed_constant_vector() gc "cangjie" {
-; CHECK-LABEL: @mixed_constant_vector(
-; CHECK: %value = shufflevector <2 x i8 addrspace(1)*> <i8 addrspace(1)* @global, i8 addrspace(1)* null>, <2 x i8 addrspace(1)*> zeroinitializer, <2 x i32> <i32 0, i32 1>
+define void @mixed_constant_struct() gc "cangjie" {
+; CHECK-LABEL: @mixed_constant_struct(
+; CHECK: %value = extractvalue { i8 addrspace(1)*, i8 addrspace(1)* } { i8 addrspace(1)* @global, i8 addrspace(1)* null }, 1
+; CHECK: @llvm.cj.gc.statepoint{{.*}}[ "gc-live"({{.*}}%value{{.*}}) ]
 entry:
-  %value = shufflevector <2 x i8 addrspace(1)*> <i8 addrspace(1)* @global, i8 addrspace(1)* poison>, <2 x i8 addrspace(1)*> zeroinitializer, <2 x i32> <i32 0, i32 1>
+  %value = extractvalue { i8 addrspace(1)*, i8 addrspace(1)* } { i8 addrspace(1)* @global, i8 addrspace(1)* poison }, 1
   call void @safepoint()
-  call void @use_vector(<2 x i8 addrspace(1)*> %value)
+  call void @use_ptr(i8 addrspace(1)* %value)
   ret void
 }
 
