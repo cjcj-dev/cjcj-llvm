@@ -1307,7 +1307,12 @@ int AArch64AsmPrinter::emitStackOverflowCall(const MachineInstr &MI) {
     return 3; // 3: instruction nums.
   } else {    // stack grow
     MCInst MovX9 = MCInstBuilder(MOVZXi).addReg(X9).addImm(LeftSize).addImm(0);
-    MCSymbol *Sym = Ctx.getOrCreateSymbol("CJ_MCC_StackGrowStub");
+    MCSymbol *Sym = nullptr;
+    if (MF->getTarget().getTargetTriple().isOSBinFormatMachO()) {
+      Sym = Ctx.getOrCreateSymbol("_CJ_MCC_StackGrowStub");
+    } else {
+      Sym = Ctx.getOrCreateSymbol("CJ_MCC_StackGrowStub");
+    }
     EmitToStreamer(*OutStreamer, MovX9);
     emitCangjieRuntimeCall(Sym);
     SM.recordCJStackMap(MI, true);
