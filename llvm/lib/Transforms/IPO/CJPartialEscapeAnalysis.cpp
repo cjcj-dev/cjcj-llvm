@@ -454,7 +454,7 @@ private:
     Value *BI = IRB.CreateAddrSpaceCast(NewInst, PI8AS1Ty);
     OldInst->replaceAllUsesWith(BI);
     if (auto II = dyn_cast<InvokeInst>(OldInst)) {
-      IRBuilder BrIRB(OldInst);
+      IRBuilder<> BrIRB(OldInst);
       BrIRB.CreateBr(II->getNormalDest());
       BasicBlock *UnwindBB = II->getUnwindDest();
       UnwindBB->removePredecessor(OldInst->getParent());
