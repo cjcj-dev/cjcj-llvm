@@ -803,7 +803,7 @@ bool LoopVectorizationLegality::canVectorizeInstrs() {
       };
       if ((!VectorType::isValidElementType(I.getType()) &&
            !I.getType()->isVoidTy()) ||
-          isa<ExtractElementInst>(I)) {
+          isa<ExtractElementInst>(I) || isGCPointerType(I.getType())) {
         reportVectorizationFailure("Found unvectorizable type",
             "instruction return type cannot be vectorized",
             "CantVectorizeInstructionReturnType", ORE, TheLoop, &I);
@@ -836,14 +836,6 @@ bool LoopVectorizationLegality::canVectorizeInstrs() {
         }
 
       } else if (auto *LD = dyn_cast<LoadInst>(&I)) {
-        // Do not vectorize loads of GC-managed pointer types (addrspace(1)).
-        if (isGCPointerType(I.getType())) {
-          reportVectorizationFailure("Found unvectorizable type",
-              "load of gc pointer cannot be vectorized",
-              "CantVectorizeInstructionReturnType", ORE, TheLoop, &I);
-          return false;
-        }
-
         if (LD->getMetadata(LLVMContext::MD_nontemporal)) {
           // For nontemporal loads, check that a nontemporal vector version is
           // supported on the target (arbitrarily try a vector of 2 elements).
