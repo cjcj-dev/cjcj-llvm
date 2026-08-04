@@ -46,6 +46,9 @@ static cl::opt<bool> EnableGCPhase("enable-gc-phase", cl::init(true),
                                    cl::Hidden);
 static cl::opt<bool> EnableGCFastPath("enable-gc-fast-path", cl::init(true),
                                       cl::Hidden);
+static cl::opt<bool> EnableGenerationalPostBarrier(
+    "cj-generational-post-barrier", cl::init(false), cl::Hidden,
+    cl::desc("Keep heap writes on the runtime barrier path"));
 static cl::opt<bool> EnableGCStateLoop("cj-gcstate-dup-loop", cl::init(false),
                                        cl::ReallyHidden);
 
@@ -376,6 +379,15 @@ public:
       break;
     default:
       break;
+    }
+
+    if (EnableGenerationalPostBarrier &&
+        (IID == Intrinsic::cj_gcwrite_ref ||
+         IID == Intrinsic::cj_gcwrite_struct ||
+         IID == Intrinsic::cj_array_copy_ref ||
+         IID == Intrinsic::cj_array_copy_struct ||
+         IID == Intrinsic::cj_atomic_store)) {
+      return false;
     }
 
     setLastBarrier(CI);
@@ -969,7 +981,8 @@ static void checkLoopBarrier(Function &F, LoopInfo &LI, DominatorTree &DT,
     if (!containBarrier(*L, containSafepoint)) {
       continue;
     }
-    if (!containSafepoint && EnableGCStateLoop) {
+    if (!containSafepoint && EnableGCStateLoop &&
+        !EnableGenerationalPostBarrier) {
       Loop &New = cloneLoop(L, F, LI);
       handleGCStateLoop(New, *L, GCPhase);
       replaceBarriers();
