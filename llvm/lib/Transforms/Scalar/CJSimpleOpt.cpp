@@ -421,6 +421,10 @@ struct FPToSIState {
   }
 };
 
+// Out-of-class definitions: C++14 requires them once these members are
+// ODR-used (COFF links otherwise fail with undefined symbols).
+constexpr char FPToSIState::FPExceptionBBName[];
+
 // Create CJ_MCC_MutexLock fastpath.
 struct MutexLockLower {
   Function *F;
@@ -528,6 +532,10 @@ struct MutexLockLower {
     return true;
   }
 };
+
+constexpr char MutexLockLower::StubFuncName[];
+constexpr char MutexLockLower::RTSlowPathName[];
+constexpr char MutexLockLower::GetCJThreadIDName[];
 
 // Icmp of a and b.
 // 1. If a > 0, then

@@ -31,6 +31,11 @@ using namespace llvm;
 
 #define DEBUG_TYPE "CJGCInstrReplace"
 
+// Out-of-class definitions: C++14 requires them once these members are
+// ODR-used (COFF links otherwise fail with undefined symbols).
+constexpr StringRef llvm::CJGCInstrReplace::GC_READ_REF_IID;
+constexpr StringRef llvm::CJGCInstrReplace::GC_WRITE_REF_IID;
+
 SmallDenseMap<Intrinsic::ID, StringRef> CJGCInstrReplace::GCIntrinsicIDToLabel =
     {{Intrinsic::cj_gcread_ref, CJGCInstrReplace::GC_READ_REF_IID},
      {Intrinsic::cj_gcwrite_ref, CJGCInstrReplace::GC_WRITE_REF_IID}};
