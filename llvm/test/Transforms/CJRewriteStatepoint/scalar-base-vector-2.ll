@@ -10,7 +10,7 @@ define void @widget() gc "cangjie" {
 ; CHECK-LABEL: @widget(
 ; CHECK-NEXT:  bb6:
 ; CHECK-NEXT:    [[BASE_EE:%.*]] = extractelement <2 x i8 addrspace(1)*> zeroinitializer, i32 1, !is_base_value !1
-; CHECK-NEXT:    [[TMP:%.*]] = extractelement <2 x i8 addrspace(1)*> undef, i32 1
+; CHECK-NEXT:    [[TMP:%.*]] = extractelement <2 x i8 addrspace(1)*> zeroinitializer, i32 1
 ; CHECK-NEXT:    br i1 undef, label [[BB7:%.*]], label [[BB9:%.*]]
 ; CHECK:       bb7:
 ; CHECK-NEXT:    [[TMP8:%.*]] = getelementptr inbounds i8, i8 addrspace(1)* [[TMP]], i64 12

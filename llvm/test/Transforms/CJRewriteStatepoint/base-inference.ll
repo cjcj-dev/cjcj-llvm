@@ -227,7 +227,7 @@ define <2 x i8 addrspace(1)*> @test_shuffle_broadcast(i8 addrspace(1)* %a) gc "c
 ; CHECK-LABEL: @test_shuffle_broadcast(
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[IE:%.*]] = insertelement <2 x i8 addrspace(1)*> zeroinitializer, i8 addrspace(1)* [[A:%.*]], i64 0
-; CHECK-NEXT:    [[BROADCAST:%.*]] = shufflevector <2 x i8 addrspace(1)*> [[IE]], <2 x i8 addrspace(1)*> undef, <2 x i32> zeroinitializer
+; CHECK-NEXT:    [[BROADCAST:%.*]] = shufflevector <2 x i8 addrspace(1)*> [[IE]], <2 x i8 addrspace(1)*> zeroinitializer, <2 x i32> zeroinitializer
 ; CHECK-NEXT:    [[TOKEN:%.*]] = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, void ()* @foo, i32 0, i32 0) [ "gc-live"(<2 x i8 addrspace(1)*> [[BROADCAST]]) ]
 ; CHECK-NEXT:    [[BROADCAST_RELOC:%.*]] = call coldcc <2 x i8 addrspace(1)*> @llvm.cj.gc.relocate.v2p1i8(token [[TOKEN]], i32 0, i32 0)
 ; CHECK-NEXT:    ret <2 x i8 addrspace(1)*> [[BROADCAST_RELOC]]
