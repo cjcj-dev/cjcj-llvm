@@ -2520,6 +2520,68 @@ static void printBases(PointerToBaseTy &PointerToBase, bool Before) {
   }
 }
 
+static Constant *normalizeUndefOrPoisonConstant(Constant *C) {
+  if (isa<UndefValue>(C) || isa<PoisonValue>(C))
+    return Constant::getNullValue(C->getType());
+
+  SmallVector<Constant *, 8> NormalizedOperands;
+  bool Changed = false;
+  for (Value *Operand : C->operands()) {
+    auto *OperandC = dyn_cast<Constant>(Operand);
+    if (!OperandC)
+      return C;
+    Constant *Normalized = normalizeUndefOrPoisonConstant(OperandC);
+    NormalizedOperands.push_back(Normalized);
+    Changed |= Normalized != OperandC;
+  }
+  if (!Changed)
+    return C;
+
+  Constant *Normalized = nullptr;
+  if (auto *CE = dyn_cast<ConstantExpr>(C))
+    Normalized = CE->getWithOperands(NormalizedOperands);
+  else if (auto *CS = dyn_cast<ConstantStruct>(C))
+    Normalized = ConstantStruct::get(CS->getType(), NormalizedOperands);
+  else if (auto *CA = dyn_cast<ConstantArray>(C))
+    Normalized = ConstantArray::get(CA->getType(), NormalizedOperands);
+  else if (isa<ConstantVector>(C))
+    Normalized = ConstantVector::get(NormalizedOperands);
+
+  if (!Normalized)
+    return C;
+  if (isa<UndefValue>(Normalized) || isa<PoisonValue>(Normalized))
+    return Constant::getNullValue(Normalized->getType());
+  return Normalized;
+}
+
+static void normalizeUndefOrPoisonInLiveValue(Value *V,
+                                               DenseSet<Value *> &Visited) {
+  if (!Visited.insert(V).second)
+    return;
+
+  auto *I = dyn_cast<Instruction>(V);
+  // Calls and loads are opaque definitions. Their operands do not determine
+  // whether the returned or loaded GC value is undef or poison.
+  if (!I || isa<CallBase>(I) || isa<LoadInst>(I))
+    return;
+
+  for (Use &Operand : I->operands()) {
+    if (auto *C = dyn_cast<Constant>(Operand.get())) {
+      Operand.set(normalizeUndefOrPoisonConstant(C));
+      continue;
+    }
+    normalizeUndefOrPoisonInLiveValue(Operand.get(), Visited);
+  }
+}
+
+static void
+normalizeUndefOrPoisonInLiveValues(ArrayRef<SafepointRecord> Records) {
+  DenseSet<Value *> Visited;
+  for (const SafepointRecord &Info : Records)
+    for (Value *LiveV : Info.LiveSet)
+      normalizeUndefOrPoisonInLiveValue(LiveV, Visited);
+}
+
 static bool insertParsePoints(Function &F, DominatorTree &DT,
                               PostDominatorTree &PostDT,
                               TargetTransformInfo &TTI,
@@ -2614,6 +2676,13 @@ static bool insertParsePoints(Function &F, DominatorTree &DT,
   // need to rerun liveness.  We may *also* have inserted new defs, but that's
   // not the key issue.
   Data.recomputeLiveInValues(Records, PointerToBase);
+
+  // Liveness excludes constants themselves, but an optimizer can hide undef
+  // or poison inside a non-constant GC value such as a phi, select, cast, or
+  // aggregate constructor. The base computation above already maps those
+  // constants to null; normalize the corresponding derived value before it is
+  // recorded in a statepoint as well.
+  normalizeUndefOrPoisonInLiveValues(Records);
 
   if (PrintBasePointers) {
     printBases(PointerToBase, true);
