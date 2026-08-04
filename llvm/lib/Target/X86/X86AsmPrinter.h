@@ -204,8 +204,6 @@ private:
   };
 
   void emitMccNewObjectForCopyGC(ParamForEmitNewObj &Param);
-  void emitStickyDeferredLog(const MachineInstr *MI,
-                             const MachineOperand &MOSym);
   void emitMccNewObjectFastPath(const MachineInstr *MI,
                                 const MachineOperand &MOSym,
                                 unsigned Opcode) override;

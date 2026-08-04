@@ -259,11 +259,6 @@ protected:
   int64_t getProtectAddrOffsetInCJTLS() const;
   int64_t getSafepointCheckAddrOffsetInCJTLS() const;
   int64_t getCJThreadOffsetInCJTLS() const;
-  bool shouldEmitStickyDeferredLog() const;
-  int64_t getDeferredLogRingOffsetInMutator() const;
-  int64_t getDeferredLogRingIndexOffsetInMutator() const;
-  uint64_t getDeferredLogRingSize() const;
-  const char *getDeferredLogRingFlushFunctionName() const;
 
 public:
   ~AsmPrinter() override;

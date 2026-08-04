@@ -54,17 +54,8 @@
 
 using namespace llvm;
 
-namespace llvm {
-extern cl::opt<bool> EnableStickyLoggedMap;
-} // namespace llvm
-
 #define GET_INSTRINFO_CTOR_DTOR
 #include "AArch64GenInstrInfo.inc"
-
-// emitStickyDeferredLog (AArch64AsmPrinter.cpp) emits 9 instructions when sticky
-// barrier lowering is on; branch relaxation must count them.
-static constexpr unsigned StickyDeferredLogInsts = 9;
-static constexpr unsigned StickyDeferredLogBytes = StickyDeferredLogInsts * 4;
 
 static cl::opt<unsigned> TBZDisplacementBits(
     "aarch64-tbz-offset-bits", cl::Hidden, cl::init(14),
@@ -93,14 +84,11 @@ unsigned AArch64InstrInfo::getCangjieSpecificCallInstSizeInBytes(
   if (MI.getNumOperands() == 0) {
     return 0;
   }
-  const unsigned StickyBytes =
-      EnableStickyLoggedMap ? StickyDeferredLogBytes : 0;
   const MachineOperand *MOSym = nullptr;
   if (MI.getOpcode() == TargetOpcode::STATEPOINT) {
     StatepointOpers SO(&MI);
     if (SO.getID() == Cangjie::CJStatepointID::NewArrayFast) {
-      // 52: 13 insts for new array fast path; +sticky ring log when enabled.
-      return 52 + StickyBytes;
+      return 52; // 52: 52 bytes(13 insts) for new array call
     }
     MOSym = &(SO.getCallTarget());
   } else {
@@ -129,13 +117,13 @@ unsigned AArch64InstrInfo::getCangjieSpecificCallInstSizeInBytes(
   if (Callee->getName().isGetGCPhase()) {
     return 4; // 4: 4 bytes(1 insts) for GetGCPhase call
   }
-  // NewObject/NewFinalizer expand to a multi-inst fast path (AsmPrinter).
-  // Upper bound: 12 base insts (+1 finalizer call) + sticky ring log.
+  // NewObject/NewFinalizer expand to a multi-instruction fast path in the
+  // AsmPrinter.
   if (Callee->getName().equals("CJ_MCC_NewObject")) {
-    return 48 + StickyBytes;
+    return 48;
   }
   if (Callee->getName().equals("CJ_MCC_NewFinalizer")) {
-    return 52 + StickyBytes;
+    return 52;
   }
   const auto &CallerFunc = MI.getParent()->getParent()->getFunction();
   if (Callee->isCangjieNativeStub(CallerFunc)) {

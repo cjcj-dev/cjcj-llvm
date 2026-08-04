@@ -37,7 +37,6 @@
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/BinaryFormat/ELF.h"
-#include "llvm/CodeGen/CJDeferredLogRingABI.h"
 #include "llvm/CodeGen/CJMetadata.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/GCMetadataPrinter.h"
@@ -159,7 +158,6 @@ namespace llvm {
 extern cl::opt<bool> CJPipeline;
 extern cl::opt<bool> EnableStackGrow;
 extern cl::opt<bool> EnableSafepointOutline;
-extern cl::opt<bool> EnableStickyLoggedMap;
 
 // Warning: The following values must be synchronized with
 // the data struct `ThreadLocalData` in runtime
@@ -170,7 +168,6 @@ constexpr int64_t ScheduleOffsetInCJTLS = CJThreadOffsetInCJTLS + 8;
 constexpr int64_t PreemptFlagOffsetInCJTLS = ScheduleOffsetInCJTLS + 8;
 constexpr int64_t ProtectAddrOffsetInCJTLS = PreemptFlagOffsetInCJTLS + 8;
 constexpr int64_t SafePollingAddrOffsetInCJTLS = ProtectAddrOffsetInCJTLS + 8;
-// These values are checked against Mutator's fixed prefix by the runtime.
 } // end anonymous namespace
 
 char AsmPrinter::ID = 0;
@@ -4214,26 +4211,6 @@ int64_t AsmPrinter::getAllocBufferOffsetInCJTLS() const {
 
 int64_t AsmPrinter::getMutatorOffsetInCJTLS() const {
   return MutatorOffsetInCJTLS;
-}
-
-bool AsmPrinter::shouldEmitStickyDeferredLog() const {
-  return EnableStickyLoggedMap;
-}
-
-int64_t AsmPrinter::getDeferredLogRingOffsetInMutator() const {
-  return CangjieDeferredLogRingABI::Offset;
-}
-
-int64_t AsmPrinter::getDeferredLogRingIndexOffsetInMutator() const {
-  return CangjieDeferredLogRingABI::IndexOffset;
-}
-
-uint64_t AsmPrinter::getDeferredLogRingSize() const {
-  return CangjieDeferredLogRingABI::Capacity;
-}
-
-const char *AsmPrinter::getDeferredLogRingFlushFunctionName() const {
-  return CangjieDeferredLogRingABI::FlushFunctionName;
 }
 
 int64_t AsmPrinter::getCJThreadOffsetInCJTLS() const {

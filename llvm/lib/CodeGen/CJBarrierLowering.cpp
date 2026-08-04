@@ -15,7 +15,6 @@
 #include "llvm/ADT/PriorityWorklist.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
-#include "llvm/CodeGen/CJDeferredLogRingABI.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/CJIntrinsics.h"
 #include "llvm/IR/Constants.h"
@@ -52,10 +51,8 @@ static cl::opt<bool> EnableGenerationalPostBarrier(
     cl::desc("Keep heap writes on the runtime barrier path"));
 static cl::opt<bool> EnableGCStateLoop("cj-gcstate-dup-loop", cl::init(false),
                                        cl::ReallyHidden);
+
 namespace llvm {
-cl::opt<bool> EnableStickyLoggedMap(
-    "cjcj-sticky-logged-map", cl::init(true), cl::Hidden,
-    cl::desc("Check the sticky logged byte map in the GC phase fast path"));
 extern cl::opt<bool> CangjieJIT;
 extern cl::opt<bool> DisableGCSupport;
 extern cl::opt<bool> EnableSafepointOnly;
@@ -63,11 +60,6 @@ extern cl::opt<bool> EnableSafepointOutline;
 } // namespace llvm
 
 namespace {
-constexpr uint64_t StickyLineShift = 8;
-constexpr StringRef StickyLoggedBaseName = "__cj_sticky_logged_base";
-constexpr StringRef StickyHeapBaseName = "__cj_sticky_heap_base";
-constexpr StringRef StickyHeapSizeName = "__cj_sticky_heap_size";
-
 const static StringRef NewObjFastStr = "CJ_MCC_NewObjectFast";
 const static StringRef NewObjFinalizerFastStr = "CJ_MCC_NewFinalizerFast";
 constexpr StringRef SafepointStub = "CJ_Safepoint_Stub";
@@ -493,98 +485,6 @@ private:
     return NewInst;
   }
 
-  Value *getStickySource(CallBase *CI) {
-    switch (CI->getIntrinsicID()) {
-    case Intrinsic::cj_gcwrite_ref:
-    case Intrinsic::cj_gcwrite_struct:
-      return getBaseObj(CI);
-    case Intrinsic::cj_array_copy_ref:
-    case Intrinsic::cj_array_copy_struct:
-      return CI->getArgOperand(ArrayCopy::DstObj);
-    case Intrinsic::cj_atomic_store:
-      return CI->getArgOperand(AtomicStore::Obj);
-    default:
-      return nullptr;
-    }
-  }
-
-  void createStickyLoggedCheck(CallBase *CI, Value *SourceObj,
-                               BasicBlock *MapReadyBranch,
-                               BasicBlock *TrueBranch,
-                               BasicBlock *FalseBranch,
-                               const DebugLoc &CurDbg) {
-    Module *M = CI->getModule();
-    Type *I8 = Type::getInt8Ty(C);
-    Type *I8Ptr = Type::getInt8PtrTy(C);
-    Type *IntPtr = M->getDataLayout().getIntPtrType(C);
-
-    GlobalVariable *HeapBase = M->getGlobalVariable(StickyHeapBaseName);
-    if (HeapBase == nullptr) {
-      HeapBase = new GlobalVariable(*M, IntPtr, false,
-                                    GlobalValue::ExternalLinkage, nullptr,
-                                    StickyHeapBaseName);
-    }
-    assert(HeapBase->getValueType() == IntPtr &&
-           "sticky heap base has an unexpected type");
-
-    GlobalVariable *HeapSize = M->getGlobalVariable(StickyHeapSizeName);
-    if (HeapSize == nullptr) {
-      HeapSize = new GlobalVariable(*M, IntPtr, false,
-                                    GlobalValue::ExternalLinkage, nullptr,
-                                    StickyHeapSizeName);
-    }
-    assert(HeapSize->getValueType() == IntPtr &&
-           "sticky heap size has an unexpected type");
-
-    GlobalVariable *LoggedBase = M->getGlobalVariable(StickyLoggedBaseName);
-    if (LoggedBase == nullptr) {
-      LoggedBase = new GlobalVariable(*M, I8Ptr, false,
-                                      GlobalValue::ExternalLinkage, nullptr,
-                                      StickyLoggedBaseName);
-    }
-    assert(LoggedBase->getValueType() == I8Ptr &&
-           "sticky logged base has an unexpected type");
-
-    BasicBlock *RangeCheckBranch = BasicBlock::Create(
-        C, "stickyRangeCheck", MapReadyBranch->getParent(), TrueBranch);
-    BasicBlock *MapCheckBranch = BasicBlock::Create(
-        C, "stickyMapCheck", MapReadyBranch->getParent(), TrueBranch);
-
-    IRBuilder<> ReadyBuilder(MapReadyBranch);
-    ReadyBuilder.SetCurrentDebugLocation(CurDbg);
-    Value *MapBase = ReadyBuilder.CreateLoad(I8Ptr, LoggedBase,
-                                             "sticky.logged.base");
-    ReadyBuilder.CreateCondBr(ReadyBuilder.CreateIsNull(MapBase), TrueBranch,
-                              RangeCheckBranch);
-
-    IRBuilder<> RangeBuilder(RangeCheckBranch);
-    RangeBuilder.SetCurrentDebugLocation(CurDbg);
-    Value *SourceAddr = RangeBuilder.CreatePtrToInt(SourceObj, IntPtr,
-                                                    "sticky.source.addr");
-    Value *HeapAddr =
-        RangeBuilder.CreateLoad(IntPtr, HeapBase, "sticky.heap.base");
-    Value *HeapOffset =
-        RangeBuilder.CreateSub(SourceAddr, HeapAddr, "sticky.heap.offset");
-    Value *HeapBytes =
-        RangeBuilder.CreateLoad(IntPtr, HeapSize, "sticky.heap.size");
-    Value *IsInHeap =
-        RangeBuilder.CreateICmpULT(HeapOffset, HeapBytes, "sticky.is.in.heap");
-    RangeBuilder.CreateCondBr(IsInHeap, MapCheckBranch, TrueBranch);
-
-    IRBuilder<> MapBuilder(MapCheckBranch);
-    MapBuilder.SetCurrentDebugLocation(CurDbg);
-    Value *LineIndex = MapBuilder.CreateLShr(
-        HeapOffset, StickyLineShift, "sticky.line.index");
-    Value *LoggedAddr = MapBuilder.CreateInBoundsGEP(
-        I8, MapBase, LineIndex, "sticky.logged.addr");
-    LoadInst *LoggedByte =
-        MapBuilder.CreateLoad(I8, LoggedAddr, "sticky.logged.byte");
-    LoggedByte->setVolatile(true);
-    Value *IsLogged =
-        MapBuilder.CreateIsNotNull(LoggedByte, "sticky.is.logged");
-    MapBuilder.CreateCondBr(IsLogged, TrueBranch, FalseBranch);
-  }
-
   void handleSuccPhi(CallBase *CI, BasicBlock *FalseBranch, Instruction *New,
                      BasicBlock *TrueBranch, BasicBlock *Succ) {
     Intrinsic::ID IID = CI->getIntrinsicID();
@@ -629,26 +529,9 @@ private:
     BranchInst::Create(Succ, TrueBranch);
     Instruction *NewInst = createFastInstr(TrueBranch, CurInst, CurDbg);
 
-    BasicBlock *PhaseFastBranch = TrueBranch;
-    Value *SourceObj = EnableStickyLoggedMap ? getStickySource(CurInst) : nullptr;
-    if (SourceObj != nullptr && !isNullPointer(SourceObj)) {
-      BasicBlock *MapReadyBranch = BasicBlock::Create(
-          C, "stickyMapReadyCheck", SplitBB->getParent(), TrueBranch);
-      PhaseFastBranch = BasicBlock::Create(
-          C, "stickySourceCheck", SplitBB->getParent(), MapReadyBranch);
-
-      IRBuilder<> SourceBuilder(PhaseFastBranch);
-      SourceBuilder.SetCurrentDebugLocation(CurDbg);
-      Value *SourceIsNull = SourceBuilder.CreateIsNull(SourceObj);
-      SourceBuilder.CreateCondBr(SourceIsNull, TrueBranch, MapReadyBranch);
-
-      createStickyLoggedCheck(CurInst, SourceObj, MapReadyBranch, TrueBranch,
-                              FalseBranch, CurDbg);
-    }
-
     Instruction *OriginBr = SplitBB->getTerminator();
     IRBuilder<> BuilderBr(OriginBr);
-    BuilderBr.CreateCondBr(CondVal, PhaseFastBranch, FalseBranch);
+    BuilderBr.CreateCondBr(CondVal, TrueBranch, FalseBranch);
     OriginBr->eraseFromParent();
     FalseBranch->getTerminator()->setDebugLoc(CurDbg);
     TrueBranch->getTerminator()->setDebugLoc(CurDbg);
@@ -892,24 +775,17 @@ void CJBarrierLowering::getAnalysisUsage(AnalysisUsage &AU) const {
 /// doInitialization - If this module uses the GC intrinsics, find them now.
 bool CJBarrierLowering::doInitialization(Module &M) {
   Function *GCStateCheckFunc = M.getFunction("GetGCPhase");
+  if (GCStateCheckFunc != nullptr) { // have GetGCPhase in module
+    return false;
+  }
   LLVMContext &C = M.getContext();
-  if (GCStateCheckFunc == nullptr) {
-    FunctionType *FuncType = FunctionType::get(Type::getInt32Ty(C), false);
-    GCStateCheckFunc =
-        cast<Function>(M.getOrInsertFunction("GetGCPhase", FuncType).getCallee());
-    GCStateCheckFunc->addFnAttr(Attribute::get(C, "gc-leaf-function"));
-    GCStateCheckFunc->addFnAttr(Attribute::get(C, "cj-runtime"));
-    GCStateCheckFunc->setCallingConv(CallingConv::CangjieGC);
-    GCStateCheckFunc->setUnnamedAddr(GlobalValue::UnnamedAddr::Local);
-  }
-
-  if (EnableStickyLoggedMap) {
-    Type *ObjectPtr = Type::getInt8PtrTy(C, 1);
-    FunctionType *FlushType =
-        FunctionType::get(ObjectPtr, {ObjectPtr}, false);
-    M.declareCJRuntimeFunc(CangjieDeferredLogRingABI::FlushFunctionName,
-                           FlushType, true);
-  }
+  FunctionType *FuncType = FunctionType::get(Type::getInt32Ty(C), false);
+  GCStateCheckFunc =
+      cast<Function>(M.getOrInsertFunction("GetGCPhase", FuncType).getCallee());
+  GCStateCheckFunc->addFnAttr(Attribute::get(C, "gc-leaf-function"));
+  GCStateCheckFunc->addFnAttr(Attribute::get(C, "cj-runtime"));
+  GCStateCheckFunc->setCallingConv(CallingConv::CangjieGC);
+  GCStateCheckFunc->setUnnamedAddr(GlobalValue::UnnamedAddr::Local);
   return false;
 }
 
@@ -1343,10 +1219,8 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
     return Changed;
   }
 
-  if (OptLevel != CodeGenOpt::None || EnableStickyLoggedMap) {
-    writeBarrierFastPath(F, Barriers);
-  }
   if (OptLevel != CodeGenOpt::None) {
+    writeBarrierFastPath(F, Barriers);
     readBarrierFastPath(F, Barriers);
   }
   doLowering(F);

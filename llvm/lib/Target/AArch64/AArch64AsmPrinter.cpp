@@ -247,8 +247,6 @@ private:
   };
 
   void emitMccNewObjectForCopyGC(const ParamForEmitNewObj &Param);
-  void emitStickyDeferredLog(const MachineInstr *MI,
-                             const MachineOperand &MOSym);
   void emitMccNewObjectFastPath(const MachineInstr *MI,
                                 const MachineOperand &MOSym,
                                 unsigned Opcode) override;
@@ -2045,71 +2043,6 @@ void AArch64AsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
 // .LNewObjSlowPath
 //   bl   MCC_NewObjectStub
 // .LNewObjFin
-void AArch64AsmPrinter::emitStickyDeferredLog(const MachineInstr *MI,
-                                              const MachineOperand &MOSym) {
-  if (!shouldEmitStickyDeferredLog())
-    return;
-
-  const Function *FlushFunc = MI->getMF()->getFunction().getParent()->
-      getFunction(getDeferredLogRingFlushFunctionName());
-  assert(FlushFunc && "missing deferred log ring flush declaration");
-  MCOperand FlushTarget = setGAAndLower(MOSym, FlushFunc);
-  MCSymbol *SkipFlush =
-      OutContext.createTempSymbol("DeferredLogRingReady", true);
-  const MCSymbolRefExpr *SkipFlushExpr =
-      MCSymbolRefExpr::create(SkipFlush, OutContext);
-
-  EmitToStreamer(*OutStreamer,
-                 MCInstBuilder(AArch64::LDRXui)
-                     .addReg(AArch64::X9)
-                     .addReg(AArch64::X28)
-                     .addImm(getMutatorOffsetInCJTLS() / 8));
-  EmitToStreamer(*OutStreamer,
-                 MCInstBuilder(AArch64::LDRXui)
-                     .addReg(AArch64::X10)
-                     .addReg(AArch64::X9)
-                     .addImm(getDeferredLogRingIndexOffsetInMutator() / 8));
-  EmitToStreamer(*OutStreamer,
-                 MCInstBuilder(AArch64::ADDXri)
-                     .addReg(AArch64::X9)
-                     .addReg(AArch64::X9)
-                     .addImm(getDeferredLogRingOffsetInMutator())
-                     .addImm(0));
-  EmitToStreamer(*OutStreamer,
-                 MCInstBuilder(AArch64::STRXroX)
-                     .addReg(AArch64::X0)
-                     .addReg(AArch64::X9)
-                     .addReg(AArch64::X10)
-                     .addImm(0)
-                     .addImm(1));
-  EmitToStreamer(*OutStreamer,
-                 MCInstBuilder(AArch64::ADDXri)
-                     .addReg(AArch64::X10)
-                     .addReg(AArch64::X10)
-                     .addImm(1)
-                     .addImm(0));
-  EmitToStreamer(*OutStreamer,
-                 MCInstBuilder(AArch64::STRXui)
-                     .addReg(AArch64::X10)
-                     .addReg(AArch64::X9)
-                     .addImm((getDeferredLogRingIndexOffsetInMutator() -
-                              getDeferredLogRingOffsetInMutator()) /
-                             8));
-  EmitToStreamer(*OutStreamer,
-                 MCInstBuilder(AArch64::SUBSXri)
-                     .addReg(AArch64::XZR)
-                     .addReg(AArch64::X10)
-                     .addImm(getDeferredLogRingSize())
-                     .addImm(0));
-  EmitToStreamer(*OutStreamer,
-                 MCInstBuilder(AArch64::Bcc)
-                     .addImm(AArch64CC::NE)
-                     .addExpr(SkipFlushExpr));
-  EmitToStreamer(*OutStreamer,
-                 MCInstBuilder(AArch64::BL).addOperand(FlushTarget));
-  OutStreamer->emitLabel(SkipFlush);
-}
-
 void AArch64AsmPrinter::emitMccNewObjectForCopyGC(
     const ParamForEmitNewObj &Param) {
   using namespace AArch64;
@@ -2149,7 +2082,6 @@ void AArch64AsmPrinter::emitMccNewObjectForCopyGC(
   EmitToStreamer(*OutStreamer, SetKlass);
   EmitToStreamer(*OutStreamer, StoreNewAllocPtr);
   EmitToStreamer(*OutStreamer, CopyAllocPtrToX0);
-  emitStickyDeferredLog(Param.MI, Param.MOSym);
   if (Param.FastFuncName.equals("CJ_MCC_NewFinalizerFast")) {
     MCOperand FinalizerMC = setGAAndLower(
         Param.MOSym, Param.MI->getMF()->getFunction().getParent()->getFunction(
@@ -2260,7 +2192,6 @@ void AArch64AsmPrinter::emitCJNewArrayFastPath(const MachineInstr &MI,
   EmitToStreamer(*OutStreamer, StoreArrayLength);
   EmitToStreamer(*OutStreamer, StoreNewAllocPtr);
   EmitToStreamer(*OutStreamer, CopyAllocPtrToX0);
-  emitStickyDeferredLog(&MI, MOSym);
   EmitToStreamer(*OutStreamer, BranchToFin);
   OutStreamer->emitLabel(LSlow);
   EmitToStreamer(*OutStreamer, CallNewArraySlowPath);
