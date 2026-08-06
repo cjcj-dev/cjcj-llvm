@@ -525,6 +525,14 @@ public:
         if (MFI.getObjectAllocation(FI))
           continue;
 
+        if (MFI.isFixedObjectIndex(FI)) {
+          if (isPointerByFixedObject(FI)) {
+            int Imm = getStoreStackOffset(MI);
+            insertLiveSet(KillSet[MBB], FI, Imm);
+          }
+          continue;
+        }
+
         if (MFI.isSpillSlotObjectIndex(FI)) {
           // The spill is a define point of the stack pointer.
           int Imm = getStoreStackOffset(MI);
