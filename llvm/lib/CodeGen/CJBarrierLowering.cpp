@@ -1209,6 +1209,49 @@ static bool combineSafepointStub(Module *M,
   return true;
 }
 
+// Strip colour bits from addrspace(1) pointers before they reach libc memmove/memcpy.
+// CreateCopyTo (cjcj IRBuilder.cj:5909 / CJNativeIRBuilder.cpp:1146) emits bare
+// llvm.memmove on GetPayloadFromObject interiors; colour survives GEP and is not
+// covered by MCC_AcquireRawData (ffibound B1 / acqstrip). Same AddressMask ABI as
+// ReadBarrier::splitFastPathAndSlowPath (RefField.h:179, address : 48).
+static Value *uncolorIfGCPtr(Value *Ptr, IRBuilder<> &Builder) {
+  auto *PT = dyn_cast<PointerType>(Ptr->getType());
+  if (!PT || PT->getAddressSpace() != 1)
+    return Ptr;
+  constexpr unsigned AddressBits = 48;
+  constexpr uint64_t AddressMask = (uint64_t(1) << AddressBits) - 1;
+  Type *I64 = Type::getInt64Ty(Builder.getContext());
+  Value *AsInt = Builder.CreatePtrToInt(Ptr, I64);
+  Value *Masked =
+      Builder.CreateAnd(AsInt, ConstantInt::get(I64, AddressMask));
+  return Builder.CreateIntToPtr(Masked, Ptr->getType());
+}
+
+static bool uncolorMemTransferOperands(Function &F) {
+  bool Changed = false;
+  for (BasicBlock &BB : F) {
+    for (Instruction &I : BB) {
+      auto *MT = dyn_cast<MemTransferInst>(&I);
+      if (!MT)
+        continue;
+      IRBuilder<> Builder(MT);
+      Value *Dst = MT->getRawDest();
+      Value *Src = MT->getRawSource();
+      Value *NewDst = uncolorIfGCPtr(Dst, Builder);
+      Value *NewSrc = uncolorIfGCPtr(Src, Builder);
+      if (NewDst != Dst) {
+        MT->setDest(NewDst);
+        Changed = true;
+      }
+      if (NewSrc != Src) {
+        MT->setSource(NewSrc);
+        Changed = true;
+      }
+    }
+  }
+  return Changed;
+}
+
 bool CJBarrierLowering::runOnFunction(Function &F) {
   // Quick exit for functions that do not use Cangjie GC.
   if (!F.hasCangjieGC())
@@ -1243,6 +1286,9 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
 
   if (!Safepoints.empty() && !TT.isARM())
     Changed |= combineSafepointStub(F.getParent(), Safepoints);
+
+  // Independent of barrier set: bare CreateMemMove has no CJ barrier intrinsic.
+  Changed |= uncolorMemTransferOperands(F);
 
   if (Barriers.empty()) {
     return Changed;
