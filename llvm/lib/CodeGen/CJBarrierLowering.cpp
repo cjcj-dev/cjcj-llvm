@@ -638,13 +638,30 @@ public:
     return Load;
   }
 
-  // %tag = lshr i64 %Ptr, 48
-  // %ret = icmp eq i64 %tag, 0
+  // Phase B of the ZGC-style colouring work (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6).
+  //
+  // This used to be `lshr 48; icmp eq 0`, which asks "are the top 16 bits zero" and so hard-codes
+  // "a good reference carries no colour". That is what stops a good colour from being flipped
+  // lazily, and therefore what forces the runtime's full-heap extermination walk. Test against a
+  // mask the runtime owns instead, so a later phase can give good a non-zero value and flip it at
+  // a phase boundary -- ZGC does the same with ZPointerLoadBadMask (zBarrier.inline.hpp:626-628).
+  //
+  // The mask is `0xFFFF000000000000` for now, so this computes the same predicate as the shift it
+  // replaces; only the instruction shape changes. Code built by an older compiler keeps the shift
+  // form and stays correct, because both spell the same question.
+  //
+  // %mask = load i64, i64* @g_cjLoadBadMask
+  // %bad  = and i64 %Ptr, %mask
+  // %ret  = icmp eq i64 %bad, 0
   Value *cmpTaggedPointer(Value *TagPtr, IRBuilder<> &Builder) {
-    Value *Tag = Builder.CreateLShr(TagPtr, (uint64_t)48);
-    cast<Instruction>(Tag)->setDebugLoc(*Loc);
-    Value *CmpEQ = Builder.CreateICmpEQ(
-        Tag, ConstantInt::get(Type::getInt64Ty(C), (uint64_t)0));
+    Type *I64 = Type::getInt64Ty(C);
+    Module *M = Builder.GetInsertBlock()->getParent()->getParent();
+    Constant *MaskGV = M->getOrInsertGlobal("g_cjLoadBadMask", I64);
+    Value *Mask = Builder.CreateLoad(I64, MaskGV, "cj.loadbadmask");
+    cast<Instruction>(Mask)->setDebugLoc(*Loc);
+    Value *Bad = Builder.CreateAnd(TagPtr, Mask);
+    cast<Instruction>(Bad)->setDebugLoc(*Loc);
+    Value *CmpEQ = Builder.CreateICmpEQ(Bad, ConstantInt::get(I64, (uint64_t)0));
     cast<Instruction>(CmpEQ)->setDebugLoc(*Loc);
     return CmpEQ;
   }
@@ -1015,7 +1032,7 @@ void CJBarrierLowering::writeBarrierFastPath(Function &F,
 // =====>
 //   %0 = load i8 addrspace1*, i8 addrspace1* addrspace1* %RefFieldPtr
 //   %1 = ptrtoint i8 addrspace1* %0 to i64
-//   %2 = lshr i64 %1, 48
+//   %2 = and i64 %1, @g_cjLoadBadMask   (phase B; was `lshr i64 %1, 48`)
 //   %3 = icmp eq i64 %2, 0
 //   br i1 %3, label %gcNoMarked label %gcMarked
 // gcNoMarked:
