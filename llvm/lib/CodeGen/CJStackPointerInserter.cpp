@@ -531,7 +531,8 @@ public:
           insertLiveSet(KillSet[MBB], FI, Imm);
           continue;
         }
-        assert(MFI.isStatepointSpillSlotObjectIndex(FI) &&
+        assert((MFI.isStatepointSpillSlotObjectIndex(FI) ||
+                MFI.isNonGCRootStackObjectIndex(FI)) &&
                "Unknown stack type");
       }
     }
@@ -565,7 +566,8 @@ public:
           insertLiveSet(LiveTmp, FI, Imm);
           continue;
         }
-        assert(MFI.isStatepointSpillSlotObjectIndex(FI) &&
+        assert((MFI.isStatepointSpillSlotObjectIndex(FI) ||
+                MFI.isNonGCRootStackObjectIndex(FI)) &&
                "Unknown stack type");
         continue;
       }
@@ -591,7 +593,8 @@ public:
           removeLiveSet(LiveTmp, FI, Imm);
           continue;
         }
-        assert(MFI.isStatepointSpillSlotObjectIndex(FI) &&
+        assert((MFI.isStatepointSpillSlotObjectIndex(FI) ||
+                MFI.isNonGCRootStackObjectIndex(FI)) &&
                "Unknown stack type");
       }
     }
