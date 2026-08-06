@@ -249,6 +249,7 @@ bool restoreGCReadRef(SmallVector<Instruction *, 4> *Instrs, SmallDenseMap<Value
         }
       }
       LI->replaceAllUsesWith(ReplacerValue);
+      ValueToBasePointer.erase(LI);
       LI->eraseFromParent();
     }
   }
