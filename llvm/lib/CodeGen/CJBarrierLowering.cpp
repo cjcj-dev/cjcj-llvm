@@ -622,7 +622,7 @@ public:
         cast<Instruction>(Builder.CreatePtrToInt(Load, Type::getInt64Ty(C)));
     PtrToInt->setDebugLoc(*Loc);
     Value *CmpEQ = cmpTaggedPointer(PtrToInt, Builder);
-    splitFastPathAndSlowPath(ReadInst->getParent(), CmpEQ, Load);
+    splitFastPathAndSlowPath(ReadInst->getParent(), CmpEQ, PtrToInt);
   }
 
   // insert a load from RefFieldPtr:
@@ -670,7 +670,8 @@ public:
   //   %Cond = icmp eq i64 %tag, 0
   //   br i1 %Cond, label %gcNoMarked label %gcMarked
   // gcNoMarked:
-  //   %val1 = %val
+  //   %address = and i64 %PtrToInt, 0x0000ffffffffffff
+  //   %val1 = inttoptr i64 %address to i8 addrspace(1)*
   //   br label %loadFinish
   // gcMarked:
   //   %val2 = call @llvm.cj.gcread.ref
@@ -678,20 +679,31 @@ public:
   // loadFinish:
   //   %val = phi [%val1, gcNoMarked], [%val2, gcMarked]
   void splitFastPathAndSlowPath(BasicBlock *SplitBB, Value *Condition,
-                                Instruction *LoadVal) {
+                                Instruction *PtrToInt) {
     BasicBlock *FalseBranch = SplitBB->splitBasicBlock(ReadInst, "gcMarked");
     BasicBlock *Succ =
         FalseBranch->splitBasicBlock(ReadInst->getNextNode(), "loadFinish");
     BasicBlock *TrueBranch =
         BasicBlock::Create(C, "gcNoMarked", SplitBB->getParent(), Succ);
     BranchInst::Create(Succ, TrueBranch);
+    IRBuilder<> Builder(TrueBranch->getTerminator());
+    // RefField.h:179 and its :191-194 static_assert fix the address in the low 48 bits.
+    // If that ABI width changes, this mask must move to a runtime-owned export.
+    constexpr unsigned AddressBits = 48;
+    constexpr uint64_t AddressMask = (uint64_t(1) << AddressBits) - 1;
+    Value *Address = Builder.CreateAnd(
+        PtrToInt, ConstantInt::get(Type::getInt64Ty(C), AddressMask));
+    cast<Instruction>(Address)->setDebugLoc(*Loc);
+    Instruction *Uncolored =
+        cast<Instruction>(Builder.CreateIntToPtr(Address, DstTy));
+    Uncolored->setDebugLoc(*Loc);
     Instruction *OriginBr = SplitBB->getTerminator();
     IRBuilder<> BuilderBr(OriginBr);
     BuilderBr.CreateCondBr(Condition, TrueBranch, FalseBranch);
     OriginBr->eraseFromParent();
     TrueBranch->getTerminator()->setDebugLoc(*Loc);
     FalseBranch->getTerminator()->setDebugLoc(*Loc);
-    handleSuccPhi(FalseBranch, LoadVal, TrueBranch, Succ);
+    handleSuccPhi(FalseBranch, Uncolored, TrueBranch, Succ);
     return;
   }
 
