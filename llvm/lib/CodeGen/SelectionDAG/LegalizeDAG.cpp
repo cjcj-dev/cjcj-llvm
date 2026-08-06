@@ -2281,6 +2281,9 @@ SelectionDAGLegalize::ExpandSinCosLibCall(SDNode *Node,
 
   // Pass the return address of sin.
   SDValue SinPtr = DAG.CreateStackTemporary(RetVT);
+  MachineFrameInfo &MFI = DAG.getMachineFunction().getFrameInfo();
+  MFI.markAsNonGCRootStackObjectIndex(
+      cast<FrameIndexSDNode>(SinPtr.getNode())->getIndex());
   Entry.Node = SinPtr;
   Entry.Ty = RetTy->getPointerTo();
   Entry.IsSExt = false;
@@ -2289,6 +2292,8 @@ SelectionDAGLegalize::ExpandSinCosLibCall(SDNode *Node,
 
   // Also pass the return address of the cos.
   SDValue CosPtr = DAG.CreateStackTemporary(RetVT);
+  MFI.markAsNonGCRootStackObjectIndex(
+      cast<FrameIndexSDNode>(CosPtr.getNode())->getIndex());
   Entry.Node = CosPtr;
   Entry.Ty = RetTy->getPointerTo();
   Entry.IsSExt = false;
