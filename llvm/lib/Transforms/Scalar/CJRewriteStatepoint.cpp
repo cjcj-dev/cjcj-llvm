@@ -499,7 +499,46 @@ static Value *findBaseDefiningValue(Value *I, DefiningValueMapTy &Cache,
   // constant rule above and because we don't really have a better semantic
   // to give them.  Note that the optimizer is always free to insert undefined
   // behavior on dynamically dead paths as well.
-  if (isa<IntToPtrInst>(I)) {
+  //
+  // Exception: UncolorIfGCPtr (cjcj IRBuilder.cj:1373 /
+  // CJBarrierLowering::uncolorIfGCPtr) emits
+  //   inttoptr(and(ptrtoint(P), AddressMask))
+  // still in addrspace(1).  That value is a derived interior of P, not a new
+  // managed object.  Treating it as a known base makes the compressed
+  // stackmap register it as a full object root (interiorsrc2: r14 = RawArray+8
+  // length pointer).  Look through the colour-strip chain so stackmap gets
+  // the real base and records (base, derived).
+  if (auto *ITP = dyn_cast<IntToPtrInst>(I)) {
+    if (isGCPointerType(ITP->getType())) {
+      if (auto *BO = dyn_cast<BinaryOperator>(ITP->getOperand(0))) {
+        if (BO->getOpcode() == Instruction::And) {
+          Value *Op0 = BO->getOperand(0);
+          Value *Op1 = BO->getOperand(1);
+          ConstantInt *Mask = dyn_cast<ConstantInt>(Op1);
+          Value *IntOp = Op0;
+          if (!Mask) {
+            Mask = dyn_cast<ConstantInt>(Op0);
+            IntOp = Op1;
+          }
+          // AddressMask = (1<<48)-1, or any low-bits-only mask of the same form.
+          if (Mask && (Mask->getValue().isMask() ||
+                       Mask->getZExtValue() == 0x0000FFFFFFFFFFFFULL)) {
+            Value *Src = nullptr;
+            if (auto *PTI = dyn_cast<PtrToIntInst>(IntOp))
+              Src = PTI->getPointerOperand();
+            else if (auto *PTI =
+                         dyn_cast<PtrToIntInst>(IntOp->stripPointerCasts()))
+              Src = PTI->getPointerOperand();
+            if (Src && Src->getType()->isPointerTy() &&
+                isGCPointerType(Src->getType())) {
+              auto *BDV = findBaseDefiningValue(Src, Cache, KnownBases);
+              Cache[I] = BDV;
+              return BDV;
+            }
+          }
+        }
+      }
+    }
     Cache[I] = I;
     setKnownBase(I, /* IsKnownBase */ true, KnownBases);
     return I;
