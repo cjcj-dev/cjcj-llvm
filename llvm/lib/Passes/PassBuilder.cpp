@@ -217,6 +217,7 @@
 #include "llvm/Transforms/Scalar/LowerGuardIntrinsic.h"
 #include "llvm/Transforms/Scalar/LowerMatrixIntrinsics.h"
 #include "llvm/Transforms/Scalar/LowerWidenableCondition.h"
+#include "llvm/Transforms/Scalar/ManagedABIGateVerifier.h"
 #include "llvm/Transforms/Scalar/MakeGuardsExplicit.h"
 #include "llvm/Transforms/Scalar/MemCpyOptimizer.h"
 #include "llvm/Transforms/Scalar/MergeICmps.h"
@@ -1255,6 +1256,7 @@ Error PassBuilder::parseModulePass(ModulePassManager &MPM,
         MPM.addPass(createModuleToFunctionPassAdaptor(CJGCInstrRestore()));
       }
       if (CJPipeline && !CangjieLTOPreOpt) {
+        MPM.addPass(ManagedABIGateVerifierPass());
         MPM.addPass(CJSpecificOpt(L.getSpeedupLevel()));
         MPM.addPass(PlaceSafepoints());
         MPM.addPass(CJBarrierOpt());
