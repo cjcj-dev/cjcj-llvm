@@ -683,15 +683,15 @@ public:
            << " calls_total=" << Counters.CallsTotal
            << " calls_passed=" << Counters.CallsPassed
            << " calls_reported=" << Counters.CallsReported
-           << " calls_seen=" << Counters.CallsSeen
-           << " calls_whitelisted=" << Counters.CallsWhitelisted
-           << " calls_inlineasm_skipped=" << Counters.CallsInlineAsmSkipped
            << " returns_total=" << Counters.ReturnsTotal
            << " returns_passed=" << Counters.ReturnsPassed
            << " returns_reported=" << Counters.ReturnsReported
            << " nonheap_stores_total=" << Counters.NonHeapStoresTotal
            << " nonheap_stores_passed=" << Counters.NonHeapStoresPassed
-           << " nonheap_stores_reported=" << Counters.NonHeapStoresReported;
+           << " nonheap_stores_reported=" << Counters.NonHeapStoresReported
+           << " calls_seen=" << Counters.CallsSeen
+           << " calls_whitelisted=" << Counters.CallsWhitelisted
+           << " calls_inlineasm_skipped=" << Counters.CallsInlineAsmSkipped;
     for (unsigned I = 0; I < static_cast<unsigned>(ReportReason::Last); ++I)
       errs() << " reason_"
              << reasonName(static_cast<ReportReason>(I)).lower() << '='
