@@ -45,6 +45,7 @@ static constexpr StringLiteral ColouredMarker = "cj.repr.coloured.v1";
 static constexpr StringLiteral PlainSafeMarker = "cj.repr.plain_safe.v1";
 static constexpr StringLiteral PlainUnsafeMarker = "cj.repr.plain_unsafe.v1";
 static constexpr StringLiteral PlainSafeContract = "plain_safe";
+static constexpr StringLiteral ArgContract = "cj.repr.arg";
 static constexpr StringLiteral RetContract = "cj.repr.ret";
 static constexpr StringLiteral SRetContract = "cj.repr.sret";
 
@@ -423,6 +424,10 @@ static bool hasPlainSafeRetContract(const CallBase &CB) {
       AttributeList::ReturnIndex, RetContract));
 }
 
+static bool hasPlainSafeArgContract(const CallBase &CB, unsigned ArgNo) {
+  return hasPlainSafeAttribute(CB.getParamAttr(ArgNo, ArgContract));
+}
+
 static bool hasPlainSafeSRetContract(const CallBase &CB, unsigned ArgNo) {
   return hasPlainSafeAttribute(CB.getParamAttr(ArgNo, SRetContract));
 }
@@ -659,6 +664,9 @@ class ManagedABIGateVerifier {
       if (!containsGCPtrType(Arg->getType()))
         continue;
       StateInfo Info = Classifier.classify(Arg);
+      if (Info.State == RepresentationState::Unknown &&
+          hasPlainSafeArgContract(CB, I))
+        continue;
       if (Info.State == RepresentationState::PlainSafe)
         continue;
       report(argumentReason(Info.State), *CB.getFunction(), CalleeName, I,
