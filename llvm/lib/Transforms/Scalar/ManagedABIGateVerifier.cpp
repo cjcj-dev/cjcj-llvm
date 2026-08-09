@@ -21,6 +21,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstIterator.h"
@@ -39,6 +40,14 @@ static cl::opt<bool> ManagedABIGateReportOnly(
     cl::desc("Report Cangjie managed ABI values without changing the IR"));
 
 namespace {
+
+static constexpr StringLiteral ColouredMarker = "cj.repr.coloured.v1";
+static constexpr StringLiteral PlainSafeMarker = "cj.repr.plain_safe.v1";
+static constexpr StringLiteral PlainUnsafeMarker = "cj.repr.plain_unsafe.v1";
+static constexpr StringLiteral PlainSafeContract = "plain_safe";
+static constexpr StringLiteral ArgContract = "cj.repr.arg";
+static constexpr StringLiteral RetContract = "cj.repr.ret";
+static constexpr StringLiteral SRetContract = "cj.repr.sret";
 
 enum class RepresentationState {
   Coloured,
@@ -389,6 +398,40 @@ static bool isKnownPlainProducer(const CallBase &CB) {
          Name == "CJ_MCC_GetExportedRef";
 }
 
+static Optional<RepresentationState>
+getRepresentationMarkerState(const CallBase &CB) {
+  if (CB.getIntrinsicID() != Intrinsic::ptr_annotation || CB.arg_size() < 2)
+    return None;
+  StringRef Annotation;
+  if (!getConstantStringInfo(CB.getArgOperand(1), Annotation))
+    return None;
+  if (Annotation == ColouredMarker)
+    return RepresentationState::Coloured;
+  if (Annotation == PlainSafeMarker)
+    return RepresentationState::PlainSafe;
+  if (Annotation == PlainUnsafeMarker)
+    return RepresentationState::PlainUnsafe;
+  return None;
+}
+
+static bool hasPlainSafeAttribute(Attribute Attr) {
+  return Attr.isValid() && Attr.isStringAttribute() &&
+         Attr.getValueAsString() == PlainSafeContract;
+}
+
+static bool hasPlainSafeRetContract(const CallBase &CB) {
+  return hasPlainSafeAttribute(CB.getAttributeAtIndex(
+      AttributeList::ReturnIndex, RetContract));
+}
+
+static bool hasPlainSafeArgContract(const CallBase &CB, unsigned ArgNo) {
+  return hasPlainSafeAttribute(CB.getParamAttr(ArgNo, ArgContract));
+}
+
+static bool hasPlainSafeSRetContract(const CallBase &CB, unsigned ArgNo) {
+  return hasPlainSafeAttribute(CB.getParamAttr(ArgNo, SRetContract));
+}
+
 static StateInfo mergeStates(StateInfo A, StateInfo B) {
   if (A.State == B.State)
     return A;
@@ -416,7 +459,17 @@ class StateClassifier {
       return {RepresentationState::PlainSafe, V};
 
     if (const auto *CB = dyn_cast<CallBase>(V)) {
+      if (Optional<RepresentationState> Marker =
+              getRepresentationMarkerState(*CB)) {
+        StateInfo Operand = classify(CB->getArgOperand(0));
+        if (Operand.State == RepresentationState::Coloured ||
+            Operand.State == RepresentationState::PlainUnsafe)
+          return Operand;
+        return {*Marker, V};
+      }
       if (isKnownPlainProducer(*CB))
+        return {RepresentationState::PlainSafe, V};
+      if (hasPlainSafeRetContract(*CB))
         return {RepresentationState::PlainSafe, V};
       const Function *Callee = getDirectCallee(*CB);
       if (Callee && Callee->hasCangjieGC() && !Callee->isDeclaration() &&
@@ -598,7 +651,8 @@ class ManagedABIGateVerifier {
     for (unsigned I = 0; I < CB.arg_size(); ++I) {
       if (CB.paramHasAttr(I, Attribute::StructRet)) {
         Type *SRetTy = CB.getParamStructRetType(I);
-        if (SRetTy && containsGCPtrType(SRetTy)) {
+        if (SRetTy && containsGCPtrType(SRetTy) &&
+            !hasPlainSafeSRetContract(CB, I)) {
           StateInfo Info{RepresentationState::Unknown, CB.getArgOperand(I)};
           report(ReportReason::SRetUnproven, *CB.getFunction(), CalleeName, I,
                  Info);
@@ -610,6 +664,9 @@ class ManagedABIGateVerifier {
       if (!containsGCPtrType(Arg->getType()))
         continue;
       StateInfo Info = Classifier.classify(Arg);
+      if (Info.State == RepresentationState::Unknown &&
+          hasPlainSafeArgContract(CB, I))
+        continue;
       if (Info.State == RepresentationState::PlainSafe)
         continue;
       report(argumentReason(Info.State), *CB.getFunction(), CalleeName, I,
