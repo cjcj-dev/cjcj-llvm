@@ -381,10 +381,21 @@ class StateClassifier {
       if (isKnownPlainProducer(*CB))
         return {RepresentationState::PlainSafe, V};
       const Function *Callee = getDirectCallee(*CB);
-      if (Callee && !isPrivateABICall(*CB) &&
-          !Callee->hasFnAttribute("cj2c") &&
-          !Callee->hasFnAttribute("c2cj"))
-        return {RepresentationState::PlainSafe, V};
+      if (Callee && Callee->hasCangjieGC() && !Callee->isDeclaration() &&
+          !isPrivateABICall(*CB) && !Callee->hasFnAttribute("cj2c") &&
+          !Callee->hasFnAttribute("c2cj")) {
+        StateInfo Result{RepresentationState::PlainSafe, V};
+        bool HasManagedReturn = false;
+        for (const Instruction &I : instructions(*Callee)) {
+          const auto *RI = dyn_cast<ReturnInst>(&I);
+          if (!RI || !RI->getReturnValue())
+            continue;
+          HasManagedReturn = true;
+          Result = mergeStates(Result, classify(RI->getReturnValue()));
+        }
+        if (HasManagedReturn)
+          return Result;
+      }
       return {RepresentationState::Unknown, V};
     }
 
