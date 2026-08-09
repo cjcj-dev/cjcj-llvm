@@ -10,4 +10,3 @@ entry:
   %ret = call i8 addrspace(1)* @managed_identity(i8 addrspace(1)* %plain)
   ret i8 addrspace(1)* %ret
 }
-

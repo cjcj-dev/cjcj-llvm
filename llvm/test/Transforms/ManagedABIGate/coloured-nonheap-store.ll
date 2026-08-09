@@ -12,4 +12,3 @@ entry:
   store i8 addrspace(1)* %coloured, i8 addrspace(1)** %root, align 8
   ret void
 }
-

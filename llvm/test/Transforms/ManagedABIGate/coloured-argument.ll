@@ -13,4 +13,3 @@ entry:
   call void @managed_sink(i8 addrspace(1)* %coloured)
   ret void
 }
-

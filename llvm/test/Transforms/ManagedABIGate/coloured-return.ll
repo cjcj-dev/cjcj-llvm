@@ -10,4 +10,3 @@ entry:
   %coloured = load i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)* @heap_slot
   ret i8 addrspace(1)* %coloured
 }
-
