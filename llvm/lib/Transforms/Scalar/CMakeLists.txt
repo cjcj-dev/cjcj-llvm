@@ -71,6 +71,7 @@ add_llvm_component_library(LLVMScalarOpts
   LowerMatrixIntrinsics.cpp
   LowerWidenableCondition.cpp
   MakeGuardsExplicit.cpp
+  ManagedABIGateVerifier.cpp
   MemCpyOptimizer.cpp
   MergeICmps.cpp
   MergedLoadStoreMotion.cpp
