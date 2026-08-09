@@ -988,6 +988,21 @@ Value *llvm::findMemoryBasePointer(Value *V) {
   return CV;
 }
 
+// Same AddressMask ABI as ReadBarrier::splitFastPathAndSlowPath
+// (RefField.h:179, address : 48) and mmstrip MemTransferInst peeling.
+Value *llvm::uncolorIfGCPtr(Value *Ptr, IRBuilder<> &Builder) {
+  auto *PT = dyn_cast<PointerType>(Ptr->getType());
+  if (!PT || PT->getAddressSpace() != 1)
+    return Ptr;
+  constexpr unsigned AddressBits = 48;
+  constexpr uint64_t AddressMask = (uint64_t(1) << AddressBits) - 1;
+  Type *I64 = Type::getInt64Ty(Builder.getContext());
+  Value *AsInt = Builder.CreatePtrToInt(Ptr, I64);
+  Value *Masked =
+      Builder.CreateAnd(AsInt, ConstantInt::get(I64, AddressMask));
+  return Builder.CreateIntToPtr(Masked, Ptr->getType());
+}
+
 Instruction *llvm::createStoreOrMems(CallBase *CI, IRBuilder<> &Builder) {
   auto getAtomicOrdering = [](Value *Order) {
     return (AtomicOrdering)(cast<ConstantInt>(Order)->getZExtValue() +
@@ -998,26 +1013,29 @@ Instruction *llvm::createStoreOrMems(CallBase *CI, IRBuilder<> &Builder) {
   Instruction *NewInst = nullptr;
   switch (IID) {
   case Intrinsic::cj_gcwrite_ref: {
+    Value *Place = uncolorIfGCPtr(getPointerArg(CI), Builder);
     if (auto *VecType = dyn_cast<VectorType>(getValueArg(CI)->getType())) {
       MaybeAlign Align = CI->getModule()->getDataLayout().getABITypeAlign(
           VecType->getElementType());
-      NewInst = Builder.CreateAlignedStore(getValueArg(CI),
-                                           getPointerArg(CI), Align);
+      NewInst = Builder.CreateAlignedStore(getValueArg(CI), Place, Align);
     } else {
-      NewInst = Builder.CreateStore(getValueArg(CI), getPointerArg(CI));
+      NewInst = Builder.CreateStore(getValueArg(CI), Place);
     }
     break;
   }
   case Intrinsic::cj_gcread_ref:
-    NewInst = Builder.CreateLoad(CI->getType(), getPointerArg(CI));
+    NewInst = Builder.CreateLoad(CI->getType(),
+                                 uncolorIfGCPtr(getPointerArg(CI), Builder));
     NewInst->takeName(CI);
     CI->replaceAllUsesWith(NewInst);
     break;
   case Intrinsic::cj_gcwrite_static_ref:
-    NewInst = Builder.CreateStore(getValueArg(CI), getPointerArg(CI));
+    NewInst = Builder.CreateStore(
+        getValueArg(CI), uncolorIfGCPtr(getPointerArg(CI), Builder));
     break;
   case Intrinsic::cj_gcread_static_ref:
-    NewInst = Builder.CreateLoad(CI->getType(), getPointerArg(CI));
+    NewInst = Builder.CreateLoad(CI->getType(),
+                                 uncolorIfGCPtr(getPointerArg(CI), Builder));
     NewInst->takeName(CI);
     CI->replaceAllUsesWith(NewInst);
     break;
@@ -1025,25 +1043,30 @@ Instruction *llvm::createStoreOrMems(CallBase *CI, IRBuilder<> &Builder) {
   case Intrinsic::cj_gcread_struct:
   case Intrinsic::cj_gcwrite_static_struct:
   case Intrinsic::cj_gcread_static_struct:
-    NewInst = Builder.CreateMemCpy(getDest(CI), Align(8), getSource(CI),
+    NewInst = Builder.CreateMemCpy(uncolorIfGCPtr(getDest(CI), Builder),
+                                   Align(8),
+                                   uncolorIfGCPtr(getSource(CI), Builder),
                                    Align(8), getSize(CI));
     break;
   case Intrinsic::cj_array_copy_ref:
   case Intrinsic::cj_array_copy_struct:
-    NewInst =
-        Builder.CreateMemMove(CI->getArgOperand(ArrayCopy::DstPtr), Align(8),
-                              CI->getArgOperand(ArrayCopy::SrcPtr), Align(8),
-                              CI->getArgOperand(ArrayCopy::Size));
+    NewInst = Builder.CreateMemMove(
+        uncolorIfGCPtr(CI->getArgOperand(ArrayCopy::DstPtr), Builder),
+        Align(8),
+        uncolorIfGCPtr(CI->getArgOperand(ArrayCopy::SrcPtr), Builder),
+        Align(8), CI->getArgOperand(ArrayCopy::Size));
     break;
   case Intrinsic::cj_atomic_store: {
-    NewInst = Builder.CreateStore(CI->getArgOperand(AtomicStore::Ref),
-                                  CI->getArgOperand(AtomicStore::Field));
+    NewInst = Builder.CreateStore(
+        CI->getArgOperand(AtomicStore::Ref),
+        uncolorIfGCPtr(CI->getArgOperand(AtomicStore::Field), Builder));
     cast<StoreInst>(NewInst)->setAtomic(getAtomicOrdering(getAtomicOrder(CI)));
     break;
   }
   case Intrinsic::cj_atomic_swap: {
-    Value *P = Builder.CreateAddrSpaceCast(CI->getArgOperand(AtomicSwap::Field),
-                                           Type::getInt64PtrTy(C));
+    Value *Field =
+        uncolorIfGCPtr(CI->getArgOperand(AtomicSwap::Field), Builder);
+    Value *P = Builder.CreateAddrSpaceCast(Field, Type::getInt64PtrTy(C));
     Value *V = Builder.CreatePtrToInt(CI->getArgOperand(AtomicSwap::Ref),
                                       Type::getInt64Ty(C));
     AtomicOrdering AO = getAtomicOrdering(getAtomicOrder(CI));
@@ -1052,8 +1075,9 @@ Instruction *llvm::createStoreOrMems(CallBase *CI, IRBuilder<> &Builder) {
     break;
   }
   case Intrinsic::cj_atomic_compare_swap: {
-    Value *P = Builder.CreateAddrSpaceCast(
-        CI->getArgOperand(AtomicCompareSwap::Field), Type::getInt64PtrTy(C));
+    Value *Field =
+        uncolorIfGCPtr(CI->getArgOperand(AtomicCompareSwap::Field), Builder);
+    Value *P = Builder.CreateAddrSpaceCast(Field, Type::getInt64PtrTy(C));
     Value *Cmp = Builder.CreatePtrToInt(
         CI->getArgOperand(AtomicCompareSwap::OldRef), Type::getInt64Ty(C));
     Value *New = Builder.CreatePtrToInt(
