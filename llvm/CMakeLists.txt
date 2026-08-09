@@ -271,7 +271,9 @@ option(LLVM_APPEND_VC_REV
 
 # CJLLVM provenance stamp (mirror CJRT-COMMIT / CJCJ-COMMIT).
 # Order: -DCJ_LLVM_COMMIT=... > env CJ_LLVM_COMMIT > git rev-parse HEAD > unknown
-# Dirty worktree appends -dirty. Query: strings <opt|llc> | grep CJLLVM-COMMIT:
+# -dirty only when commit was resolved from git and the tree is dirty.
+# Query: strings <opt|llc> | grep -o 'CJLLVM-COMMIT:[0-9a-f-]*'
+set(CJ_LLVM_COMMIT_FROM_GIT OFF)
 if (NOT CJ_LLVM_COMMIT AND DEFINED ENV{CJ_LLVM_COMMIT})
   set(CJ_LLVM_COMMIT "$ENV{CJ_LLVM_COMMIT}")
 endif()
@@ -281,17 +283,22 @@ if (NOT CJ_LLVM_COMMIT)
     OUTPUT_VARIABLE CJ_LLVM_COMMIT
     OUTPUT_STRIP_TRAILING_WHITESPACE
     ERROR_QUIET)
+  if (CJ_LLVM_COMMIT)
+    set(CJ_LLVM_COMMIT_FROM_GIT ON)
+  endif()
 endif()
 if (NOT CJ_LLVM_COMMIT)
   set(CJ_LLVM_COMMIT "unknown")
 endif()
-execute_process(
-  COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR} status --porcelain
-  OUTPUT_VARIABLE CJ_LLVM_DIRTY
-  OUTPUT_STRIP_TRAILING_WHITESPACE
-  ERROR_QUIET)
-if (CJ_LLVM_DIRTY)
-  set(CJ_LLVM_COMMIT "${CJ_LLVM_COMMIT}-dirty")
+if (CJ_LLVM_COMMIT_FROM_GIT)
+  execute_process(
+    COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR} status --porcelain
+    OUTPUT_VARIABLE CJ_LLVM_DIRTY
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+  if (CJ_LLVM_DIRTY)
+    set(CJ_LLVM_COMMIT "${CJ_LLVM_COMMIT}-dirty")
+  endif()
 endif()
 add_definitions(-DCJ_LLVM_COMMIT="${CJ_LLVM_COMMIT}")
 message(STATUS "CJ_LLVM_COMMIT=${CJ_LLVM_COMMIT}")
