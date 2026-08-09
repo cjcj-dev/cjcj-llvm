@@ -18,22 +18,6 @@ entry:
   ret void
 }
 
-define void @write_struct_place(i8 addrspace(1)* %base, i8 addrspace(1)* %dst,
-                                i8 addrspace(1)* %src, i64 %sz) gc "cangjie" {
-; CHECK-LABEL: define void @write_struct_place(
-; CHECK: gcNoRunning:
-; CHECK: [[DST_INT:%.*]] = ptrtoint i8 addrspace(1)* %dst to i64
-; CHECK: and i64 [[DST_INT]], 281474976710655
-; CHECK: [[SRC_INT:%.*]] = ptrtoint i8 addrspace(1)* %src to i64
-; CHECK: and i64 [[SRC_INT]], 281474976710655
-; CHECK: call void @llvm.memcpy
-entry:
-  call void @llvm.cj.gcwrite.struct(i8 addrspace(1)* %base,
-                                    i8 addrspace(1)* %dst,
-                                    i8 addrspace(1)* %src, i64 %sz)
-  ret void
-}
-
 define void @atomic_store_place(i8 addrspace(1)* %ref, i8 addrspace(1)* %obj,
                                 i8 addrspace(1)* addrspace(1)* %field) gc "cangjie" {
 ; CHECK-LABEL: define void @atomic_store_place(
@@ -49,7 +33,5 @@ entry:
 
 declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*,
                                   i8 addrspace(1)* addrspace(1)*)
-declare void @llvm.cj.gcwrite.struct(i8 addrspace(1)*, i8 addrspace(1)*,
-                                     i8 addrspace(1)*, i64)
 declare void @llvm.cj.atomic.store(i8 addrspace(1)*, i8 addrspace(1)*,
                                    i8 addrspace(1)* addrspace(1)*, i32)
