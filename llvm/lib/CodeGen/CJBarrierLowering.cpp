@@ -617,7 +617,9 @@ public:
     // %0 = load i8 addrspace1*, i8 addrspace1* addrspace1* %3
     // %1 = ptrtoint i8 addrspace1* %0 to i64
     IRBuilder<> Builder(ReadInst);
-    LoadInst *Load = loadTaggedPointer(Builder, RefFieldPtr, Order);
+    // Place may carry colour (same as createStoreOrMems write places).
+    LoadInst *Load =
+        loadTaggedPointer(Builder, uncolorIfGCPtr(RefFieldPtr, Builder), Order);
     Instruction *PtrToInt =
         cast<Instruction>(Builder.CreatePtrToInt(Load, Type::getInt64Ty(C)));
     PtrToInt->setDebugLoc(*Loc);
@@ -1209,24 +1211,8 @@ static bool combineSafepointStub(Module *M,
   return true;
 }
 
-// Strip colour bits from addrspace(1) pointers before they reach libc memmove/memcpy.
-// CreateCopyTo (cjcj IRBuilder.cj:5909 / CJNativeIRBuilder.cpp:1146) emits bare
-// llvm.memmove on GetPayloadFromObject interiors; colour survives GEP and is not
-// covered by MCC_AcquireRawData (ffibound B1 / acqstrip). Same AddressMask ABI as
-// ReadBarrier::splitFastPathAndSlowPath (RefField.h:179, address : 48).
-static Value *uncolorIfGCPtr(Value *Ptr, IRBuilder<> &Builder) {
-  auto *PT = dyn_cast<PointerType>(Ptr->getType());
-  if (!PT || PT->getAddressSpace() != 1)
-    return Ptr;
-  constexpr unsigned AddressBits = 48;
-  constexpr uint64_t AddressMask = (uint64_t(1) << AddressBits) - 1;
-  Type *I64 = Type::getInt64Ty(Builder.getContext());
-  Value *AsInt = Builder.CreatePtrToInt(Ptr, I64);
-  Value *Masked =
-      Builder.CreateAnd(AsInt, ConstantInt::get(I64, AddressMask));
-  return Builder.CreateIntToPtr(Masked, Ptr->getType());
-}
-
+// Bare CreateCopyTo memmove/memcpy on AS1 interiors (mmstrip). Helper is shared
+// with createStoreOrMems place peeling (llvm::uncolorIfGCPtr).
 static bool uncolorMemTransferOperands(Function &F) {
   bool Changed = false;
   for (BasicBlock &BB : F) {
