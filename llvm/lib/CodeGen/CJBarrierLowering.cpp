@@ -46,8 +46,11 @@ static cl::opt<bool> EnableGCPhase("enable-gc-phase", cl::init(true),
                                    cl::Hidden);
 static cl::opt<bool> EnableGCFastPath("enable-gc-fast-path", cl::init(true),
                                       cl::Hidden);
+// wbclose2 / WRITE_SIDE_CLOSURE Phase2: default ON so Idle (phase<=INIT)
+// heap ref/struct/array/atomic-store writes stay on the MCC path and call
+// RecordCrossGenEdge. Off only for non-GC / explicit opt-out consumers.
 static cl::opt<bool> EnableGenerationalPostBarrier(
-    "cj-generational-post-barrier", cl::init(false), cl::Hidden,
+    "cj-generational-post-barrier", cl::init(true), cl::Hidden,
     cl::desc("Keep heap writes on the runtime barrier path"));
 static cl::opt<bool> EnableGCStateLoop("cj-gcstate-dup-loop", cl::init(false),
                                        cl::ReallyHidden);
