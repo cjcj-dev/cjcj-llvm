@@ -86,9 +86,10 @@ struct GateCounters {
 };
 
 // This is intentionally an exact list. These names are the private runtime
-// callees emitted by CJRuntimeLowering.cpp and CJBarrierLowering.cpp. Prefix
-// matching (for example, accepting every CJ_MCC_* symbol) would make additions
-// invisible to review.
+// callees emitted by CJRuntimeLowering.cpp, CJBarrierLowering.cpp, and the
+// frontend's CJNativeIntrinsicsCall.cpp/CGCommonDef.h tables. Prefix matching
+// (for example, accepting every CJ_MCC_* symbol) would make additions invisible
+// to review.
 static constexpr StringLiteral PrivateRuntimeABI[] = {
     "CJ_LLVM_BlackHole",
     "CJ_MCC_AcquireRawData",
@@ -104,11 +105,15 @@ static constexpr StringLiteral PrivateRuntimeABI[] = {
     "CJ_MCC_CopyStructField",
     "CJ_MCC_CreateExportHandle",
     "CJ_MCC_CrossAccessBarrier",
+    "CJ_MCC_DecodeStackTrace",
     "CJ_MCC_DumpCJHeapData",
     "CJ_MCC_FillInStackTrace",
     "CJ_MCC_GetAllocatedHeapSize",
+    "CJ_MCC_GetAllThreadSnapshot",
     "CJ_MCC_GetBlockingCJThreadNumber",
     "CJ_MCC_GetCJThreadNumber",
+    "CJ_MCC_GetCurrentCJThreadObject",
+    "CJ_MCC_GetCurrentThreadSnapshot",
     "CJ_MCC_GetExceptionWrapper",
     "CJ_MCC_GetExportedRef",
     "CJ_MCC_GetGCCount",
