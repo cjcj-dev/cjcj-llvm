@@ -70,9 +70,12 @@ enum class ReportReason {
 };
 
 struct GateCounters {
+  uint64_t CallsSeen = 0;
   uint64_t CallsTotal = 0;
   uint64_t CallsPassed = 0;
   uint64_t CallsReported = 0;
+  uint64_t CallsWhitelisted = 0;
+  uint64_t CallsInlineAsmSkipped = 0;
   uint64_t ReturnsTotal = 0;
   uint64_t ReturnsPassed = 0;
   uint64_t ReturnsReported = 0;
@@ -542,8 +545,15 @@ class ManagedABIGateVerifier {
   }
 
   void verifyCall(const CallBase &CB) {
-    if (isPrivateABICall(CB) || CB.isInlineAsm())
+    ++Counters.CallsSeen;
+    if (isPrivateABICall(CB)) {
+      ++Counters.CallsWhitelisted;
       return;
+    }
+    if (CB.isInlineAsm()) {
+      ++Counters.CallsInlineAsmSkipped;
+      return;
+    }
 
     ++Counters.CallsTotal;
     bool Reported = false;
@@ -638,6 +648,9 @@ public:
            << " calls_total=" << Counters.CallsTotal
            << " calls_passed=" << Counters.CallsPassed
            << " calls_reported=" << Counters.CallsReported
+           << " calls_seen=" << Counters.CallsSeen
+           << " calls_whitelisted=" << Counters.CallsWhitelisted
+           << " calls_inlineasm_skipped=" << Counters.CallsInlineAsmSkipped
            << " returns_total=" << Counters.ReturnsTotal
            << " returns_passed=" << Counters.ReturnsPassed
            << " returns_reported=" << Counters.ReturnsReported
