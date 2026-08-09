@@ -269,6 +269,33 @@ include(VersionFromVCS)
 option(LLVM_APPEND_VC_REV
   "Embed the version control system revision in LLVM" ON)
 
+# CJLLVM provenance stamp (mirror CJRT-COMMIT / CJCJ-COMMIT).
+# Order: -DCJ_LLVM_COMMIT=... > env CJ_LLVM_COMMIT > git rev-parse HEAD > unknown
+# Dirty worktree appends -dirty. Query: strings <opt|llc> | grep CJLLVM-COMMIT:
+if (NOT CJ_LLVM_COMMIT AND DEFINED ENV{CJ_LLVM_COMMIT})
+  set(CJ_LLVM_COMMIT "$ENV{CJ_LLVM_COMMIT}")
+endif()
+if (NOT CJ_LLVM_COMMIT)
+  execute_process(
+    COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR} rev-parse HEAD
+    OUTPUT_VARIABLE CJ_LLVM_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+endif()
+if (NOT CJ_LLVM_COMMIT)
+  set(CJ_LLVM_COMMIT "unknown")
+endif()
+execute_process(
+  COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR} status --porcelain
+  OUTPUT_VARIABLE CJ_LLVM_DIRTY
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET)
+if (CJ_LLVM_DIRTY)
+  set(CJ_LLVM_COMMIT "${CJ_LLVM_COMMIT}-dirty")
+endif()
+add_definitions(-DCJ_LLVM_COMMIT="${CJ_LLVM_COMMIT}")
+message(STATUS "CJ_LLVM_COMMIT=${CJ_LLVM_COMMIT}")
+
 option(LLVM_TOOL_LLVM_DRIVER_BUILD "Enables building the llvm multicall tool" OFF)
 
 set(PACKAGE_NAME LLVM)
