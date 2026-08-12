@@ -269,6 +269,40 @@ include(VersionFromVCS)
 option(LLVM_APPEND_VC_REV
   "Embed the version control system revision in LLVM" ON)
 
+# CJLLVM provenance stamp (mirror CJRT-COMMIT / CJCJ-COMMIT).
+# Order: -DCJ_LLVM_COMMIT=... > env CJ_LLVM_COMMIT > git rev-parse HEAD > unknown
+# -dirty only when commit was resolved from git and the tree is dirty.
+# Query: strings <opt|llc> | grep -o 'CJLLVM-COMMIT:[0-9a-f-]*'
+set(CJ_LLVM_COMMIT_FROM_GIT OFF)
+if (NOT CJ_LLVM_COMMIT AND DEFINED ENV{CJ_LLVM_COMMIT})
+  set(CJ_LLVM_COMMIT "$ENV{CJ_LLVM_COMMIT}")
+endif()
+if (NOT CJ_LLVM_COMMIT)
+  execute_process(
+    COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR} rev-parse HEAD
+    OUTPUT_VARIABLE CJ_LLVM_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+  if (CJ_LLVM_COMMIT)
+    set(CJ_LLVM_COMMIT_FROM_GIT ON)
+  endif()
+endif()
+if (NOT CJ_LLVM_COMMIT)
+  set(CJ_LLVM_COMMIT "unknown")
+endif()
+if (CJ_LLVM_COMMIT_FROM_GIT)
+  execute_process(
+    COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR} status --porcelain
+    OUTPUT_VARIABLE CJ_LLVM_DIRTY
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+  if (CJ_LLVM_DIRTY)
+    set(CJ_LLVM_COMMIT "${CJ_LLVM_COMMIT}-dirty")
+  endif()
+endif()
+add_definitions(-DCJ_LLVM_COMMIT="${CJ_LLVM_COMMIT}")
+message(STATUS "CJ_LLVM_COMMIT=${CJ_LLVM_COMMIT}")
+
 option(LLVM_TOOL_LLVM_DRIVER_BUILD "Enables building the llvm multicall tool" OFF)
 
 set(PACKAGE_NAME LLVM)
@@ -355,6 +389,9 @@ set(LLVM_TOOLS_BINARY_DIR ${LLVM_RUNTIME_OUTPUT_INTDIR}) # --bindir
 set(LLVM_LIBRARY_DIR      ${LLVM_LIBRARY_OUTPUT_INTDIR}) # --libdir
 set(LLVM_MAIN_SRC_DIR     ${CMAKE_CURRENT_SOURCE_DIR}  ) # --src-root
 set(LLVM_MAIN_INCLUDE_DIR ${LLVM_MAIN_SRC_DIR}/include ) # --includedir
+# cjcj: demangler is built from source (CangjieDemangleStub.cpp); the header
+# lives in-tree so no external prebuilt directory is required.
+set(CANGJIE_DEMANGLE_DIR ${LLVM_MAIN_INCLUDE_DIR})
 set(LLVM_BINARY_DIR       ${CMAKE_CURRENT_BINARY_DIR}  ) # --prefix
 
 set(LLVM_THIRD_PARTY_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/../third-party)
