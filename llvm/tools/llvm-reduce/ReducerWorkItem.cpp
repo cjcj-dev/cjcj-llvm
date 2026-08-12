@@ -77,6 +77,8 @@ static void cloneFrameInfo(
                                  const MachineFrameInfo &SrcMFI, int FI) {
     if (SrcMFI.isStatepointSpillSlotObjectIndex(FI))
       DstMFI.markAsStatepointSpillSlotObjectIndex(FI);
+    if (SrcMFI.isNonGCRootStackObjectIndex(FI))
+      DstMFI.markAsNonGCRootStackObjectIndex(FI);
     DstMFI.setObjectSSPLayout(FI, SrcMFI.getObjectSSPLayout(FI));
     DstMFI.setObjectZExt(FI, SrcMFI.isObjectZExt(FI));
     DstMFI.setObjectSExt(FI, SrcMFI.isObjectSExt(FI));
