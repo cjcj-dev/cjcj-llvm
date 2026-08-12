@@ -86,7 +86,7 @@ define <2 x i64 addrspace(1)*> @test5(i64 addrspace(1)* %p) gc "cangjie" {
 ; CHECK-LABEL: @test5(
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[VEC_BASE:%.*]] = insertelement <2 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[P:%.*]], i32 0, !is_base_value !1
-; CHECK-NEXT:    [[VEC:%.*]] = insertelement <2 x i64 addrspace(1)*> undef, i64 addrspace(1)* [[P]], i32 0
+; CHECK-NEXT:    [[VEC:%.*]] = insertelement <2 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[P]], i32 0
 ; CHECK-NEXT:    [[TOKEN:%.*]] = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, void ()* @do_safepoint, i32 0, i32 0) [ "gc-live"(<2 x i64 addrspace(1)*> [[VEC]], <2 x i64 addrspace(1)*> [[VEC_BASE]]) ]
 ; CHECK-NEXT:    [[VEC_RELOC:%.*]] = call coldcc <2 x i8 addrspace(1)*> @llvm.cj.gc.relocate.v2p1i8(token [[TOKEN]], i32 1, i32 0)
 ; CHECK-NEXT:    [[VEC_RELOC_CASTED:%.*]] = bitcast <2 x i8 addrspace(1)*> [[VEC_RELOC]] to <2 x i64 addrspace(1)*>

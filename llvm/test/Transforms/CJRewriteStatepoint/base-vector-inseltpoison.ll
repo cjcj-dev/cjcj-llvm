@@ -79,7 +79,7 @@ define i64 addrspace(1)* @test3(i64 addrspace(1)* %ptr) gc "cangjie" {
 ; CHECK-LABEL: @test3(
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[VEC_BASE:%.*]] = insertelement <2 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[PTR:%.*]], i32 0, !is_base_value !1
-; CHECK-NEXT:    [[VEC:%.*]] = insertelement <2 x i64 addrspace(1)*> poison, i64 addrspace(1)* [[PTR]], i32 0
+; CHECK-NEXT:    [[VEC:%.*]] = insertelement <2 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[PTR]], i32 0
 ; CHECK-NEXT:    [[OBJ_BASE:%.*]] = extractelement <2 x i64 addrspace(1)*> [[VEC_BASE]], i32 0, !is_base_value !1
 ; CHECK-NEXT:    [[OBJ:%.*]] = extractelement <2 x i64 addrspace(1)*> [[VEC]], i32 0
 ; CHECK-NEXT:    [[TOKEN:%.*]] = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, void ()* @do_safepoint, i32 0, i32 0) [ "gc-live"(i64 addrspace(1)* [[OBJ]], i64 addrspace(1)* [[OBJ_BASE]]) ]
@@ -101,7 +101,7 @@ define i64 addrspace(1)* @test4(i64 addrspace(1)* %ptr) gc "cangjie" {
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[DERIVED:%.*]] = getelementptr i64, i64 addrspace(1)* [[PTR:%.*]], i64 16
 ; CHECK-NEXT:    [[VECA_BASE:%.*]] = insertelement <2 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[PTR]], i32 0, !is_base_value !1
-; CHECK-NEXT:    [[VECA:%.*]] = insertelement <2 x i64 addrspace(1)*> poison, i64 addrspace(1)* [[DERIVED]], i32 0
+; CHECK-NEXT:    [[VECA:%.*]] = insertelement <2 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[DERIVED]], i32 0
 ; CHECK-NEXT:    [[VEC_BASE:%.*]] = insertelement <2 x i64 addrspace(1)*> [[VECA_BASE]], i64 addrspace(1)* [[PTR]], i32 1, !is_base_value !1
 ; CHECK-NEXT:    [[VEC:%.*]] = insertelement <2 x i64 addrspace(1)*> [[VECA]], i64 addrspace(1)* [[PTR]], i32 1
 ; CHECK-NEXT:    [[OBJ_BASE:%.*]] = extractelement <2 x i64 addrspace(1)*> [[VEC_BASE]], i32 0, !is_base_value !1
@@ -132,7 +132,7 @@ define void @test5(i1 %cnd, i64 addrspace(1)* %obj) gc "cangjie" {
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[GEP:%.*]] = getelementptr i64, i64 addrspace(1)* [[OBJ:%.*]], i64 1
 ; CHECK-NEXT:    [[VEC_BASE:%.*]] = insertelement <2 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[OBJ]], i32 0, !is_base_value !1
-; CHECK-NEXT:    [[VEC:%.*]] = insertelement <2 x i64 addrspace(1)*> poison, i64 addrspace(1)* [[GEP]], i32 0
+; CHECK-NEXT:    [[VEC:%.*]] = insertelement <2 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[GEP]], i32 0
 ; CHECK-NEXT:    [[BDV_BASE:%.*]] = extractelement <2 x i64 addrspace(1)*> [[VEC_BASE]], i32 0, !is_base_value !1
 ; CHECK-NEXT:    [[BDV:%.*]] = extractelement <2 x i64 addrspace(1)*> [[VEC]], i32 0
 ; CHECK-NEXT:    [[TOKEN:%.*]] = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, void ()* @do_safepoint, i32 0, i32 0) [ "gc-live"(i64 addrspace(1)* [[BDV]], i64 addrspace(1)* [[BDV_BASE]]) ]
@@ -158,7 +158,7 @@ define void @test6(i1 %cnd, i64 addrspace(1)* %obj, i64 %idx) gc "cangjie" {
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[GEP:%.*]] = getelementptr i64, i64 addrspace(1)* [[OBJ:%.*]], i64 1
 ; CHECK-NEXT:    [[VEC_BASE:%.*]] = insertelement <2 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[OBJ]], i32 0, !is_base_value !1
-; CHECK-NEXT:    [[VEC:%.*]] = insertelement <2 x i64 addrspace(1)*> poison, i64 addrspace(1)* [[GEP]], i32 0
+; CHECK-NEXT:    [[VEC:%.*]] = insertelement <2 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[GEP]], i32 0
 ; CHECK-NEXT:    [[BDV_BASE:%.*]] = extractelement <2 x i64 addrspace(1)*> [[VEC_BASE]], i64 [[IDX:%.*]], !is_base_value !1
 ; CHECK-NEXT:    [[BDV:%.*]] = extractelement <2 x i64 addrspace(1)*> [[VEC]], i64 [[IDX]]
 ; CHECK-NEXT:    [[TOKEN:%.*]] = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, void ()* @do_safepoint, i32 0, i32 0) [ "gc-live"(i64 addrspace(1)* [[BDV]], i64 addrspace(1)* [[BDV_BASE]]) ]
@@ -185,14 +185,14 @@ define i64 addrspace(1)* @test7(i1 %cnd, i64 addrspace(1)* %obj, i64 addrspace(1
 ; CHECK-LABEL: @test7(
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[VEC_BASE:%.*]] = insertelement <2 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[OBJ2:%.*]], i32 0, !is_base_value !1
-; CHECK-NEXT:    [[VEC:%.*]] = insertelement <2 x i64 addrspace(1)*> poison, i64 addrspace(1)* [[OBJ2]], i32 0
+; CHECK-NEXT:    [[VEC:%.*]] = insertelement <2 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[OBJ2]], i32 0
 ; CHECK-NEXT:    br label [[MERGE1:%.*]]
 ; CHECK:       merge1:
 ; CHECK-NEXT:    [[VEC2_BASE:%.*]] = phi <2 x i64 addrspace(1)*> [ [[VEC_BASE]], [[ENTRY:%.*]] ], [ [[VEC3_BASE:%.*]], [[MERGE1]] ], !is_base_value !1
 ; CHECK-NEXT:    [[VEC2:%.*]] = phi <2 x i64 addrspace(1)*> [ [[VEC]], [[ENTRY]] ], [ [[VEC3:%.*]], [[MERGE1]] ]
 ; CHECK-NEXT:    [[GEP:%.*]] = getelementptr i64, i64 addrspace(1)* [[OBJ2]], i64 1
 ; CHECK-NEXT:    [[VEC3_BASE]] = insertelement <2 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[OBJ2]], i32 0, !is_base_value !1
-; CHECK-NEXT:    [[VEC3]] = insertelement <2 x i64 addrspace(1)*> poison, i64 addrspace(1)* [[GEP]], i32 0
+; CHECK-NEXT:    [[VEC3]] = insertelement <2 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[GEP]], i32 0
 ; CHECK-NEXT:    br i1 [[CND:%.*]], label [[MERGE1]], label [[NEXT1:%.*]]
 ; CHECK:       next1:
 ; CHECK-NEXT:    [[BDV_BASE:%.*]] = extractelement <2 x i64 addrspace(1)*> [[VEC2_BASE]], i32 0, !is_base_value !1
@@ -240,9 +240,9 @@ define void @test8(i64 addrspace(1)* %obj, i64 %idx) gc "cangjie" {
 ; CHECK-NEXT:    [[GEP:%.*]] = getelementptr i64, i64 addrspace(1)* [[OBJ:%.*]], i64 1
 ; CHECK-NEXT:    [[GEP2:%.*]] = getelementptr i64, i64 addrspace(1)* [[OBJ]], i64 2
 ; CHECK-NEXT:    [[VEC1_BASE:%.*]] = insertelement <4 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[OBJ]], i32 0, !is_base_value !1
-; CHECK-NEXT:    [[VEC1:%.*]] = insertelement <4 x i64 addrspace(1)*> poison, i64 addrspace(1)* [[GEP]], i32 0
+; CHECK-NEXT:    [[VEC1:%.*]] = insertelement <4 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[GEP]], i32 0
 ; CHECK-NEXT:    [[VEC2_BASE:%.*]] = insertelement <4 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[OBJ]], i32 2, !is_base_value !1
-; CHECK-NEXT:    [[VEC2:%.*]] = insertelement <4 x i64 addrspace(1)*> poison, i64 addrspace(1)* [[GEP2]], i32 2
+; CHECK-NEXT:    [[VEC2:%.*]] = insertelement <4 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[GEP2]], i32 2
 ; CHECK-NEXT:    [[VEC_BASE:%.*]] = shufflevector <4 x i64 addrspace(1)*> [[VEC1_BASE]], <4 x i64 addrspace(1)*> [[VEC2_BASE]], <2 x i32> <i32 0, i32 2>, !is_base_value !1
 ; CHECK-NEXT:    [[VEC:%.*]] = shufflevector <4 x i64 addrspace(1)*> [[VEC1]], <4 x i64 addrspace(1)*> [[VEC2]], <2 x i32> <i32 0, i32 2>
 ; CHECK-NEXT:    [[BDV_BASE:%.*]] = extractelement <2 x i64 addrspace(1)*> [[VEC_BASE]], i64 [[IDX:%.*]], !is_base_value !1
@@ -294,11 +294,11 @@ define i64 addrspace(1)* @test10(i1 %cnd, i64 addrspace(1)* %obj, i64 addrspace(
 ; CHECK-LABEL: @test10(
 ; CHECK-NEXT:  entry:
 ; CHECK-NEXT:    [[VEC1_BASE:%.*]] = insertelement <4 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[OBJ:%.*]], i32 0, !is_base_value !1
-; CHECK-NEXT:    [[VEC1:%.*]] = insertelement <4 x i64 addrspace(1)*> poison, i64 addrspace(1)* [[OBJ]], i32 0
+; CHECK-NEXT:    [[VEC1:%.*]] = insertelement <4 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[OBJ]], i32 0
 ; CHECK-NEXT:    br i1 [[CND:%.*]], label [[HERE:%.*]], label [[MERGE:%.*]]
 ; CHECK:       here:
 ; CHECK-NEXT:    [[VEC2_BASE:%.*]] = insertelement <4 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[OBJ2:%.*]], i32 2, !is_base_value !1
-; CHECK-NEXT:    [[VEC2:%.*]] = insertelement <4 x i64 addrspace(1)*> poison, i64 addrspace(1)* [[OBJ2]], i32 2
+; CHECK-NEXT:    [[VEC2:%.*]] = insertelement <4 x i64 addrspace(1)*> zeroinitializer, i64 addrspace(1)* [[OBJ2]], i32 2
 ; CHECK-NEXT:    br label [[MERGE]]
 ; CHECK:       merge:
 ; CHECK-NEXT:    [[VEC_BASE:%.*]] = phi <4 x i64 addrspace(1)*> [ [[VEC1_BASE]], [[ENTRY:%.*]] ], [ [[VEC2_BASE]], [[HERE]] ], [ [[VEC3_BASE:%.*]], [[MERGE]] ], !is_base_value !1
