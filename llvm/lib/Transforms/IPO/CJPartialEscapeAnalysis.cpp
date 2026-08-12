@@ -2585,7 +2585,8 @@ Value *CJEscapeAnalysis::getBaseValue(Value *CV, int &Offset) {
         V = CI->getOperand(0);
       }
     } else if (auto *GEPI = dyn_cast<GetElementPtrInst>(V)) {
-      APInt GEPOffset(GEPI->getModule()->getDataLayout().getIndexSizeInBits(0),
+      APInt GEPOffset(GEPI->getModule()->getDataLayout().getIndexSizeInBits(
+                          GEPI->getPointerAddressSpace()),
                       0);
       if (GEPI->accumulateConstantOffset(GEPI->getModule()->getDataLayout(),
                                          GEPOffset)) {
