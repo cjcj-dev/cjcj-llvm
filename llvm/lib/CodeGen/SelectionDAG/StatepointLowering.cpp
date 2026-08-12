@@ -1548,9 +1548,15 @@ void SelectionDAGBuilder::visitRelocate(const GCProjectionInst &Relocate) {
   assert(Record.type == RecordType::NoRelocate);
   SDValue SD = getValue(RelocatePtr);
   if (SD.isUndef() && SD.getValueType().getSizeInBits() <= 64) {
-    // Lowering relocate(undef) as arbitrary constant. Current constant value
-    // is chosen such that it's unlikely to be a valid pointer.
-    setValue(&Relocate, DAG.getTargetConstant(0xFEFEFEFE, SDLoc(SD), MVT::i64));
+    // Relocating an undef pointer yields undef; the value is semantically dead
+    // (never dereferenced by the program). Do not lower it to a concrete
+    // constant: getConstant would materialize the sentinel into a callee-saved
+    // register that stays live across GC safepoints and is recorded as a
+    // register GC root, which the runtime dereferences and crashes on. Keep it
+    // undef so no scannable root is emitted, while remaining materializable
+    // (unlike getTargetConstant, which breaks instruction selection when the
+    // value stays live across statepoints).
+    setValue(&Relocate, DAG.getUNDEF(SD.getValueType()));
     return;
   }
 
