@@ -22,6 +22,10 @@
 using namespace llvm;
 using namespace llvm::sys;
 
+// Force-link CJProvenance.cpp into every tool that constructs InitLLVM
+// (opt/llc/...).  A static archive otherwise drops the unreferenced .o.
+extern "C" const char g_cjLLVMProvenance[];
+
 InitLLVM::InitLLVM(int &Argc, const char **&Argv,
                    bool InstallPipeSignalExitHandler) {
   if (InstallPipeSignalExitHandler)
@@ -36,6 +40,8 @@ InitLLVM::InitLLVM(int &Argc, const char **&Argv,
   StackPrinter.emplace(Argc, Argv);
   sys::PrintStackTraceOnErrorSignal(Argv[0]);
   install_out_of_memory_new_handler();
+  // Touch the stamp so the linker cannot GC it; value is never used.
+  asm volatile("" :: "r"(g_cjLLVMProvenance));
 
 #ifdef _WIN32
   // We use UTF-8 as the internal character encoding. On Windows,
