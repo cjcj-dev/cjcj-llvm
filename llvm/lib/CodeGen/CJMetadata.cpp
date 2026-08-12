@@ -63,20 +63,29 @@ CJMetadataInfo::CJMetadataInfo(AsmPrinter &AP, StackMaps &SM)
     : AP(AP), SM(SM), OS(*AP.OutStreamer), Context(AP.OutContext),
       TT(AP.TM.getTargetTriple()) {}
 
-void processStructTypeOffsets(StructType *ST, SmallVectorImpl<uint64_t> &Refs,
-                              const DataLayout &DL, const GCStrategy *GS,
-                              uint64_t BaseOff) {
-  for (uint32_t STNum = 0; STNum < ST->getNumElements(); STNum++) {
-    if (auto PT = dyn_cast<PointerType>(ST->getElementType(STNum))) {
-      if (*GS->isGCManagedPointer(PT)) {
-        Refs.push_back(DL.getStructLayout(ST)->getElementOffset(STNum) +
-                       BaseOff);
-      }
-    } else if (auto EST = dyn_cast<StructType>(ST->getElementType(STNum))) {
-      uint64_t DerivedOffset =
-          DL.getStructLayout(ST)->getElementOffset(STNum) + BaseOff;
-      processStructTypeOffsets(EST, Refs, DL, GS, DerivedOffset);
-    }
+void processAggregateTypeOffsets(Type *Ty, SmallVectorImpl<uint64_t> &Refs,
+                                 const DataLayout &DL, const GCStrategy *GS,
+                                 uint64_t BaseOff) {
+  if (auto *PT = dyn_cast<PointerType>(Ty)) {
+    if (*GS->isGCManagedPointer(PT))
+      Refs.push_back(BaseOff);
+    return;
+  }
+
+  if (auto *ST = dyn_cast<StructType>(Ty)) {
+    const StructLayout *SL = DL.getStructLayout(ST);
+    for (uint32_t I = 0; I < ST->getNumElements(); ++I)
+      processAggregateTypeOffsets(ST->getElementType(I), Refs, DL, GS,
+                                  BaseOff + SL->getElementOffset(I));
+    return;
+  }
+
+  if (auto *AT = dyn_cast<ArrayType>(Ty)) {
+    Type *ElementType = AT->getElementType();
+    uint64_t ElementSize = DL.getTypeAllocSize(ElementType).getFixedSize();
+    for (uint64_t I = 0; I < AT->getNumElements(); ++I)
+      processAggregateTypeOffsets(ElementType, Refs, DL, GS,
+                                  BaseOff + I * ElementSize);
   }
 }
 
@@ -219,11 +228,11 @@ void CJMetadataInfo::recordGlobalVariable(const GlobalVariable *GV) {
   }
 
   // also stack map use.
-  if (StructType *ST = dyn_cast<StructType>(GV->getValueType())) {
+  if (GV->getValueType()->isAggregateType()) {
     // 8: Initial size of RefOffsets.
     SmallVector<uint64_t, 8> RefOffsets;
-    processStructTypeOffsets(ST, RefOffsets, GV->getParent()->getDataLayout(),
-                             GS, 0);
+    processAggregateTypeOffsets(GV->getValueType(), RefOffsets,
+                                GV->getParent()->getDataLayout(), GS, 0);
     if (RefOffsets.size() == 0)
       return;
 
