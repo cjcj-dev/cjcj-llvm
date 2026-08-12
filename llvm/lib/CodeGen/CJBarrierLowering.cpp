@@ -46,6 +46,12 @@ static cl::opt<bool> EnableGCPhase("enable-gc-phase", cl::init(true),
                                    cl::Hidden);
 static cl::opt<bool> EnableGCFastPath("enable-gc-fast-path", cl::init(true),
                                       cl::Hidden);
+// wbclose2 / WRITE_SIDE_CLOSURE Phase2: default ON so Idle (phase<=INIT)
+// heap ref/struct/array/atomic-store writes stay on the MCC path and call
+// RecordCrossGenEdge. Off only for non-GC / explicit opt-out consumers.
+static cl::opt<bool> EnableGenerationalPostBarrier(
+    "cj-generational-post-barrier", cl::init(true), cl::Hidden,
+    cl::desc("Keep heap writes on the runtime barrier path"));
 static cl::opt<bool> EnableGCStateLoop("cj-gcstate-dup-loop", cl::init(false),
                                        cl::ReallyHidden);
 
@@ -378,6 +384,15 @@ public:
       break;
     }
 
+    if (EnableGenerationalPostBarrier &&
+        (IID == Intrinsic::cj_gcwrite_ref ||
+         IID == Intrinsic::cj_gcwrite_struct ||
+         IID == Intrinsic::cj_array_copy_ref ||
+         IID == Intrinsic::cj_array_copy_struct ||
+         IID == Intrinsic::cj_atomic_store)) {
+      return false;
+    }
+
     setLastBarrier(CI);
     Barriers.push_back(CI);
     return true;
@@ -605,12 +620,14 @@ public:
     // %0 = load i8 addrspace1*, i8 addrspace1* addrspace1* %3
     // %1 = ptrtoint i8 addrspace1* %0 to i64
     IRBuilder<> Builder(ReadInst);
-    LoadInst *Load = loadTaggedPointer(Builder, RefFieldPtr, Order);
+    // Place may carry colour (same as createStoreOrMems write places).
+    LoadInst *Load =
+        loadTaggedPointer(Builder, uncolorIfGCPtr(RefFieldPtr, Builder), Order);
     Instruction *PtrToInt =
         cast<Instruction>(Builder.CreatePtrToInt(Load, Type::getInt64Ty(C)));
     PtrToInt->setDebugLoc(*Loc);
     Value *CmpEQ = cmpTaggedPointer(PtrToInt, Builder);
-    splitFastPathAndSlowPath(ReadInst->getParent(), CmpEQ, Load);
+    splitFastPathAndSlowPath(ReadInst->getParent(), CmpEQ, PtrToInt);
   }
 
   // insert a load from RefFieldPtr:
@@ -626,13 +643,30 @@ public:
     return Load;
   }
 
-  // %tag = lshr i64 %Ptr, 48
-  // %ret = icmp eq i64 %tag, 0
+  // Phase B of the ZGC-style colouring work (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6).
+  //
+  // This used to be `lshr 48; icmp eq 0`, which asks "are the top 16 bits zero" and so hard-codes
+  // "a good reference carries no colour". That is what stops a good colour from being flipped
+  // lazily, and therefore what forces the runtime's full-heap extermination walk. Test against a
+  // mask the runtime owns instead, so a later phase can give good a non-zero value and flip it at
+  // a phase boundary -- ZGC does the same with ZPointerLoadBadMask (zBarrier.inline.hpp:626-628).
+  //
+  // The mask is `0xFFFF000000000000` for now, so this computes the same predicate as the shift it
+  // replaces; only the instruction shape changes. Code built by an older compiler keeps the shift
+  // form and stays correct, because both spell the same question.
+  //
+  // %mask = load i64, i64* @g_cjLoadBadMask
+  // %bad  = and i64 %Ptr, %mask
+  // %ret  = icmp eq i64 %bad, 0
   Value *cmpTaggedPointer(Value *TagPtr, IRBuilder<> &Builder) {
-    Value *Tag = Builder.CreateLShr(TagPtr, (uint64_t)48);
-    cast<Instruction>(Tag)->setDebugLoc(*Loc);
-    Value *CmpEQ = Builder.CreateICmpEQ(
-        Tag, ConstantInt::get(Type::getInt64Ty(C), (uint64_t)0));
+    Type *I64 = Type::getInt64Ty(C);
+    Module *M = Builder.GetInsertBlock()->getParent()->getParent();
+    Constant *MaskGV = M->getOrInsertGlobal("g_cjLoadBadMask", I64);
+    Value *Mask = Builder.CreateLoad(I64, MaskGV, "cj.loadbadmask");
+    cast<Instruction>(Mask)->setDebugLoc(*Loc);
+    Value *Bad = Builder.CreateAnd(TagPtr, Mask);
+    cast<Instruction>(Bad)->setDebugLoc(*Loc);
+    Value *CmpEQ = Builder.CreateICmpEQ(Bad, ConstantInt::get(I64, (uint64_t)0));
     cast<Instruction>(CmpEQ)->setDebugLoc(*Loc);
     return CmpEQ;
   }
@@ -641,7 +675,8 @@ public:
   //   %Cond = icmp eq i64 %tag, 0
   //   br i1 %Cond, label %gcNoMarked label %gcMarked
   // gcNoMarked:
-  //   %val1 = %val
+  //   %address = and i64 %PtrToInt, 0x0000ffffffffffff
+  //   %val1 = inttoptr i64 %address to i8 addrspace(1)*
   //   br label %loadFinish
   // gcMarked:
   //   %val2 = call @llvm.cj.gcread.ref
@@ -649,20 +684,31 @@ public:
   // loadFinish:
   //   %val = phi [%val1, gcNoMarked], [%val2, gcMarked]
   void splitFastPathAndSlowPath(BasicBlock *SplitBB, Value *Condition,
-                                Instruction *LoadVal) {
+                                Instruction *PtrToInt) {
     BasicBlock *FalseBranch = SplitBB->splitBasicBlock(ReadInst, "gcMarked");
     BasicBlock *Succ =
         FalseBranch->splitBasicBlock(ReadInst->getNextNode(), "loadFinish");
     BasicBlock *TrueBranch =
         BasicBlock::Create(C, "gcNoMarked", SplitBB->getParent(), Succ);
     BranchInst::Create(Succ, TrueBranch);
+    IRBuilder<> Builder(TrueBranch->getTerminator());
+    // RefField.h:179 and its :191-194 static_assert fix the address in the low 48 bits.
+    // If that ABI width changes, this mask must move to a runtime-owned export.
+    constexpr unsigned AddressBits = 48;
+    constexpr uint64_t AddressMask = (uint64_t(1) << AddressBits) - 1;
+    Value *Address = Builder.CreateAnd(
+        PtrToInt, ConstantInt::get(Type::getInt64Ty(C), AddressMask));
+    cast<Instruction>(Address)->setDebugLoc(*Loc);
+    Instruction *Uncolored =
+        cast<Instruction>(Builder.CreateIntToPtr(Address, DstTy));
+    Uncolored->setDebugLoc(*Loc);
     Instruction *OriginBr = SplitBB->getTerminator();
     IRBuilder<> BuilderBr(OriginBr);
     BuilderBr.CreateCondBr(Condition, TrueBranch, FalseBranch);
     OriginBr->eraseFromParent();
     TrueBranch->getTerminator()->setDebugLoc(*Loc);
     FalseBranch->getTerminator()->setDebugLoc(*Loc);
-    handleSuccPhi(FalseBranch, LoadVal, TrueBranch, Succ);
+    handleSuccPhi(FalseBranch, Uncolored, TrueBranch, Succ);
     return;
   }
 
@@ -969,7 +1015,8 @@ static void checkLoopBarrier(Function &F, LoopInfo &LI, DominatorTree &DT,
     if (!containBarrier(*L, containSafepoint)) {
       continue;
     }
-    if (!containSafepoint && EnableGCStateLoop) {
+    if (!containSafepoint && EnableGCStateLoop &&
+        !EnableGenerationalPostBarrier) {
       Loop &New = cloneLoop(L, F, LI);
       handleGCStateLoop(New, *L, GCPhase);
       replaceBarriers();
@@ -1002,7 +1049,7 @@ void CJBarrierLowering::writeBarrierFastPath(Function &F,
 // =====>
 //   %0 = load i8 addrspace1*, i8 addrspace1* addrspace1* %RefFieldPtr
 //   %1 = ptrtoint i8 addrspace1* %0 to i64
-//   %2 = lshr i64 %1, 48
+//   %2 = and i64 %1, @g_cjLoadBadMask   (phase B; was `lshr i64 %1, 48`)
 //   %3 = icmp eq i64 %2, 0
 //   br i1 %3, label %gcNoMarked label %gcMarked
 // gcNoMarked:
@@ -1167,6 +1214,33 @@ static bool combineSafepointStub(Module *M,
   return true;
 }
 
+// Bare CreateCopyTo memmove/memcpy on AS1 interiors (mmstrip). Helper is shared
+// with createStoreOrMems place peeling (llvm::uncolorIfGCPtr).
+static bool uncolorMemTransferOperands(Function &F) {
+  bool Changed = false;
+  for (BasicBlock &BB : F) {
+    for (Instruction &I : BB) {
+      auto *MT = dyn_cast<MemTransferInst>(&I);
+      if (!MT)
+        continue;
+      IRBuilder<> Builder(MT);
+      Value *Dst = MT->getRawDest();
+      Value *Src = MT->getRawSource();
+      Value *NewDst = uncolorIfGCPtr(Dst, Builder);
+      Value *NewSrc = uncolorIfGCPtr(Src, Builder);
+      if (NewDst != Dst) {
+        MT->setDest(NewDst);
+        Changed = true;
+      }
+      if (NewSrc != Src) {
+        MT->setSource(NewSrc);
+        Changed = true;
+      }
+    }
+  }
+  return Changed;
+}
+
 bool CJBarrierLowering::runOnFunction(Function &F) {
   // Quick exit for functions that do not use Cangjie GC.
   if (!F.hasCangjieGC())
@@ -1201,6 +1275,9 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
 
   if (!Safepoints.empty() && !TT.isARM())
     Changed |= combineSafepointStub(F.getParent(), Safepoints);
+
+  // Independent of barrier set: bare CreateMemMove has no CJ barrier intrinsic.
+  Changed |= uncolorMemTransferOperands(F);
 
   if (Barriers.empty()) {
     return Changed;

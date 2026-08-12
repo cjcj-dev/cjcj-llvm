@@ -647,6 +647,10 @@ void CJMetadataInfo::emitGCFlags() {
   } else {
     OS.emitIntValue(0, 1);
   }
+  OS.emitIntValue(0, 1);
+  OS.emitIntValue(0x53424A43, 4);
+  OS.emitIntValue(1, 4);
+  OS.emitIntValue(1, 4);
   OS.addBlankLine();
 }
 
