@@ -59,6 +59,10 @@ set(LLVM_CFLAGS "${LLVM_C_STD_FLAG} ${LLVM_DEFINITIONS}")
 # The language standard potentially affects the ABI/API of LLVM, so we want
 # to make sure it is reported by llvm-config.
 set(LLVM_CXXFLAGS "${CMAKE_CXX${CMAKE_CXX_STANDARD}_STANDARD_COMPILE_OPTION} ${LLVM_CXX_STDLIB_FLAG} ${COMPILE_FLAGS} ${LLVM_DEFINITIONS}")
+foreach(flag_var LLVM_CPPFLAGS LLVM_CFLAGS LLVM_CXXFLAGS)
+  string(REPLACE "\\" "\\\\" ${flag_var} "${${flag_var}}")
+  string(REPLACE "\"" "\\\"" ${flag_var} "${${flag_var}}")
+endforeach()
 set(LLVM_BUILD_SYSTEM cmake)
 set(LLVM_HAS_RTTI ${LLVM_CONFIG_HAS_RTTI})
 set(LLVM_DYLIB_VERSION "${LLVM_VERSION_MAJOR}${LLVM_VERSION_SUFFIX}")
