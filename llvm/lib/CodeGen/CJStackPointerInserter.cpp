@@ -712,6 +712,15 @@ private:
         Offset += StructSize;
       }
       return isPointerInStruct(EST, Imm, Offset);
+    } else if (ArrayType *EAT = dyn_cast<ArrayType>(ElementType)) {
+      unsigned ElementSize = DL.getTypeAllocSize(EAT).getFixedSize();
+      unsigned ArraySize = ElementSize * Num;
+      Check(ArraySize + CurPos > Imm, "The Imm exceeds the array range.");
+      int Offset = CurPos;
+      while (Offset + ElementSize <= Imm) {
+        Offset += ElementSize;
+      }
+      return isPointerInArray(EAT, Imm, Offset);
     }
     return false;
   }
