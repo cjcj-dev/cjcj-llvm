@@ -1698,13 +1698,13 @@ static void countArrayOffsets(ArrayType *AT, SmallVector<uint64_t, 8> &Offsets,
                               unsigned Left, unsigned Right) {
   uint32_t Size = AT->getNumElements();
   Type *ElementType = AT->getElementType();
+  uint64_t ElementSize = DL.getTypeAllocSize(ElementType).getFixedSize();
   if (Size == 0) { // Array type
-    uint32_t ElementSize = DL.getTypeAllocSize(ElementType);
     Size = (Right + ElementSize - 1) / ElementSize;
   }
   if (isa<PointerType>(ElementType)) {
     for (unsigned Idx = 0; Idx < Size; Idx++) {
-      uint64_t Off = BaseOff + Idx * 8;
+      uint64_t Off = BaseOff + Idx * ElementSize;
       if (Off >= Left && Off < Right) {
         Offsets.push_back(Off);
       }
@@ -1716,9 +1716,8 @@ static void countArrayOffsets(ArrayType *AT, SmallVector<uint64_t, 8> &Offsets,
                       Left, Right);
     }
   } else if (ArrayType *AET = dyn_cast<ArrayType>(ElementType)) {
-    uint32_t DerivedOffset = DL.getTypeSizeInBits(ElementType);
     for (unsigned Idx = 0; Idx < Size; Idx++) {
-      countArrayOffsets(AET, Offsets, BaseOff + Idx * DerivedOffset, DL, Left,
+      countArrayOffsets(AET, Offsets, BaseOff + Idx * ElementSize, DL, Left,
                         Right);
     }
   }
