@@ -2045,17 +2045,22 @@ static unsigned computeArrayTypeOffsets(ArrayType *AT,
   unsigned GCFieldNum = 0;
   uint64_t Size = AT->getNumElements();
   Type *ElementType = AT->getElementType();
-  if (isa<PointerType>(ElementType)) {
+  uint64_t ElementSize = DL.getTypeAllocSize(ElementType).getFixedSize();
+  if (isGCPointerType(ElementType)) {
     for (unsigned Index = 0; Index < Size; Index++) {
-      uint64_t EleOff = BaseOff + Index * 8; // 8: pointer size
+      uint64_t EleOff = BaseOff + Index * ElementSize;
       StructDL[EleOff] = true;
     }
     GCFieldNum += Size;
   } else if (StructType *ArrayStruct = dyn_cast<StructType>(ElementType)) {
-    int64_t DerivedOffset = DL.getStructLayout(ArrayStruct)->getSizeInBytes();
     for (unsigned Index = 0; Index < Size; Index++) {
       GCFieldNum += computeStructTypeOffsets(ArrayStruct, StructDL, DL,
-                                             BaseOff + Index * DerivedOffset);
+                                             BaseOff + Index * ElementSize);
+    }
+  } else if (ArrayType *NestedArray = dyn_cast<ArrayType>(ElementType)) {
+    for (unsigned Index = 0; Index < Size; Index++) {
+      GCFieldNum += computeArrayTypeOffsets(NestedArray, StructDL, DL,
+                                            BaseOff + Index * ElementSize);
     }
   }
   return GCFieldNum;
