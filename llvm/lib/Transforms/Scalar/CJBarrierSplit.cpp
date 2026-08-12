@@ -222,21 +222,15 @@ public:
                                      SmallVector<uint64_t, 8> &AllRefPos) {
     for (uint64_t i = 0; i < ST->getNumElements(); i++) {
       uint64_t Offset = DL.getStructLayout(ST)->getElementOffset(i) + CurPos;
-
-      // 1. ST = {i64, {i64, {i64, i8*, i64}}, i64}, Begin = 16, End = 40
-      // 2. ST = {i64, [5 * EST]}
-      //    EST = {i64, i8*, i64}
-      //    Begin = 32, End = 64
-      if (i != ST->getNumElements() - 1) {
-        uint64_t NextOffset = DL.getStructLayout(ST)->getElementOffset(i + 1);
-        if (Offset < BeginPos && NextOffset < BeginPos)
-          continue;
-      }
+      Type *EleTy = ST->getElementType(i);
+      uint64_t EleSize = DL.getTypeAllocSize(EleTy).getFixedSize();
+      if (Offset + EleSize <= BeginPos)
+        continue;
       if (Offset >= EndPos)
         return;
-      Type *EleTy = ST->getElementType(i);
       if (isGCPointerType(EleTy)) {
-        AllRefPos.push_back(Offset);
+        if (Offset >= BeginPos)
+          AllRefPos.push_back(Offset);
       } else if (auto *EST = dyn_cast<StructType>(EleTy)) {
         findReferencePositionInStruct(EST, BeginPos, EndPos, Offset, AllRefPos);
       } else if (auto *EAT = dyn_cast<ArrayType>(EleTy)) {
@@ -250,15 +244,22 @@ public:
                                     SmallVector<uint64_t, 8> &AllRefPos) {
     uint64_t EleNum = AT->getNumElements();
     Type *EleType = AT->getElementType();
-    if (isa<PointerType>(EleType) && isGCPointerType(EleType)) {
-      for (uint64_t Idx = 0; Idx < EleNum; Idx++) {
-        AllRefPos.push_back(CurPos + 8 * Idx); // 8: pointer size
-      }
-    } else if (auto *ArrayStruct = dyn_cast<StructType>(EleType)) {
-      uint64_t EleSize = DL.getStructLayout(ArrayStruct)->getSizeInBytes();
-      for (uint64_t Idx = 0; Idx < EleNum; Idx++) {
+    uint64_t EleSize = DL.getTypeAllocSize(EleType).getFixedSize();
+    for (uint64_t Idx = 0; Idx < EleNum; Idx++) {
+      uint64_t Offset = CurPos + Idx * EleSize;
+      if (Offset + EleSize <= BeginPos)
+        continue;
+      if (Offset >= EndPos)
+        return;
+      if (isGCPointerType(EleType)) {
+        if (Offset >= BeginPos)
+          AllRefPos.push_back(Offset);
+      } else if (auto *ArrayStruct = dyn_cast<StructType>(EleType)) {
         findReferencePositionInStruct(ArrayStruct, BeginPos, EndPos,
-                                      CurPos + Idx * EleSize, AllRefPos);
+                                      Offset, AllRefPos);
+      } else if (auto *NestedArray = dyn_cast<ArrayType>(EleType)) {
+        findReferencePositionInArray(NestedArray, BeginPos, EndPos, Offset,
+                                     AllRefPos);
       }
     }
   }
