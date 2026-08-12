@@ -614,6 +614,7 @@ static Value *findBaseDefiningValue(Value *I, DefiningValueMapTy &Cache,
       // implications much.
       llvm_unreachable(
           "interaction with the gcroot mechanism is not supported");
+    case Intrinsic::ptrmask:
     case Intrinsic::experimental_gc_get_pointer_base:
       auto *BDV = findBaseDefiningValue(II->getOperand(0), Cache, KnownBases);
       Cache[II] = BDV;

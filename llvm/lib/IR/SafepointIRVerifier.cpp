@@ -976,6 +976,12 @@ Value *llvm::findMemoryBasePointer(Value *V) {
       CV = GEPI->getPointerOperand();
     } else if (auto *CE = dyn_cast<ConstantExpr>(CV)) {
       CV = CE->getOperand(0);
+    } else if (auto *II = dyn_cast<IntrinsicInst>(CV)) {
+      // UncolorIfGCPtr / createStoreOrMems peel via llvm.ptrmask; walk through
+      // so PEA and stackmaps see the real managed base (not a severed inttoptr).
+      if (II->getIntrinsicID() != Intrinsic::ptrmask)
+        break;
+      CV = II->getArgOperand(0);
     } else {
       break;
     }
@@ -990,6 +996,7 @@ Value *llvm::findMemoryBasePointer(Value *V) {
 
 // Same AddressMask ABI as ReadBarrier::splitFastPathAndSlowPath
 // (RefField.h:179, address : 48) and mmstrip MemTransferInst peeling.
+// Emit llvm.ptrmask so pointer provenance is preserved for base/derived pairing.
 Value *llvm::uncolorIfGCPtr(Value *Ptr, IRBuilder<> &Builder) {
   auto *PT = dyn_cast<PointerType>(Ptr->getType());
   if (!PT || PT->getAddressSpace() != 1)
@@ -997,10 +1004,9 @@ Value *llvm::uncolorIfGCPtr(Value *Ptr, IRBuilder<> &Builder) {
   constexpr unsigned AddressBits = 48;
   constexpr uint64_t AddressMask = (uint64_t(1) << AddressBits) - 1;
   Type *I64 = Type::getInt64Ty(Builder.getContext());
-  Value *AsInt = Builder.CreatePtrToInt(Ptr, I64);
-  Value *Masked =
-      Builder.CreateAnd(AsInt, ConstantInt::get(I64, AddressMask));
-  return Builder.CreateIntToPtr(Masked, Ptr->getType());
+  return Builder.CreateIntrinsic(
+      Intrinsic::ptrmask, {Ptr->getType(), I64},
+      {Ptr, ConstantInt::get(I64, AddressMask)});
 }
 
 Instruction *llvm::createStoreOrMems(CallBase *CI, IRBuilder<> &Builder) {

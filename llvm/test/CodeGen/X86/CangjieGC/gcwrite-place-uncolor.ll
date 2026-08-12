@@ -8,9 +8,7 @@ define void @write_ref_place(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
                              i8 addrspace(1)* addrspace(1)* %field) gc "cangjie" {
 ; CHECK-LABEL: define void @write_ref_place(
 ; CHECK: gcNoRunning:
-; CHECK: [[PLACE_INT:%.*]] = ptrtoint i8 addrspace(1)* addrspace(1)* %field to i64
-; CHECK-NEXT: [[PLACE_ADDR:%.*]] = and i64 [[PLACE_INT]], 281474976710655
-; CHECK-NEXT: [[PLACE_PLAIN:%.*]] = inttoptr i64 [[PLACE_ADDR]] to i8 addrspace(1)* addrspace(1)*
+; CHECK: [[PLACE_PLAIN:%.*]] = call i8 addrspace(1)* addrspace(1)* @llvm.ptrmask.p1p1i8.i64(i8 addrspace(1)* addrspace(1)* %field, i64 281474976710655)
 ; CHECK: store i8 addrspace(1)* %val, i8 addrspace(1)* addrspace(1)* [[PLACE_PLAIN]]
 entry:
   call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
@@ -22,8 +20,7 @@ define void @atomic_store_place(i8 addrspace(1)* %ref, i8 addrspace(1)* %obj,
                                 i8 addrspace(1)* addrspace(1)* %field) gc "cangjie" {
 ; CHECK-LABEL: define void @atomic_store_place(
 ; CHECK: gcNoRunning:
-; CHECK: [[F_INT:%.*]] = ptrtoint i8 addrspace(1)* addrspace(1)* %field to i64
-; CHECK: and i64 [[F_INT]], 281474976710655
+; CHECK: call {{.*}} @llvm.ptrmask
 ; CHECK: store atomic
 entry:
   call void @llvm.cj.atomic.store(i8 addrspace(1)* %ref, i8 addrspace(1)* %obj,
