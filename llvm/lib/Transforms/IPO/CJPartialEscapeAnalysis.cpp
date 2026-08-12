@@ -2245,14 +2245,25 @@ Value *CJEscapeAnalysis::getBaseValue(Value *CV, int &Offset) {
         V = CI->getOperand(0);
         continue;
       }
-      // UncolorIfGCPtr (IRBuilder.cj / CJBarrierLowering::uncolorIfGCPtr) emits
-      //   inttoptr(and(ptrtoint(P), AddressMask))
+      // UncolorIfGCPtr (IRBuilder.cj / llvm::uncolorIfGCPtr) may emit either
+      //   inttoptr(and(ptrtoint(P), AddressMask))  or  llvm.ptrmask(P, AddressMask)
       // still in addrspace(1).  That value is the same managed object as P, not a
       // new base.  Without look-through, PEA attaches the gcwrite escape edge to
-      // the i64 `and` instead of P (NewObject), so P is stack-promoted while a
+      // the peel result instead of P (NewObject), so P is stack-promoted while a
       // coloured stack address is stored into a heap RawArray (startupcolour
       // sigSlot; same family as tzinit EXIT peel).  Mirror 759e055b in
       // CJRewriteStatepoint::findBaseDefiningValue.
+      if (auto *II = dyn_cast<IntrinsicInst>(CI)) {
+        if (II->getIntrinsicID() == Intrinsic::ptrmask &&
+            isGCPointerType(II->getType())) {
+          Value *Src = II->getArgOperand(0);
+          if (Src && Src->getType()->isPointerTy() &&
+              isGCPointerType(Src->getType())) {
+            V = Src;
+            continue;
+          }
+        }
+      }
       if (auto *ITP = dyn_cast<IntToPtrInst>(CI)) {
         if (isGCPointerType(ITP->getType())) {
           if (auto *BO = dyn_cast<BinaryOperator>(ITP->getOperand(0))) {
