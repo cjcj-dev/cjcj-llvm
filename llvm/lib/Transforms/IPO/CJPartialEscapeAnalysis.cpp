@@ -454,7 +454,7 @@ private:
     Value *BI = IRB.CreateAddrSpaceCast(NewInst, PI8AS1Ty);
     OldInst->replaceAllUsesWith(BI);
     if (auto II = dyn_cast<InvokeInst>(OldInst)) {
-      IRBuilder BrIRB(OldInst);
+      IRBuilder<> BrIRB(OldInst);
       BrIRB.CreateBr(II->getNormalDest());
       BasicBlock *UnwindBB = II->getUnwindDest();
       UnwindBB->removePredecessor(OldInst->getParent());
@@ -2244,6 +2244,56 @@ Value *CJEscapeAnalysis::getBaseValue(Value *CV, int &Offset) {
       if (!CI->getType()->isPointerTy()) { // ptr2int
         V = CI->getOperand(0);
         continue;
+      }
+      // UncolorIfGCPtr (IRBuilder.cj / llvm::uncolorIfGCPtr) may emit either
+      //   inttoptr(and(ptrtoint(P), AddressMask))  or  llvm.ptrmask(P, AddressMask)
+      // still in addrspace(1).  That value is the same managed object as P, not a
+      // new base.  Without look-through, PEA attaches the gcwrite escape edge to
+      // the peel result instead of P (NewObject), so P is stack-promoted while a
+      // coloured stack address is stored into a heap RawArray (startupcolour
+      // sigSlot; same family as tzinit EXIT peel).  Mirror 759e055b in
+      // CJRewriteStatepoint::findBaseDefiningValue.
+      if (auto *II = dyn_cast<IntrinsicInst>(CI)) {
+        if (II->getIntrinsicID() == Intrinsic::ptrmask &&
+            isGCPointerType(II->getType())) {
+          Value *Src = II->getArgOperand(0);
+          if (Src && Src->getType()->isPointerTy() &&
+              isGCPointerType(Src->getType())) {
+            V = Src;
+            continue;
+          }
+        }
+      }
+      if (auto *ITP = dyn_cast<IntToPtrInst>(CI)) {
+        if (isGCPointerType(ITP->getType())) {
+          if (auto *BO = dyn_cast<BinaryOperator>(ITP->getOperand(0))) {
+            if (BO->getOpcode() == Instruction::And) {
+              Value *Op0 = BO->getOperand(0);
+              Value *Op1 = BO->getOperand(1);
+              ConstantInt *Mask = dyn_cast<ConstantInt>(Op1);
+              Value *IntOp = Op0;
+              if (!Mask) {
+                Mask = dyn_cast<ConstantInt>(Op0);
+                IntOp = Op1;
+              }
+              // AddressMask = (1<<48)-1, or any low-bits-only mask of the same form.
+              if (Mask && (Mask->getValue().isMask() ||
+                           Mask->getZExtValue() == 0x0000FFFFFFFFFFFFULL)) {
+                Value *Src = nullptr;
+                if (auto *PTI = dyn_cast<PtrToIntInst>(IntOp))
+                  Src = PTI->getPointerOperand();
+                else if (auto *PTI =
+                             dyn_cast<PtrToIntInst>(IntOp->stripPointerCasts()))
+                  Src = PTI->getPointerOperand();
+                if (Src && Src->getType()->isPointerTy() &&
+                    isGCPointerType(Src->getType())) {
+                  V = Src;
+                  continue;
+                }
+              }
+            }
+          }
+        }
       }
       V = CI->stripPointerCasts();
       // If we find a cast instruction here, it means we've found a cast which

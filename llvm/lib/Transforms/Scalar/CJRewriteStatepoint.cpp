@@ -499,7 +499,46 @@ static Value *findBaseDefiningValue(Value *I, DefiningValueMapTy &Cache,
   // constant rule above and because we don't really have a better semantic
   // to give them.  Note that the optimizer is always free to insert undefined
   // behavior on dynamically dead paths as well.
-  if (isa<IntToPtrInst>(I)) {
+  //
+  // Exception: UncolorIfGCPtr (cjcj IRBuilder.cj:1373 /
+  // CJBarrierLowering::uncolorIfGCPtr) emits
+  //   inttoptr(and(ptrtoint(P), AddressMask))
+  // still in addrspace(1).  That value is a derived interior of P, not a new
+  // managed object.  Treating it as a known base makes the compressed
+  // stackmap register it as a full object root (interiorsrc2: r14 = RawArray+8
+  // length pointer).  Look through the colour-strip chain so stackmap gets
+  // the real base and records (base, derived).
+  if (auto *ITP = dyn_cast<IntToPtrInst>(I)) {
+    if (isGCPointerType(ITP->getType())) {
+      if (auto *BO = dyn_cast<BinaryOperator>(ITP->getOperand(0))) {
+        if (BO->getOpcode() == Instruction::And) {
+          Value *Op0 = BO->getOperand(0);
+          Value *Op1 = BO->getOperand(1);
+          ConstantInt *Mask = dyn_cast<ConstantInt>(Op1);
+          Value *IntOp = Op0;
+          if (!Mask) {
+            Mask = dyn_cast<ConstantInt>(Op0);
+            IntOp = Op1;
+          }
+          // AddressMask = (1<<48)-1, or any low-bits-only mask of the same form.
+          if (Mask && (Mask->getValue().isMask() ||
+                       Mask->getZExtValue() == 0x0000FFFFFFFFFFFFULL)) {
+            Value *Src = nullptr;
+            if (auto *PTI = dyn_cast<PtrToIntInst>(IntOp))
+              Src = PTI->getPointerOperand();
+            else if (auto *PTI =
+                         dyn_cast<PtrToIntInst>(IntOp->stripPointerCasts()))
+              Src = PTI->getPointerOperand();
+            if (Src && Src->getType()->isPointerTy() &&
+                isGCPointerType(Src->getType())) {
+              auto *BDV = findBaseDefiningValue(Src, Cache, KnownBases);
+              Cache[I] = BDV;
+              return BDV;
+            }
+          }
+        }
+      }
+    }
     Cache[I] = I;
     setKnownBase(I, /* IsKnownBase */ true, KnownBases);
     return I;
@@ -575,6 +614,7 @@ static Value *findBaseDefiningValue(Value *I, DefiningValueMapTy &Cache,
       // implications much.
       llvm_unreachable(
           "interaction with the gcroot mechanism is not supported");
+    case Intrinsic::ptrmask:
     case Intrinsic::experimental_gc_get_pointer_base:
       auto *BDV = findBaseDefiningValue(II->getOperand(0), Cache, KnownBases);
       Cache[II] = BDV;
@@ -2520,6 +2560,70 @@ static void printBases(PointerToBaseTy &PointerToBase, bool Before) {
   }
 }
 
+static Constant *normalizeUndefOrPoisonConstant(Constant *C) {
+  if (isa<UndefValue>(C) || isa<PoisonValue>(C))
+    return Constant::getNullValue(C->getType());
+  if (isa<GlobalValue>(C) || isa<BlockAddress>(C))
+    return C;
+
+  SmallVector<Constant *, 8> NormalizedOperands;
+  bool Changed = false;
+  for (Value *Operand : C->operands()) {
+    auto *OperandC = dyn_cast<Constant>(Operand);
+    if (!OperandC)
+      return C;
+    Constant *Normalized = normalizeUndefOrPoisonConstant(OperandC);
+    NormalizedOperands.push_back(Normalized);
+    Changed |= Normalized != OperandC;
+  }
+  if (!Changed)
+    return C;
+
+  Constant *Normalized = nullptr;
+  if (auto *CE = dyn_cast<ConstantExpr>(C))
+    Normalized = CE->getWithOperands(NormalizedOperands);
+  else if (auto *CS = dyn_cast<ConstantStruct>(C))
+    Normalized = ConstantStruct::get(CS->getType(), NormalizedOperands);
+  else if (auto *CA = dyn_cast<ConstantArray>(C))
+    Normalized = ConstantArray::get(CA->getType(), NormalizedOperands);
+  else if (isa<ConstantVector>(C))
+    Normalized = ConstantVector::get(NormalizedOperands);
+
+  if (!Normalized)
+    return C;
+  if (isa<UndefValue>(Normalized) || isa<PoisonValue>(Normalized))
+    return Constant::getNullValue(Normalized->getType());
+  return Normalized;
+}
+
+static void normalizeUndefOrPoisonInLiveValue(Value *V,
+                                               DenseSet<Value *> &Visited) {
+  if (!Visited.insert(V).second)
+    return;
+
+  auto *I = dyn_cast<Instruction>(V);
+  // Calls and loads are opaque definitions. Their operands do not determine
+  // whether the returned or loaded GC value is undef or poison.
+  if (!I || isa<CallBase>(I) || isa<LoadInst>(I))
+    return;
+
+  for (Use &Operand : I->operands()) {
+    if (auto *C = dyn_cast<Constant>(Operand.get())) {
+      Operand.set(normalizeUndefOrPoisonConstant(C));
+      continue;
+    }
+    normalizeUndefOrPoisonInLiveValue(Operand.get(), Visited);
+  }
+}
+
+static void
+normalizeUndefOrPoisonInLiveValues(ArrayRef<SafepointRecord> Records) {
+  DenseSet<Value *> Visited;
+  for (const SafepointRecord &Info : Records)
+    for (Value *LiveV : Info.LiveSet)
+      normalizeUndefOrPoisonInLiveValue(LiveV, Visited);
+}
+
 static bool insertParsePoints(Function &F, DominatorTree &DT,
                               PostDominatorTree &PostDT,
                               TargetTransformInfo &TTI,
@@ -2614,6 +2718,13 @@ static bool insertParsePoints(Function &F, DominatorTree &DT,
   // need to rerun liveness.  We may *also* have inserted new defs, but that's
   // not the key issue.
   Data.recomputeLiveInValues(Records, PointerToBase);
+
+  // Liveness excludes constants themselves, but an optimizer can hide undef
+  // or poison inside a non-constant GC value such as a phi, select, cast, or
+  // aggregate constructor. The base computation above already maps those
+  // constants to null; normalize the corresponding derived value before it is
+  // recorded in a statepoint as well.
+  normalizeUndefOrPoisonInLiveValues(Records);
 
   if (PrintBasePointers) {
     printBases(PointerToBase, true);
