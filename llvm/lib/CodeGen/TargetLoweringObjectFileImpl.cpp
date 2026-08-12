@@ -632,6 +632,8 @@ static StringRef getCJCOFFSectionPrefixForGlobal(SectionKind Kind) {
     return ".cjgctib";
   if (Kind.isCJMTable())
     return ".cjmtbl";
+  if (Kind.isCJTypeExt())
+    return ".cjtpe";
   if (Kind.isCJReflectPkgInfo())
     return ".cjrflp";
   if (Kind.isCJReflectGV())

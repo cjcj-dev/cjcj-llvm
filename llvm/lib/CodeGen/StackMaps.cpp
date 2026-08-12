@@ -771,10 +771,11 @@ void StackMaps::updateOrInsertFnInfo(const MCSymbol *FnSym,
     Itr = FnInfos.find(FnSym);
   }
 
-  // Do not need emit callsite info when it has no any Locations and LineNumber
-  // in cangjie pipeline.
-  if (CJPipeline && CallInfo.RefPairs.empty() && CallInfo.FOLocations.empty() &&
-      CallInfo.StackLocations.empty() && CallInfo.LineNumber == 0)
+  // X86/AArch64 emitCJThrowException calls here with a default CallsiteInfo
+  // (CSOffsetExpr=null) only to ensure FnInfo exists. Do not emit a RECORD
+  // without a PC key. Zero-root / zero-line callsites that still have a PC
+  // (normal managed statepoints) are recorded so runtime exact-PC lookup hits.
+  if (!CallInfo.CSOffsetExpr)
     return;
 
   // update callsite count.
