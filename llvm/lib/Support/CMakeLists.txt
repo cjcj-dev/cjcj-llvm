@@ -144,6 +144,7 @@ add_llvm_component_library(LLVMSupport
   Caching.cpp
   circular_raw_ostream.cpp
   Chrono.cpp
+  CJProvenance.cpp
   COM.cpp
   CodeGenCoverage.cpp
   CommandLine.cpp

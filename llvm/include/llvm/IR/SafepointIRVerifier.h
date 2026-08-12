@@ -69,6 +69,11 @@ bool isMemoryContainsGCPtrType(Type *T);
 
 Value *findMemoryBasePointer(Value *V);
 
+/// Strip colour bits from addrspace(1) pointers (low 48 bits = AddressMask).
+/// No-op for non-AS1 pointers. Shared by createStoreOrMems fastpath places and
+/// bare MemTransferInst operands (mmstrip).
+Value *uncolorIfGCPtr(Value *Ptr, IRBuilder<> &Builder);
+
 Instruction *createStoreOrMems(CallBase *CI, IRBuilder<> &Builder);
 
 bool isCJWriteBarrierIntrinsic(Intrinsic::ID IID);

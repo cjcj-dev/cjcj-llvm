@@ -147,6 +147,10 @@ private:
     /// register allocator.
     bool isStatepointSpillSlot = false;
 
+    /// If true, this backend-created stack object is known not to contain a
+    /// GC root. GC-specific stack liveness analyses may ignore the object.
+    bool isNonGCRoot = false;
+
     /// Identifier for stack memory type analagous to address space. If this is
     /// non-0, the meaning is target defined. Offsets cannot be directly
     /// compared between objects with different stack IDs. The object may not
@@ -728,6 +732,12 @@ public:
     return Objects[ObjectIdx+NumFixedObjects].isStatepointSpillSlot;
   }
 
+  bool isNonGCRootStackObjectIndex(int ObjectIdx) const {
+    assert(unsigned(ObjectIdx+NumFixedObjects) < Objects.size() &&
+           "Invalid Object Idx!");
+    return Objects[ObjectIdx+NumFixedObjects].isNonGCRoot;
+  }
+
   /// \see StackID
   uint8_t getStackID(int ObjectIdx) const {
     return Objects[ObjectIdx+NumFixedObjects].StackID;
@@ -762,6 +772,13 @@ public:
            "Invalid Object Idx!");
     Objects[ObjectIdx+NumFixedObjects].isStatepointSpillSlot = true;
     assert(isStatepointSpillSlotObjectIndex(ObjectIdx) && "inconsistent");
+  }
+
+  void markAsNonGCRootStackObjectIndex(int ObjectIdx) {
+    assert(unsigned(ObjectIdx+NumFixedObjects) < Objects.size() &&
+           "Invalid Object Idx!");
+    Objects[ObjectIdx+NumFixedObjects].isNonGCRoot = true;
+    assert(isNonGCRootStackObjectIndex(ObjectIdx) && "inconsistent");
   }
 
   /// Create a new statically sized stack object, returning
