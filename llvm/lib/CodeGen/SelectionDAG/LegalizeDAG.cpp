@@ -20,6 +20,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/CodeGen/ISDOpcodes.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
@@ -2281,6 +2282,9 @@ SelectionDAGLegalize::ExpandSinCosLibCall(SDNode *Node,
 
   // Pass the return address of sin.
   SDValue SinPtr = DAG.CreateStackTemporary(RetVT);
+  MachineFrameInfo &MFI = DAG.getMachineFunction().getFrameInfo();
+  MFI.markAsNonGCRootStackObjectIndex(
+      cast<FrameIndexSDNode>(SinPtr.getNode())->getIndex());
   Entry.Node = SinPtr;
   Entry.Ty = RetTy->getPointerTo();
   Entry.IsSExt = false;
@@ -2289,6 +2293,8 @@ SelectionDAGLegalize::ExpandSinCosLibCall(SDNode *Node,
 
   // Also pass the return address of the cos.
   SDValue CosPtr = DAG.CreateStackTemporary(RetVT);
+  MFI.markAsNonGCRootStackObjectIndex(
+      cast<FrameIndexSDNode>(CosPtr.getNode())->getIndex());
   Entry.Node = CosPtr;
   Entry.Ty = RetTy->getPointerTo();
   Entry.IsSExt = false;
