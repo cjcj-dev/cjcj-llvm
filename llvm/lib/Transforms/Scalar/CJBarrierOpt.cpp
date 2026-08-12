@@ -710,40 +710,52 @@ private:
 
   bool containsRefInArray(ArrayType *AT, uint64_t Start, uint64_t End,
                           uint64_t CurPos) {
-    bool Result = false;
     Type *ElementTy = AT->getElementType();
-    if (isGCPointerType(ElementTy)) {
-      return true;
-    } else if (auto AST = dyn_cast<StructType>(ElementTy)) {
-      for (unsigned Idx = 0; Idx < AT->getNumElements(); Idx++) {
-        Result |= containsRefInStruct(AST, Start, End, CurPos);
+    uint64_t ElementSize = DL.getTypeAllocSize(ElementTy).getFixedSize();
+    for (unsigned Idx = 0; Idx < AT->getNumElements(); ++Idx) {
+      uint64_t Pos = CurPos + Idx * ElementSize;
+      if (Pos + ElementSize <= Start)
+        continue;
+      if (Pos >= End)
+        return false;
+
+      if (isGCPointerType(ElementTy))
+        return true;
+      if (auto *ST = dyn_cast<StructType>(ElementTy)) {
+        if (containsRefInStruct(ST, Start, End, Pos))
+          return true;
+      } else if (auto *NestedAT = dyn_cast<ArrayType>(ElementTy)) {
+        if (containsRefInArray(NestedAT, Start, End, Pos))
+          return true;
       }
     }
-    return Result;
+    return false;
   }
 
   bool containsRefInStruct(StructType *ST, uint64_t Start, uint64_t End,
                            uint64_t CurPos = 0) {
     const StructLayout *Layout = DL.getStructLayout(ST);
-    bool Result = false;
     for (uint32_t STNum = 0; STNum < ST->getNumElements(); STNum++) {
       uint64_t Pos = Layout->getElementOffset(STNum) + CurPos;
-      if (Pos < Start)
+      Type *ET = ST->getElementType(STNum);
+      uint64_t FieldSize = DL.getTypeAllocSize(ET).getFixedSize();
+      if (Pos + FieldSize <= Start)
         continue;
 
       if (Pos >= End)
-        return Result;
+        return false;
 
-      auto ET = ST->getElementType(STNum);
       if (isGCPointerType(ET)) {
         return true;
-      } else if (auto EST = dyn_cast<StructType>(ET)) {
-        Result |= containsRefInStruct(EST, Start, End, Pos);
-      } else if (auto EAT = dyn_cast<ArrayType>(ET)) {
-        Result |= containsRefInArray(EAT, Start, End, Pos);
+      } else if (auto *EST = dyn_cast<StructType>(ET)) {
+        if (containsRefInStruct(EST, Start, End, Pos))
+          return true;
+      } else if (auto *EAT = dyn_cast<ArrayType>(ET)) {
+        if (containsRefInArray(EAT, Start, End, Pos))
+          return true;
       }
     }
-    return Result;
+    return false;
   }
 
   bool tryCheckMemContainsRef(MemIntrinsic *Mem) {
