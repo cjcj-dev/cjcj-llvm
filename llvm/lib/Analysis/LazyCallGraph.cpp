@@ -41,6 +41,8 @@
 
 using namespace llvm;
 
+template struct Any::TypeId<const LazyCallGraph::SCC *>;
+
 namespace llvm {
   extern cl::opt<bool> CJPipeline;
 }

@@ -34,6 +34,7 @@
 #ifndef LLVM_ANALYSIS_LAZYCALLGRAPH_H
 #define LLVM_ANALYSIS_LAZYCALLGRAPH_H
 
+#include "llvm/ADT/Any.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Optional.h"
@@ -1294,6 +1295,8 @@ public:
 
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
 };
+
+extern template struct Any::TypeId<const LazyCallGraph::SCC *>;
 
 } // end namespace llvm
 

@@ -17,6 +17,10 @@
 
 namespace llvm {
 
+template struct Any::TypeId<const Module *>;
+template struct Any::TypeId<const Function *>;
+template struct Any::TypeId<const Loop *>;
+
 void PassInstrumentationCallbacks::addClassToPassName(StringRef ClassName,
                                                       StringRef PassName) {
   if (ClassToPassName[ClassName].empty())

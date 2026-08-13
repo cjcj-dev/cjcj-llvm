@@ -60,6 +60,13 @@ namespace llvm {
 
 class PreservedAnalyses;
 class StringRef;
+class Module;
+class Loop;
+class Function;
+
+extern template struct Any::TypeId<const Module *>;
+extern template struct Any::TypeId<const Function *>;
+extern template struct Any::TypeId<const Loop *>;
 
 /// This class manages callbacks registration, as well as provides a way for
 /// PassInstrumentation to pass control to the registered callbacks.
