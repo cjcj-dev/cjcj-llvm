@@ -23,12 +23,14 @@
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/NoFolder.h"
 #include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Statepoint.h"
 #include "llvm/IR/CJStructTypeGCInfo.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -46,6 +48,9 @@ static cl::opt<bool> EnableGCPhase("enable-gc-phase", cl::init(true),
                                    cl::Hidden);
 static cl::opt<bool> EnableGCFastPath("enable-gc-fast-path", cl::init(true),
                                       cl::Hidden);
+static cl::opt<bool> EnableWeakLoadBadMask(
+    "cj-weak-load-bad-mask", cl::init(false), cl::Hidden,
+    cl::desc("Make g_cjLoadBadMask optional with the legacy mask as fallback"));
 // wbclose2 / WRITE_SIDE_CLOSURE Phase2: default ON so Idle (phase<=INIT)
 // heap ref/struct/array/atomic-store writes stay on the MCC path and call
 // RecordCrossGenEdge. Off only for non-GC / explicit opt-out consumers.
@@ -655,20 +660,85 @@ public:
   // replaces; only the instruction shape changes. Code built by an older compiler keeps the shift
   // form and stays correct, because both spell the same question.
   //
+  // By default this remains an unconditional load from a strong declaration.
+  // The opt-in dual-ABI measurement mode instead emits an external-weak
+  // declaration and guards the load. A missing provider means an older runtime,
+  // whose `lshr 48; icmp eq 0` predicate is exactly the fallback mask below.
+  //
   // %mask = load i64, i64* @g_cjLoadBadMask
   // %bad  = and i64 %Ptr, %mask
   // %ret  = icmp eq i64 %bad, 0
   Value *cmpTaggedPointer(Value *TagPtr, IRBuilder<> &Builder) {
     Type *I64 = Type::getInt64Ty(C);
-    Module *M = Builder.GetInsertBlock()->getParent()->getParent();
-    Constant *MaskGV = M->getOrInsertGlobal("g_cjLoadBadMask", I64);
-    Value *Mask = Builder.CreateLoad(I64, MaskGV, "cj.loadbadmask");
-    cast<Instruction>(Mask)->setDebugLoc(*Loc);
+    Value *Mask = nullptr;
+    if (!EnableWeakLoadBadMask) {
+      Constant *MaskGV = M->getOrInsertGlobal("g_cjLoadBadMask", I64);
+      Mask = Builder.CreateLoad(I64, MaskGV, "cj.loadbadmask");
+      cast<Instruction>(Mask)->setDebugLoc(*Loc);
+    } else {
+      GlobalVariable *MaskGV = getWeakLoadBadMask(I64);
+      BasicBlock *CheckBB = Builder.GetInsertBlock();
+      BasicBlock *MergeBB =
+          CheckBB->splitBasicBlock(ReadInst, "cj.loadbadmask.merge");
+      BasicBlock *LoadBB = BasicBlock::Create(
+          C, "cj.loadbadmask.present", CheckBB->getParent(), MergeBB);
+
+      Instruction *OldTerminator = CheckBB->getTerminator();
+      IRBuilder<NoFolder> CheckBuilder(OldTerminator);
+      Value *IsPresent =
+          CheckBuilder.CreateIsNotNull(MaskGV, "cj.loadbadmask.ispresent");
+      cast<Instruction>(IsPresent)->setDebugLoc(*Loc);
+      Instruction *CheckBranch =
+          CheckBuilder.CreateCondBr(IsPresent, LoadBB, MergeBB);
+      CheckBranch->setDebugLoc(*Loc);
+      OldTerminator->eraseFromParent();
+
+      IRBuilder<> LoadBuilder(LoadBB);
+      Value *RuntimeMask =
+          LoadBuilder.CreateLoad(I64, MaskGV, "cj.loadbadmask.runtime");
+      cast<Instruction>(RuntimeMask)->setDebugLoc(*Loc);
+      Instruction *LoadBranch = LoadBuilder.CreateBr(MergeBB);
+      LoadBranch->setDebugLoc(*Loc);
+
+      IRBuilder<> MergeBuilder(&*MergeBB->getFirstInsertionPt());
+      PHINode *MaskPhi = MergeBuilder.CreatePHI(I64, 2, "cj.loadbadmask");
+      MaskPhi->setDebugLoc(*Loc);
+      MaskPhi->addIncoming(RuntimeMask, LoadBB);
+      MaskPhi->addIncoming(
+          ConstantInt::get(I64, UINT64_C(0xffff000000000000)), CheckBB);
+      Mask = MaskPhi;
+      Builder.SetInsertPoint(MergeBB, MergeBB->getFirstInsertionPt());
+    }
     Value *Bad = Builder.CreateAnd(TagPtr, Mask);
     cast<Instruction>(Bad)->setDebugLoc(*Loc);
     Value *CmpEQ = Builder.CreateICmpEQ(Bad, ConstantInt::get(I64, (uint64_t)0));
     cast<Instruction>(CmpEQ)->setDebugLoc(*Loc);
     return CmpEQ;
+  }
+
+  GlobalVariable *getWeakLoadBadMask(Type *I64) {
+    GlobalVariable *MaskGV = M->getNamedGlobal("g_cjLoadBadMask");
+    if (!MaskGV)
+      return new GlobalVariable(*M, I64, false,
+                                GlobalValue::ExternalWeakLinkage, nullptr,
+                                "g_cjLoadBadMask");
+
+    if (MaskGV->getValueType() != I64)
+      report_fatal_error(
+          "g_cjLoadBadMask has a type incompatible with the read barrier");
+    if (!MaskGV->isDeclaration())
+      report_fatal_error(
+          "g_cjLoadBadMask must remain a declaration in weak-mask mode");
+    if (MaskGV->hasExternalLinkage()) {
+      if (!MaskGV->use_empty())
+        report_fatal_error(
+            "g_cjLoadBadMask already has strong uses in weak-mask mode");
+      MaskGV->setLinkage(GlobalValue::ExternalWeakLinkage);
+    } else if (!MaskGV->hasExternalWeakLinkage()) {
+      report_fatal_error(
+          "g_cjLoadBadMask has incompatible linkage in weak-mask mode");
+    }
+    return MaskGV;
   }
 
   // preBB:
