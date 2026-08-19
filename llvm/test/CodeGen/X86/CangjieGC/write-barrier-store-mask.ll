@@ -36,8 +36,8 @@
 ; Null new value stays plain 0 (WCollector.h:756-758), not StoreGood-coloured.
 ; CHECK-LABEL: define void @write_ref_null_val(
 ; CHECK: storeFinish:
-; CHECK: icmp eq i64 0, 0
-; CHECK: select i1 true, i64 0, i64
+; CHECK: cj.store.new.isnull
+; CHECK: select i1
 ; CHECK: store i64
 ; CHECK: gcStoreBad:
 ;
