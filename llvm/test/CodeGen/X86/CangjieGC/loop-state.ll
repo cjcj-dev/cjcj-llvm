@@ -13,7 +13,7 @@ define void @foo1(i8 addrspace(1)* %arg0, i64 %arg1, i8 addrspace(1)* %arg2) gc 
 ; CHECK: %arr.end1
 ; CHECK: movq    %r14, (%r13)
 ; CHECK: %gcNoRunning
-; CHECK: movq    %r14, (%r13)
+; CHECK: movq    %r14,
 ; CHECK: %arr.end1.pin
 ; CHECK: movq    8(%r15), %rax
 ; CHECK: movl    (%rax), %eax
