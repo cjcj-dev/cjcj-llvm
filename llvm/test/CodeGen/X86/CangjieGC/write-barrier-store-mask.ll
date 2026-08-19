@@ -75,7 +75,29 @@ entry:
   ret void
 }
 
+; Load-then-store: store NewVal is a gcread result. Read lowering must run
+; first so ptrtoint sees the load phi, not a still-live gcread call
+; (std.core Error.init Verifier crash).
+; CHECK-LABEL: define void @write_loaded_ref(
+; CHECK: gcNoMarked:
+; CHECK: gcStoreGood:
+; CHECK: gcStoreBad:
+; CHECK: call void @CJ_MCC_WriteRefField
+define void @write_loaded_ref(i8 addrspace(1)* %srcobj,
+                              i8 addrspace(1)* addrspace(1)* %srcfield,
+                              i8 addrspace(1)* %dstobj,
+                              i8 addrspace(1)* addrspace(1)* %dstfield) gc "cangjie" {
+entry:
+  %val = call i8 addrspace(1)* @llvm.cj.gcread.ref(
+      i8 addrspace(1)* %srcobj, i8 addrspace(1)* addrspace(1)* %srcfield)
+  call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val, i8 addrspace(1)* %dstobj,
+                                 i8 addrspace(1)* addrspace(1)* %dstfield)
+  ret void
+}
+
 declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*,
                                   i8 addrspace(1)* addrspace(1)*)
+declare i8 addrspace(1)* @llvm.cj.gcread.ref(
+    i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*)
 declare void @llvm.cj.atomic.store(i8 addrspace(1)*, i8 addrspace(1)*,
                                    i8 addrspace(1)* addrspace(1)*, i32)

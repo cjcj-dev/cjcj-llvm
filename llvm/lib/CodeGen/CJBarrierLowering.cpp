@@ -1469,8 +1469,12 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
   }
 
   if (OptLevel != CodeGenOpt::None) {
-    writeBarrierFastPath(F, Barriers);
+    // Load first: store fast path ptrtoint's the new SSA value. A still-live
+    // llvm.cj.gcread.* is later split into a phi; using it as store NewVal
+    // leaves a non-dominated operand (Verifier GEP crash on std.core Error.init).
+    // After read lowering, gcwrite's value operand is already the load phi.
     readBarrierFastPath(F, Barriers);
+    writeBarrierFastPath(F, Barriers);
   }
   doLowering(F);
   return true;
