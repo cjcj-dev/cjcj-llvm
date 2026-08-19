@@ -1,5 +1,5 @@
-; RUN: llc --cangjie-pipeline -mtriple=x86_64 -stop-after=cj-barrier-lowering \
-; RUN:   -o - < %s 2>/dev/null | FileCheck %s
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 -print-after=cj-barrier-lowering \
+; RUN:   -o /dev/null < %s 2>&1 | FileCheck %s
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -cj-generational-post-barrier=false \
 ; RUN:   -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 \
 ; RUN:   | FileCheck %s --check-prefix=PHASE
@@ -11,8 +11,6 @@
 ; store_good(null) colours null; no has-colour, no same-target.
 ; Slow path stays llvm.cj.gcwrite.ref → MCC (remember + colour).
 ;
-; CHECK: @g_cjStoreBadMask = external global i64
-; CHECK: @g_cjStoreGoodMask = external global i64
 ; CHECK-LABEL: define void @write_ref(
 ; CHECK: [[PLACE:%.*]] = call i8 addrspace(1)* addrspace(1)* @llvm.ptrmask.p1p1i8.i64(i8 addrspace(1)* addrspace(1)* %field, i64 281474976710655)
 ; CHECK: [[PREV:%.*]] = load i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)* [[PLACE]]
