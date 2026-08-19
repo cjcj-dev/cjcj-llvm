@@ -25,9 +25,8 @@
 ; CHECK: [[SAME:%.*]] = icmp eq i64 [[PREV_ADDR]], [[NEW_ADDR]]
 ; CHECK: [[GOOD:%.*]] = and i1 [[COLOUR_OK]], [[HAS_COLOUR]]
 ; CHECK: [[FAST:%.*]] = and i1 [[GOOD]], [[SAME]]
-; CHECK: br i1 [[FAST]], label %gcStoreGood, label %gcStoreBad
-; CHECK: gcStoreGood:
-; CHECK-NEXT: br label %storeFinish
+; CHECK: [[SLOW:%.*]] = xor i1 [[FAST]], true
+; CHECK: br i1 [[SLOW]], label %gcStoreBad, label %storeFinish
 ; CHECK: gcStoreBad:
 ; CHECK: call void @CJ_MCC_WriteRefField
 ; CHECK: storeFinish:
@@ -80,7 +79,6 @@ entry:
 ; (std.core Error.init Verifier crash).
 ; CHECK-LABEL: define void @write_loaded_ref(
 ; CHECK: gcNoMarked:
-; CHECK: gcStoreGood:
 ; CHECK: gcStoreBad:
 ; CHECK: call void @CJ_MCC_WriteRefField
 define void @write_loaded_ref(i8 addrspace(1)* %srcobj,

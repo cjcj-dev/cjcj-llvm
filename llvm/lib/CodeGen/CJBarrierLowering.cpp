@@ -31,6 +31,7 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -874,33 +875,19 @@ public:
     Fast = Builder.CreateAnd(Fast, Same, "cj.store.fast");
     cast<Instruction>(Fast)->setDebugLoc(DL);
 
-    splitFastPathAndSlowPath(CI, Fast, DL);
-  }
-
-private:
-  //   br i1 %fast, label %gcStoreGood, label %gcStoreBad
-  // gcStoreGood:
-  //   br label %storeFinish          ; slot already store-good for this target
-  // gcStoreBad:
-  //   call @llvm.cj.gcwrite.ref      ; MCC remember + colour
-  //   br label %storeFinish
-  void splitFastPathAndSlowPath(CallInst *CI, Value *FastCond,
-                                const DebugLoc &DL) {
-    BasicBlock *SplitBB = CI->getParent();
-    BasicBlock *Slow = SplitBB->splitBasicBlock(CI, "gcStoreBad");
-    BasicBlock *Succ =
-        Slow->splitBasicBlock(CI->getNextNode(), "storeFinish");
-    BasicBlock *FastBB =
-        BasicBlock::Create(C, "gcStoreGood", SplitBB->getParent(), Succ);
-    BranchInst::Create(Succ, FastBB);
-
-    Instruction *OriginBr = SplitBB->getTerminator();
-    IRBuilder<> BuilderBr(OriginBr);
-    Instruction *Br = BuilderBr.CreateCondBr(FastCond, FastBB, Slow);
-    Br->setDebugLoc(DL);
-    OriginBr->eraseFromParent();
-    FastBB->getTerminator()->setDebugLoc(DL);
-    Slow->getTerminator()->setDebugLoc(DL);
+    // SplitBlockAndInsertIfThen keeps SplitBefore (the gcwrite) as the merge
+    // head. Invert so the Then block is the MCC slow path; the fallthrough is
+    // the empty store-good arm. Manual splitBasicBlock(CI->getNextNode())
+    // asserted on a terminator and, with assertions off, left a broken
+    // statepoint for Verifier to crash on (std.core Error.init).
+    Value *Slow = Builder.CreateNot(Fast, "cj.store.slow");
+    cast<Instruction>(Slow)->setDebugLoc(DL);
+    Instruction *ThenTerm =
+        SplitBlockAndInsertIfThen(Slow, CI, /*Unreachable=*/false);
+    ThenTerm->setDebugLoc(DL);
+    ThenTerm->getParent()->setName("gcStoreBad");
+    CI->moveBefore(ThenTerm);
+    CI->getParent()->setName("storeFinish");
   }
 
   Module *M;

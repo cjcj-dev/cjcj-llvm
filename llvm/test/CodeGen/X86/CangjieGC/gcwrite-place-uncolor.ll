@@ -10,7 +10,6 @@ define void @write_ref_place(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
 ; CHECK: [[PLACE_PLAIN:%.*]] = call i8 addrspace(1)* addrspace(1)* @llvm.ptrmask.p1p1i8.i64(i8 addrspace(1)* addrspace(1)* %field, i64 281474976710655)
 ; CHECK: load i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)* [[PLACE_PLAIN]]
 ; CHECK: load i64, i64* @g_cjStoreBadMask
-; CHECK: gcStoreGood:
 ; CHECK: gcStoreBad:
 ; CHECK: call void @CJ_MCC_WriteRefField
 entry:
