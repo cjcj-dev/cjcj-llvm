@@ -19,10 +19,9 @@
 ; CHECK: [[COLOUR_OK:%.*]] = icmp eq i64 [[BAD]], 0
 ; CHECK: [[META:%.*]] = and i64 [[PREV_I]], -281474976710656
 ; CHECK: [[HAS_COLOUR:%.*]] = icmp ne i64 [[META]], 0
-; CHECK: [[NEW_I:%.*]] = ptrtoint i8 addrspace(1)* %val to i64
-; CHECK: [[PREV_ADDR:%.*]] = and i64 [[PREV_I]], 281474976710655
-; CHECK: [[NEW_ADDR:%.*]] = and i64 [[NEW_I]], 281474976710655
-; CHECK: [[SAME:%.*]] = icmp eq i64 [[PREV_ADDR]], [[NEW_ADDR]]
+; CHECK: [[PREV_PLAIN:%.*]] = call i8 addrspace(1)* @llvm.ptrmask.p1i8.i64(i8 addrspace(1)* [[PREV]], i64 281474976710655)
+; CHECK: [[NEW_PLAIN:%.*]] = call i8 addrspace(1)* @llvm.ptrmask.p1i8.i64(i8 addrspace(1)* %val, i64 281474976710655)
+; CHECK: [[SAME:%.*]] = icmp eq i8 addrspace(1)* [[PREV_PLAIN]], [[NEW_PLAIN]]
 ; CHECK: [[GOOD:%.*]] = and i1 [[COLOUR_OK]], [[HAS_COLOUR]]
 ; CHECK: [[FAST:%.*]] = and i1 [[GOOD]], [[SAME]]
 ; CHECK: [[SLOW:%.*]] = xor i1 [[FAST]], true
