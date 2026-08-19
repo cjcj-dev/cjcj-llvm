@@ -6,9 +6,9 @@
 
 ; Z-2 / llstore3: heap ref store fast path tests the *slot* (prev) against
 ; g_cjStoreBadMask only (zBarrierSetAssembler_x86.cpp:358-374). Hit arm is
-; color_store_good: ptrmask-peel new, OR g_cjStoreGoodMask, bare store
-; (zBarrier.inline.hpp:448-450 / zAddress.inline.hpp:806-808). ZGC
-; store_good(null) colours null; no has-colour, no same-target.
+; color_store_good: ptrmask-peel new, OR g_cjStoreGoodMask unless new is
+; null (WCollector.h:756-758 GetAndTryTagRefField(nullptr) stays plain).
+; Store the word as i64. No has-colour, no same-target.
 ; Slow path stays llvm.cj.gcwrite.ref → MCC (remember + colour).
 ;
 ; CHECK-LABEL: define void @write_ref(
@@ -26,10 +26,20 @@
 ; CHECK: [[NEW_I:%.*]] = ptrtoint i8 addrspace(1)* [[NEW_PLAIN]] to i64
 ; CHECK: [[GOODMASK:%.*]] = load i64, i64* @g_cjStoreGoodMask
 ; CHECK: [[COLORED_I:%.*]] = or i64 [[NEW_I]], [[GOODMASK]]
-; CHECK: [[COLORED:%.*]] = inttoptr i64 [[COLORED_I]] to i8 addrspace(1)*
-; CHECK: store i8 addrspace(1)* [[COLORED]], i8 addrspace(1)* addrspace(1)* [[PLACE]]
+; CHECK: [[ISNULL:%.*]] = icmp eq i64 [[NEW_I]], 0
+; CHECK: [[WORD:%.*]] = select i1 [[ISNULL]], i64 [[NEW_I]], i64 [[COLORED_I]]
+; CHECK: [[PLACE_I64:%.*]] = bitcast i8 addrspace(1)* addrspace(1)* [[PLACE]] to i64 addrspace(1)*
+; CHECK: store i64 [[WORD]], i64 addrspace(1)* [[PLACE_I64]]
 ; CHECK: gcStoreBad:
 ; CHECK: call void @CJ_MCC_WriteRefField
+;
+; Null new value stays plain 0 (WCollector.h:756-758), not StoreGood-coloured.
+; CHECK-LABEL: define void @write_ref_null_val(
+; CHECK: storeFinish:
+; CHECK: icmp eq i64 0, 0
+; CHECK: select i1 true, i64 0, i64
+; CHECK: store i64
+; CHECK: gcStoreBad:
 ;
 ; Compile-time-provable null-base (stack/AS0 contract) stays a plain store.
 ; CHECK-LABEL: define void @write_ref_null_base(
@@ -54,6 +64,14 @@ define void @write_ref(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
                        i8 addrspace(1)* addrspace(1)* %field) gc "cangjie" {
 entry:
   call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
+                                 i8 addrspace(1)* addrspace(1)* %field)
+  ret void
+}
+
+define void @write_ref_null_val(i8 addrspace(1)* %base,
+                                i8 addrspace(1)* addrspace(1)* %field) gc "cangjie" {
+entry:
+  call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* null, i8 addrspace(1)* %base,
                                  i8 addrspace(1)* addrspace(1)* %field)
   ret void
 }

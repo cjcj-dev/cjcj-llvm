@@ -823,10 +823,12 @@ private:
 // store. There is no has-colour and no same-target: ZGC first-write of a
 // zeroed slot is (0 & StoreBad)==0 and still paints store-good.
 //
-// Hit arm: ptrmask-peel new, OR g_cjStoreGoodMask, bare store. ZGC
-// store_good(null) colours null (color(0, StoreGoodMask)); store_good_or_null
-// is a different helper and is not the store-barrier colourer. Miss arm keeps
-// llvm.cj.gcwrite.ref for doLowering → MCC (remember + ColourStoreGood).
+// Hit arm: ptrmask-peel new, OR g_cjStoreGoodMask, i64 store.
+// Null stays plain 0: our GetAndTryTagRefField(nullptr) returns an uncoloured
+// field (WCollector.h:756-758). ZGC store_good(null) colours 0, but we have
+// no is_null_any — colouring null is 0x151… (whozero site 56 poison).
+// Store the word as i64 so a later GEP cannot reuse the coloured pointer.
+// Miss arm keeps llvm.cj.gcwrite.ref for doLowering → MCC.
 class WriteBarrier {
 public:
   explicit WriteBarrier(Function &F) : M(F.getParent()), C(F.getContext()) {}
@@ -866,7 +868,7 @@ public:
     ThenTerm->getParent()->setName("storeFinish");
     ElseTerm->getParent()->setName("gcStoreBad");
 
-    // Hit arm: ptrmask-peel new, OR StoreGood, bare store.
+    // Hit arm: ptrmask-peel new, OR StoreGood unless new is null.
     // ptrmask NewVal rather than ptrtoint(NewVal): ptrtoint of a load-barrier
     // phi corrupts later GEPs (std.core Error.init).
     IRBuilder<> FastBuilder(ThenTerm);
@@ -879,11 +881,18 @@ public:
     Value *ColoredI =
         FastBuilder.CreateOr(NewI, GoodMask, "cj.store.colored.i");
     cast<Instruction>(ColoredI)->setDebugLoc(DL);
-    Value *Colored =
-        FastBuilder.CreateIntToPtr(ColoredI, NewVal->getType(),
-                                   "cj.store.colored");
-    cast<Instruction>(Colored)->setDebugLoc(DL);
-    StoreInst *St = FastBuilder.CreateStore(Colored, Place);
+    Value *IsNull = FastBuilder.CreateICmpEQ(
+        NewI, ConstantInt::get(I64, (uint64_t)0), "cj.store.new.isnull");
+    cast<Instruction>(IsNull)->setDebugLoc(DL);
+    Value *Word = FastBuilder.CreateSelect(IsNull, NewI, ColoredI,
+                                           "cj.store.word");
+    cast<Instruction>(Word)->setDebugLoc(DL);
+    unsigned PlaceAS = Place->getType()->getPointerAddressSpace();
+    Value *PlaceI64 = FastBuilder.CreateBitCast(
+        Place, PointerType::get(I64, PlaceAS), "cj.store.place.i64");
+    if (auto *BC = dyn_cast<Instruction>(PlaceI64))
+      BC->setDebugLoc(DL);
+    StoreInst *St = FastBuilder.CreateStore(Word, PlaceI64);
     St->setDebugLoc(DL);
 
     CI->moveBefore(ElseTerm);
