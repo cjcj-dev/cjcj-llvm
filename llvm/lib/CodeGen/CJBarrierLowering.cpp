@@ -1198,6 +1198,21 @@ void CJBarrierLowering::writeBarrierFastPath(Function &F,
         continue;
       WB.storeFastPath(CI);
     }
+    // storeFastPath splits the write (zBarrierSetAssembler_x86.cpp:358-374).
+    // checkLoopBarrier still calls simplifyLoop whenever EnableGCStateLoop,
+    // even if the clone is skipped (EnableGenerationalPostBarrier). Rebuild
+    // DT/LI/SE so LoopSimplify does not walk a stale tree.
+    if (EnableGCStateLoop) {
+      if (auto *DTWP = getAnalysisIfAvailable<DominatorTreeWrapperPass>()) {
+        auto &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
+        SE.forgetAllLoops();
+        DominatorTree &DT = DTWP->getDomTree();
+        DT.recalculate(F);
+        LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+        LI.releaseMemory();
+        LI.analyze(DT);
+      }
+    }
   }
 
   if (!EnableGCPhase || CangjieJIT)

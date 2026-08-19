@@ -1,4 +1,5 @@
-; RUN: llc --cangjie-pipeline -mtriple=x86_64 -cj-gcstate-dup-loop=true < %s | FileCheck %s
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 -cj-gcstate-dup-loop=true \
+; RUN:   -cj-generational-post-barrier=false < %s | FileCheck %s
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -cj-gcstate-dup-loop=true \
 ; RUN:   -cj-generational-post-barrier -print-after=cj-barrier-lowering \
 ; RUN:   -o /dev/null < %s 2>&1 | FileCheck %s --check-prefix=GEN
