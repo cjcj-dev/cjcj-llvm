@@ -879,12 +879,16 @@ public:
     // (terminator-unsafe with assertions off).
     Value *Slow = Builder.CreateNot(Fast, "cj.store.slow");
     cast<Instruction>(Slow)->setDebugLoc(DL);
+    // Split at CI: Tail starts with the gcwrite, Then is empty.
+    // Name Tail first, then move the gcwrite into Then so MCC lives in
+    // gcStoreBad (zBarrier.inline.hpp:703 medium/slow). Renaming after the
+    // move would retag Then as storeFinish.
     Instruction *ThenTerm =
         SplitBlockAndInsertIfThen(Slow, CI, /*Unreachable=*/false);
     ThenTerm->setDebugLoc(DL);
+    CI->getParent()->setName("storeFinish");
     ThenTerm->getParent()->setName("gcStoreBad");
     CI->moveBefore(ThenTerm);
-    CI->getParent()->setName("storeFinish");
   }
 
   Module *M;
