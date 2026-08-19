@@ -22,6 +22,9 @@ define void @foo1(i8 addrspace(1)* %arg0, i64 %arg1, i8 addrspace(1)* %arg2) gc 
 ; GEN-LABEL: define void @foo1
 ; GEN-NOT: .pin
 ; GEN-NOT: gcNoRunning
+; GEN: load i64, i64* @g_cjStoreBadMask
+; GEN: gcStoreGood:
+; GEN: gcStoreBad:
 ; GEN: call void @CJ_MCC_WriteRefField
 ; GEN: ret void
 

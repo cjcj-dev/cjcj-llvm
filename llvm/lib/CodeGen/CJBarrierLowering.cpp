@@ -51,12 +51,14 @@ static cl::opt<bool> EnableGCFastPath("enable-gc-fast-path", cl::init(true),
 static cl::opt<bool> EnableWeakLoadBadMask(
     "cj-weak-load-bad-mask", cl::init(false), cl::Hidden,
     cl::desc("Make g_cjLoadBadMask optional with the legacy mask as fallback"));
-// wbclose2 / WRITE_SIDE_CLOSURE Phase2: default ON so Idle (phase<=INIT)
-// heap ref/struct/array/atomic-store writes stay on the MCC path and call
-// RecordCrossGenEdge. Off only for non-GC / explicit opt-out consumers.
+// wbclose2 / WRITE_SIDE_CLOSURE Phase2 + llstore (Z-2): default ON.
+// Heap struct/array/atomic-store writes stay on the MCC path.
+// Scalar heap ref writes take the ZGC store-good colour fast path
+// (g_cjStoreBadMask, phase-independent) instead of the Idle bare store.
+// Off only for non-GC / explicit opt-out consumers.
 static cl::opt<bool> EnableGenerationalPostBarrier(
     "cj-generational-post-barrier", cl::init(true), cl::Hidden,
-    cl::desc("Keep heap writes on the runtime barrier path"));
+    cl::desc("Colour-test heap ref stores; keep bulk/atomic on the runtime path"));
 static cl::opt<bool> EnableGCStateLoop("cj-gcstate-dup-loop", cl::init(false),
                                        cl::ReallyHidden);
 
@@ -807,6 +809,104 @@ private:
   const DebugLoc *Loc = nullptr;
 };
 
+// ZGC store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-706) plus
+// Collector.h:265 is_store_good / Barrier.cpp:121 PrevIsStoreGoodForTarget.
+//
+// Fast path is phase-independent: test the *slot* (prev), not the new SSA
+// value. Compiler new values are uncoloured (load fast path peels colour),
+// so testing the new value against g_cjStoreBadMask is (plain & mask)==0
+// and would restore the Idle bare store that Z-2 is closing.
+//
+// Slow path keeps llvm.cj.gcwrite.ref for doLowering → MCC (remember +
+// colour). Fast path is only the redundant same-target store-good rewrite,
+// which stores prev so the slot keeps its colour (no g_cjStoreGoodMask
+// export to paint a new value).
+class WriteBarrier {
+public:
+  explicit WriteBarrier(Function &F) : M(F.getParent()), C(F.getContext()) {}
+
+  void storeFastPath(CallInst *CI) {
+    Value *NewVal = getValueArg(CI);
+    Value *FieldPtr = getPointerArg(CI);
+    const DebugLoc &DL = CI->getDebugLoc();
+    Type *I64 = Type::getInt64Ty(C);
+
+    IRBuilder<> Builder(CI);
+    Value *Place = uncolorIfGCPtr(FieldPtr, Builder);
+    LoadInst *Prev = Builder.CreateLoad(NewVal->getType(), Place, "cj.store.prev");
+    Prev->setDebugLoc(DL);
+    Value *PrevI = Builder.CreatePtrToInt(Prev, I64, "cj.store.prev.i");
+    cast<Instruction>(PrevI)->setDebugLoc(DL);
+
+    Constant *MaskGV = M->getOrInsertGlobal("g_cjStoreBadMask", I64);
+    Value *Mask = Builder.CreateLoad(I64, MaskGV, "cj.storebadmask");
+    cast<Instruction>(Mask)->setDebugLoc(DL);
+    Value *Bad = Builder.CreateAnd(PrevI, Mask, "cj.store.bad");
+    cast<Instruction>(Bad)->setDebugLoc(DL);
+    Value *ColourOk =
+        Builder.CreateICmpEQ(Bad, ConstantInt::get(I64, (uint64_t)0),
+                             "cj.store.colourok");
+    cast<Instruction>(ColourOk)->setDebugLoc(DL);
+
+    // Collector.h:265: is_store_good rejects null and plain (mask-only would
+    // admit them; ZGC never stores plains, we still do on recycled slots).
+    constexpr uint64_t AddressMask = (uint64_t(1) << 48) - 1;
+    Value *Meta = Builder.CreateAnd(
+        PrevI, ConstantInt::get(I64, ~AddressMask), "cj.store.meta");
+    cast<Instruction>(Meta)->setDebugLoc(DL);
+    Value *HasColour = Builder.CreateICmpNE(
+        Meta, ConstantInt::get(I64, (uint64_t)0), "cj.store.hascolour");
+    cast<Instruction>(HasColour)->setDebugLoc(DL);
+
+    Value *NewI = Builder.CreatePtrToInt(NewVal, I64, "cj.store.new.i");
+    cast<Instruction>(NewI)->setDebugLoc(DL);
+    Value *PrevAddr = Builder.CreateAnd(
+        PrevI, ConstantInt::get(I64, AddressMask), "cj.store.prev.addr");
+    cast<Instruction>(PrevAddr)->setDebugLoc(DL);
+    Value *NewAddr = Builder.CreateAnd(
+        NewI, ConstantInt::get(I64, AddressMask), "cj.store.new.addr");
+    cast<Instruction>(NewAddr)->setDebugLoc(DL);
+    Value *Same = Builder.CreateICmpEQ(PrevAddr, NewAddr, "cj.store.same");
+    cast<Instruction>(Same)->setDebugLoc(DL);
+
+    Value *Fast = Builder.CreateAnd(ColourOk, HasColour, "cj.store.good");
+    cast<Instruction>(Fast)->setDebugLoc(DL);
+    Fast = Builder.CreateAnd(Fast, Same, "cj.store.fast");
+    cast<Instruction>(Fast)->setDebugLoc(DL);
+
+    splitFastPathAndSlowPath(CI, Fast, DL);
+  }
+
+private:
+  //   br i1 %fast, label %gcStoreGood, label %gcStoreBad
+  // gcStoreGood:
+  //   br label %storeFinish          ; slot already store-good for this target
+  // gcStoreBad:
+  //   call @llvm.cj.gcwrite.ref      ; MCC remember + colour
+  //   br label %storeFinish
+  void splitFastPathAndSlowPath(CallInst *CI, Value *FastCond,
+                                const DebugLoc &DL) {
+    BasicBlock *SplitBB = CI->getParent();
+    BasicBlock *Slow = SplitBB->splitBasicBlock(CI, "gcStoreBad");
+    BasicBlock *Succ =
+        Slow->splitBasicBlock(CI->getNextNode(), "storeFinish");
+    BasicBlock *FastBB =
+        BasicBlock::Create(C, "gcStoreGood", SplitBB->getParent(), Succ);
+    BranchInst::Create(Succ, FastBB);
+
+    Instruction *OriginBr = SplitBB->getTerminator();
+    IRBuilder<> BuilderBr(OriginBr);
+    Instruction *Br = BuilderBr.CreateCondBr(FastCond, FastBB, Slow);
+    Br->setDebugLoc(DL);
+    OriginBr->eraseFromParent();
+    FastBB->getTerminator()->setDebugLoc(DL);
+    Slow->getTerminator()->setDebugLoc(DL);
+  }
+
+  Module *M;
+  LLVMContext &C;
+};
+
 /// CJBarrierLowering - This pass rewrites calls to the llvm.gcread or
 /// llvm.gcwrite intrinsics, replacing them with simple loads and stores as
 /// directed by the GCStrategy. It also performs automatic root initialization
@@ -1101,6 +1201,19 @@ static void checkLoopBarrier(Function &F, LoopInfo &LI, DominatorTree &DT,
 
 void CJBarrierLowering::writeBarrierFastPath(Function &F,
                                              SetVector<CallInst *> &Barriers) {
+  if (EnableGenerationalPostBarrier && EnableTaggedPointer && !CangjieJIT) {
+    WriteBarrier WB(F);
+    for (CallInst *CI : Barriers) {
+      if (!CI->getParent())
+        continue;
+      if (CI->getIntrinsicID() != Intrinsic::cj_gcwrite_ref)
+        continue;
+      if (isa<ConstantPointerNull>(getBaseObj(CI)))
+        continue;
+      WB.storeFastPath(CI);
+    }
+  }
+
   if (!EnableGCPhase || CangjieJIT)
     return;
 
@@ -1137,6 +1250,8 @@ void CJBarrierLowering::readBarrierFastPath(Function &F,
 
   ReadBarrier RB(F);
   for (CallInst *CI : Barriers) {
+    if (!CI->getParent())
+      continue;
     unsigned ID = CI->getIntrinsicID();
     if (ID == Intrinsic::cj_gcread_ref ||
         ID == Intrinsic::cj_gcread_static_ref) {
