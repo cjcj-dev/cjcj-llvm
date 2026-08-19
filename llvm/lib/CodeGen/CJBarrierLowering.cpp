@@ -55,7 +55,8 @@ static cl::opt<bool> EnableWeakLoadBadMask(
 // wbclose2 / WRITE_SIDE_CLOSURE Phase2 + llstore (Z-2): default ON.
 // Heap struct/array/atomic-store writes stay on the MCC path.
 // Scalar heap ref writes take the ZGC store-good colour fast path
-// (g_cjStoreBadMask, phase-independent) instead of the Idle bare store.
+// (test slot vs g_cjStoreBadMask, then OR g_cjStoreGoodMask) instead of
+// the Idle bare store.
 // Off only for non-GC / explicit opt-out consumers.
 static cl::opt<bool> EnableGenerationalPostBarrier(
     "cj-generational-post-barrier", cl::init(true), cl::Hidden,
@@ -811,17 +812,21 @@ private:
 };
 
 // ZGC store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-706) plus
-// Collector.h:265 is_store_good / Barrier.cpp:121 PrevIsStoreGoodForTarget.
+// x86 emit_store_fast_path_check (zBarrierSetAssembler_x86.cpp:358-374):
+//   testl ref_addr, StoreBad; jcc nz, medium
+// and color_store_good (zBarrier.inline.hpp:448-450) =
+//   ZAddress::store_good(new) (zAddress.inline.hpp:806-808).
 //
-// Fast path is phase-independent: test the *slot* (prev), not the new SSA
-// value. Compiler new values are uncoloured (load fast path peels colour),
-// so testing the new value against g_cjStoreBadMask is (plain & mask)==0
-// and would restore the Idle bare store that Z-2 is closing.
+// Fast path is phase-independent: test the *slot* (prev) only.
+// Compiler new values are uncoloured (load fast path peels colour), so a
+// value-side StoreBad test would be (plain & mask)==0 and restore Idle bare
+// store. There is no has-colour and no same-target: ZGC first-write of a
+// zeroed slot is (0 & StoreBad)==0 and still paints store-good.
 //
-// Slow path keeps llvm.cj.gcwrite.ref for doLowering → MCC (remember +
-// colour). Fast path is only the redundant same-target store-good rewrite,
-// which stores prev so the slot keeps its colour (no g_cjStoreGoodMask
-// export to paint a new value).
+// Hit arm: ptrmask-peel new, OR g_cjStoreGoodMask, bare store. ZGC
+// store_good(null) colours null (color(0, StoreGoodMask)); store_good_or_null
+// is a different helper and is not the store-barrier colourer. Miss arm keeps
+// llvm.cj.gcwrite.ref for doLowering → MCC (remember + ColourStoreGood).
 class WriteBarrier {
 public:
   explicit WriteBarrier(Function &F) : M(F.getParent()), C(F.getContext()) {}
@@ -849,46 +854,39 @@ public:
                              "cj.store.colourok");
     cast<Instruction>(ColourOk)->setDebugLoc(DL);
 
-    // Collector.h:265: is_store_good rejects null and plain (mask-only would
-    // admit them; ZGC never stores plains, we still do on recycled slots).
-    constexpr uint64_t AddressMask = (uint64_t(1) << 48) - 1;
-    Value *Meta = Builder.CreateAnd(
-        PrevI, ConstantInt::get(I64, ~AddressMask), "cj.store.meta");
-    cast<Instruction>(Meta)->setDebugLoc(DL);
-    Value *HasColour = Builder.CreateICmpNE(
-        Meta, ConstantInt::get(I64, (uint64_t)0), "cj.store.hascolour");
-    cast<Instruction>(HasColour)->setDebugLoc(DL);
-
-    // Same-target: peel both via ptrmask then pointer icmp. ptrtoint(NewVal)
-    // when NewVal is the load-barrier phi corrupts later GEPs in this function
-    // (Verifier crash printing std.core Error.init statepoint). Load of prev
-    // is a fresh LoadInst and can stay ptrtoint for the colour test.
-    Value *PrevPlain = uncolorIfGCPtr(Prev, Builder);
-    Value *NewPlain = uncolorIfGCPtr(NewVal, Builder);
-    Value *Same = Builder.CreateICmpEQ(PrevPlain, NewPlain, "cj.store.same");
-    cast<Instruction>(Same)->setDebugLoc(DL);
-
-    Value *Fast = Builder.CreateAnd(ColourOk, HasColour, "cj.store.good");
-    cast<Instruction>(Fast)->setDebugLoc(DL);
-    Fast = Builder.CreateAnd(Fast, Same, "cj.store.fast");
-    cast<Instruction>(Fast)->setDebugLoc(DL);
-
-    // Then = MCC slow path; Tail = rest of the original block (store-good
-    // fallthrough). SplitBlockAndInsertIfThen splits at CI so the gcwrite
-    // starts Tail; move it into Then. Do not split at CI->getNextNode()
-    // (terminator-unsafe with assertions off).
-    Value *Slow = Builder.CreateNot(Fast, "cj.store.slow");
-    cast<Instruction>(Slow)->setDebugLoc(DL);
-    // Split at CI: Tail starts with the gcwrite, Then is empty.
-    // Name Tail first, then move the gcwrite into Then so MCC lives in
-    // gcStoreBad (zBarrier.inline.hpp:703 medium/slow). Renaming after the
-    // move would retag Then as storeFinish.
-    Instruction *ThenTerm =
-        SplitBlockAndInsertIfThen(Slow, CI, /*Unreachable=*/false);
+    // Then = color_store_good + bare store (ColourOk); Else = MCC slow path.
+    // SplitBlockAndInsertIfThenElse splits at CI so the gcwrite starts Tail;
+    // move it into Else. Do not split at CI->getNextNode() (terminator-unsafe
+    // with assertions off).
+    Instruction *ThenTerm = nullptr;
+    Instruction *ElseTerm = nullptr;
+    SplitBlockAndInsertIfThenElse(ColourOk, CI, &ThenTerm, &ElseTerm);
     ThenTerm->setDebugLoc(DL);
-    CI->getParent()->setName("storeFinish");
-    ThenTerm->getParent()->setName("gcStoreBad");
-    CI->moveBefore(ThenTerm);
+    ElseTerm->setDebugLoc(DL);
+    ThenTerm->getParent()->setName("storeFinish");
+    ElseTerm->getParent()->setName("gcStoreBad");
+
+    // Hit arm: ptrmask-peel new, OR StoreGood, bare store.
+    // ptrmask NewVal rather than ptrtoint(NewVal): ptrtoint of a load-barrier
+    // phi corrupts later GEPs (std.core Error.init).
+    IRBuilder<> FastBuilder(ThenTerm);
+    Value *NewPlain = uncolorIfGCPtr(NewVal, FastBuilder);
+    Value *NewI = FastBuilder.CreatePtrToInt(NewPlain, I64, "cj.store.new.i");
+    cast<Instruction>(NewI)->setDebugLoc(DL);
+    Constant *GoodGV = M->getOrInsertGlobal("g_cjStoreGoodMask", I64);
+    Value *GoodMask = FastBuilder.CreateLoad(I64, GoodGV, "cj.storegoodmask");
+    cast<Instruction>(GoodMask)->setDebugLoc(DL);
+    Value *ColoredI =
+        FastBuilder.CreateOr(NewI, GoodMask, "cj.store.colored.i");
+    cast<Instruction>(ColoredI)->setDebugLoc(DL);
+    Value *Colored =
+        FastBuilder.CreateIntToPtr(ColoredI, NewVal->getType(),
+                                   "cj.store.colored");
+    cast<Instruction>(Colored)->setDebugLoc(DL);
+    StoreInst *St = FastBuilder.CreateStore(Colored, Place);
+    St->setDebugLoc(DL);
+
+    CI->moveBefore(ElseTerm);
   }
 
   Module *M;
@@ -1457,7 +1455,7 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
   }
 
   if (OptLevel != CodeGenOpt::None) {
-    // Load first: store fast path ptrtoint's the new SSA value. A still-live
+    // Load first: store fast path ptrmask-peels the new SSA value. A still-live
     // llvm.cj.gcread.* is later split into a phi; using it as store NewVal
     // leaves a non-dominated operand (Verifier GEP crash on std.core Error.init).
     // After read lowering, gcwrite's value operand is already the load phi.
