@@ -20,6 +20,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
@@ -875,11 +876,20 @@ public:
     Value *NewPlain = uncolorIfGCPtr(NewVal, FastBuilder);
     Value *NewI = FastBuilder.CreatePtrToInt(NewPlain, I64, "cj.store.new.i");
     cast<Instruction>(NewI)->setDebugLoc(DL);
+    // ptrtoint is a no-op: two-address `or mask, %oop` paints the live
+    // pointer (String.indexOf this=0x151…). Copy to an early-clobber
+    // i64 so the colour never shares the oop register. ZGC keeps the
+    // coloured word only in the stored slot (zAddress.inline.hpp:806).
+    FunctionType *CopyTy = FunctionType::get(I64, {I64}, false);
+    InlineAsm *CopyAsm = InlineAsm::get(CopyTy, "movq $1, $0", "=&r,r",
+                                        /*hasSideEffects=*/false);
+    Value *NewBits = FastBuilder.CreateCall(CopyAsm, NewI, "cj.store.new.bits");
+    cast<CallInst>(NewBits)->setDebugLoc(DL);
     Constant *GoodGV = M->getOrInsertGlobal("g_cjStoreGoodMask", I64);
     Value *GoodMask = FastBuilder.CreateLoad(I64, GoodGV, "cj.storegoodmask");
     cast<Instruction>(GoodMask)->setDebugLoc(DL);
     Value *ColoredI =
-        FastBuilder.CreateOr(NewI, GoodMask, "cj.store.colored.i");
+        FastBuilder.CreateOr(NewBits, GoodMask, "cj.store.colored.i");
     cast<Instruction>(ColoredI)->setDebugLoc(DL);
     Value *IsNull = FastBuilder.CreateICmpEQ(
         NewI, ConstantInt::get(I64, (uint64_t)0), "cj.store.new.isnull");

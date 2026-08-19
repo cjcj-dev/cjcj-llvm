@@ -24,8 +24,9 @@
 ; CHECK: storeFinish:
 ; CHECK: [[NEW_PLAIN:%.*]] = call i8 addrspace(1)* @llvm.ptrmask.p1i8.i64(i8 addrspace(1)* %val, i64 281474976710655)
 ; CHECK: [[NEW_I:%.*]] = ptrtoint i8 addrspace(1)* [[NEW_PLAIN]] to i64
+; CHECK: [[NEW_BITS:%.*]] = call i64 asm "movq $1, $0", "=&r,r"(i64 [[NEW_I]])
 ; CHECK: [[GOODMASK:%.*]] = load i64, i64* @g_cjStoreGoodMask
-; CHECK: [[COLORED_I:%.*]] = or i64 [[NEW_I]], [[GOODMASK]]
+; CHECK: [[COLORED_I:%.*]] = or i64 [[NEW_BITS]], [[GOODMASK]]
 ; CHECK: [[ISNULL:%.*]] = icmp eq i64 [[NEW_I]], 0
 ; CHECK: [[WORD:%.*]] = select i1 [[ISNULL]], i64 [[NEW_I]], i64 [[COLORED_I]]
 ; CHECK: [[PLACE_I64:%.*]] = bitcast i8 addrspace(1)* addrspace(1)* [[PLACE]] to i64 addrspace(1)*
