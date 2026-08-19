@@ -38,7 +38,7 @@
 ; CHECK: storeFinish:
 ; CHECK: cj.store.new.isnull
 ; CHECK: select i1
-; CHECK: store i64
+; CHECK: store volatile i64
 ; CHECK: gcStoreBad:
 ;
 ; Compile-time-provable null-base (stack/AS0 contract) stays a plain store.
