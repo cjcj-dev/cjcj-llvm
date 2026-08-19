@@ -1,8 +1,9 @@
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -print-after=cj-barrier-lowering \
 ; RUN:   -o /dev/null < %s 2>&1 | FileCheck %s
 
-; llstore: heap ref store peels colour from the place before loading prev
-; (same AddressMask as createStoreOrMems / G-A2 place peel). Slow path is MCC.
+; llstore3: heap ref store peels colour from the place before loading prev
+; (same AddressMask as createStoreOrMems / G-A2 place peel). Hit arm ORs
+; g_cjStoreGoodMask; slow path is MCC.
 
 define void @write_ref_place(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
                              i8 addrspace(1)* addrspace(1)* %field) gc "cangjie" {
@@ -10,6 +11,8 @@ define void @write_ref_place(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
 ; CHECK: [[PLACE_PLAIN:%.*]] = call i8 addrspace(1)* addrspace(1)* @llvm.ptrmask.p1p1i8.i64(i8 addrspace(1)* addrspace(1)* %field, i64 281474976710655)
 ; CHECK: load i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)* [[PLACE_PLAIN]]
 ; CHECK: load i64, i64* @g_cjStoreBadMask
+; CHECK: storeFinish:
+; CHECK: load i64, i64* @g_cjStoreGoodMask
 ; CHECK: gcStoreBad:
 ; CHECK: call void @CJ_MCC_WriteRefField
 entry:

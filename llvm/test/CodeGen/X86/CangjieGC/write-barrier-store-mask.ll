@@ -4,12 +4,15 @@
 ; RUN:   -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 \
 ; RUN:   | FileCheck %s --check-prefix=PHASE
 
-; Z-2 / llstore: heap ref store fast path tests the *slot* (prev) against
-; g_cjStoreBadMask (zBarrier.inline.hpp:695-706, Collector.h:265). New SSA
-; values are uncoloured, so a value-side test would restore the Idle bare store.
+; Z-2 / llstore3: heap ref store fast path tests the *slot* (prev) against
+; g_cjStoreBadMask only (zBarrierSetAssembler_x86.cpp:358-374). Hit arm is
+; color_store_good: ptrmask-peel new, OR g_cjStoreGoodMask, bare store
+; (zBarrier.inline.hpp:448-450 / zAddress.inline.hpp:806-808). ZGC
+; store_good(null) colours null; no has-colour, no same-target.
 ; Slow path stays llvm.cj.gcwrite.ref → MCC (remember + colour).
 ;
 ; CHECK: @g_cjStoreBadMask = external global i64
+; CHECK: @g_cjStoreGoodMask = external global i64
 ; CHECK-LABEL: define void @write_ref(
 ; CHECK: [[PLACE:%.*]] = call i8 addrspace(1)* addrspace(1)* @llvm.ptrmask.p1p1i8.i64(i8 addrspace(1)* addrspace(1)* %field, i64 281474976710655)
 ; CHECK: [[PREV:%.*]] = load i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)* [[PLACE]]
@@ -17,23 +20,23 @@
 ; CHECK: [[MASK:%.*]] = load i64, i64* @g_cjStoreBadMask
 ; CHECK: [[BAD:%.*]] = and i64 [[PREV_I]], [[MASK]]
 ; CHECK: [[COLOUR_OK:%.*]] = icmp eq i64 [[BAD]], 0
-; CHECK: [[META:%.*]] = and i64 [[PREV_I]], -281474976710656
-; CHECK: [[HAS_COLOUR:%.*]] = icmp ne i64 [[META]], 0
-; CHECK: [[PREV_PLAIN:%.*]] = call i8 addrspace(1)* @llvm.ptrmask.p1i8.i64(i8 addrspace(1)* [[PREV]], i64 281474976710655)
+; CHECK-NOT: cj.store.hascolour
+; CHECK-NOT: cj.store.same
+; CHECK: br i1 [[COLOUR_OK]], label %storeFinish, label %gcStoreBad
+; CHECK: storeFinish:
 ; CHECK: [[NEW_PLAIN:%.*]] = call i8 addrspace(1)* @llvm.ptrmask.p1i8.i64(i8 addrspace(1)* %val, i64 281474976710655)
-; CHECK: [[SAME:%.*]] = icmp eq i8 addrspace(1)* [[PREV_PLAIN]], [[NEW_PLAIN]]
-; CHECK: [[GOOD:%.*]] = and i1 [[COLOUR_OK]], [[HAS_COLOUR]]
-; CHECK: [[FAST:%.*]] = and i1 [[GOOD]], [[SAME]]
-; CHECK: [[SLOW:%.*]] = xor i1 [[FAST]], true
-; CHECK: br i1 [[SLOW]], label %gcStoreBad, label %storeFinish
+; CHECK: [[NEW_I:%.*]] = ptrtoint i8 addrspace(1)* [[NEW_PLAIN]] to i64
+; CHECK: [[GOODMASK:%.*]] = load i64, i64* @g_cjStoreGoodMask
+; CHECK: [[COLORED_I:%.*]] = or i64 [[NEW_I]], [[GOODMASK]]
+; CHECK: [[COLORED:%.*]] = inttoptr i64 [[COLORED_I]] to i8 addrspace(1)*
+; CHECK: store i8 addrspace(1)* [[COLORED]], i8 addrspace(1)* addrspace(1)* [[PLACE]]
 ; CHECK: gcStoreBad:
 ; CHECK: call void @CJ_MCC_WriteRefField
-; CHECK: storeFinish:
-; CHECK: ret void
 ;
 ; Compile-time-provable null-base (stack/AS0 contract) stays a plain store.
 ; CHECK-LABEL: define void @write_ref_null_base(
 ; CHECK-NOT: g_cjStoreBadMask
+; CHECK-NOT: g_cjStoreGoodMask
 ; CHECK: store i8 addrspace(1)* %val
 ; CHECK-NOT: CJ_MCC_WriteRefField
 ;
@@ -46,6 +49,7 @@
 ; PHASE-LABEL: define void @write_ref(
 ; PHASE: gcNoRunning:
 ; PHASE-NOT: g_cjStoreBadMask
+; PHASE-NOT: g_cjStoreGoodMask
 ; PHASE: gcRunning:
 
 define void @write_ref(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
