@@ -26,6 +26,7 @@
 ; WEAK: cj.loadbadmask.merge:
 ; WEAK-NEXT: [[MASK:%.*]] = phi i64 [ [[RUNTIME_MASK]], %cj.loadbadmask.present ], [ -281474976710656, %entry ]
 ; WEAK-NEXT: [[BAD:%.*]] = and i64 {{%.*}}, [[MASK]]
+; WEAK: load i64, i64* @g_cjStoreBadMask
 ; WEAK: call void @CJ_MCC_WriteRefField
 
 ; ELF: NOTYPE WEAK DEFAULT UND g_cjLoadBadMask
