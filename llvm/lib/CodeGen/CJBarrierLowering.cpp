@@ -1482,14 +1482,13 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
     return Changed;
   }
 
-  if (OptLevel != CodeGenOpt::None) {
-    // Load first: store fast path ptrmask-peels the new SSA value. A still-live
-    // llvm.cj.gcread.* is later split into a phi; using it as store NewVal
-    // leaves a non-dominated operand (Verifier GEP crash on std.core Error.init).
-    // After read lowering, gcwrite's value operand is already the load phi.
-    readBarrierFastPath(F, Barriers);
+  // Load peel is required at every opt level once the store-good hit arm
+  // paints the slot. doLowering's bare gcread would otherwise hand a
+  // coloured oop to the mutator (pinned_boost idle r13=0x151…, si_code=128).
+  // ZGC uncolor is part of every load (zAddress.inline.hpp:609-614).
+  readBarrierFastPath(F, Barriers);
+  if (OptLevel != CodeGenOpt::None)
     writeBarrierFastPath(F, Barriers);
-  }
   doLowering(F);
   return true;
 }
