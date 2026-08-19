@@ -859,15 +859,13 @@ public:
         Meta, ConstantInt::get(I64, (uint64_t)0), "cj.store.hascolour");
     cast<Instruction>(HasColour)->setDebugLoc(DL);
 
-    Value *NewI = Builder.CreatePtrToInt(NewVal, I64, "cj.store.new.i");
-    cast<Instruction>(NewI)->setDebugLoc(DL);
-    Value *PrevAddr = Builder.CreateAnd(
-        PrevI, ConstantInt::get(I64, AddressMask), "cj.store.prev.addr");
-    cast<Instruction>(PrevAddr)->setDebugLoc(DL);
-    Value *NewAddr = Builder.CreateAnd(
-        NewI, ConstantInt::get(I64, AddressMask), "cj.store.new.addr");
-    cast<Instruction>(NewAddr)->setDebugLoc(DL);
-    Value *Same = Builder.CreateICmpEQ(PrevAddr, NewAddr, "cj.store.same");
+    // Same-target: peel both via ptrmask then pointer icmp. ptrtoint(NewVal)
+    // when NewVal is the load-barrier phi corrupts later GEPs in this function
+    // (Verifier crash printing std.core Error.init statepoint). Load of prev
+    // is a fresh LoadInst and can stay ptrtoint for the colour test.
+    Value *PrevPlain = uncolorIfGCPtr(Prev, Builder);
+    Value *NewPlain = uncolorIfGCPtr(NewVal, Builder);
+    Value *Same = Builder.CreateICmpEQ(PrevPlain, NewPlain, "cj.store.same");
     cast<Instruction>(Same)->setDebugLoc(DL);
 
     Value *Fast = Builder.CreateAnd(ColourOk, HasColour, "cj.store.good");
@@ -875,11 +873,10 @@ public:
     Fast = Builder.CreateAnd(Fast, Same, "cj.store.fast");
     cast<Instruction>(Fast)->setDebugLoc(DL);
 
-    // SplitBlockAndInsertIfThen keeps SplitBefore (the gcwrite) as the merge
-    // head. Invert so the Then block is the MCC slow path; the fallthrough is
-    // the empty store-good arm. Manual splitBasicBlock(CI->getNextNode())
-    // asserted on a terminator and, with assertions off, left a broken
-    // statepoint for Verifier to crash on (std.core Error.init).
+    // Then = MCC slow path; Tail = rest of the original block (store-good
+    // fallthrough). SplitBlockAndInsertIfThen splits at CI so the gcwrite
+    // starts Tail; move it into Then. Do not split at CI->getNextNode()
+    // (terminator-unsafe with assertions off).
     Value *Slow = Builder.CreateNot(Fast, "cj.store.slow");
     cast<Instruction>(Slow)->setDebugLoc(DL);
     Instruction *ThenTerm =
