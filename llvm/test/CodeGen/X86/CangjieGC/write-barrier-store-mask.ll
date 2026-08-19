@@ -29,7 +29,7 @@
 ; CHECK: [[ISNULL:%.*]] = icmp eq i64 [[NEW_I]], 0
 ; CHECK: [[WORD:%.*]] = select i1 [[ISNULL]], i64 [[NEW_I]], i64 [[COLORED_I]]
 ; CHECK: [[PLACE_I64:%.*]] = bitcast i8 addrspace(1)* addrspace(1)* [[PLACE]] to i64 addrspace(1)*
-; CHECK: store i64 [[WORD]], i64 addrspace(1)* [[PLACE_I64]]
+; CHECK: store volatile i64 [[WORD]], i64 addrspace(1)* [[PLACE_I64]]
 ; CHECK: gcStoreBad:
 ; CHECK: call void @CJ_MCC_WriteRefField
 ;

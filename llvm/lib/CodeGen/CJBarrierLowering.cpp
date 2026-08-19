@@ -892,7 +892,11 @@ public:
         Place, PointerType::get(I64, PlaceAS), "cj.store.place.i64");
     if (auto *BC = dyn_cast<Instruction>(PlaceI64))
       BC->setDebugLoc(DL);
-    StoreInst *St = FastBuilder.CreateStore(Word, PlaceI64);
+    // Volatile: a non-volatile i64 store is forwarded into a later pointer
+    // load as inttoptr(coloured), which puts StoreGood bits in an oop vreg
+    // (pinned_boost idle r13=0x151…). ZGC never holds a coloured oop in a
+    // Java pointer register; the colour exists only as the stored word.
+    StoreInst *St = FastBuilder.CreateStore(Word, PlaceI64, /*isVolatile=*/true);
     St->setDebugLoc(DL);
 
     CI->moveBefore(ElseTerm);
