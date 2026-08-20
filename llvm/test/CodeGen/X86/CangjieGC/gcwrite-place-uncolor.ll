@@ -6,7 +6,7 @@
 
 ; Default: peel colour from the place before loading prev. Census hit is
 ; a no-op rewrite; slow path is MCC. No paint.
-; PAINT: same peel, then OR g_cjStoreGoodMask on the hit arm.
+; Flag on: same peel, then OR g_cjStoreGoodMask on the hit arm.
 
 define void @write_ref_place(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
                              i8 addrspace(1)* addrspace(1)* %field) gc "cangjie" {

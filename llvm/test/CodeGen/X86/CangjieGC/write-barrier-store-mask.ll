@@ -1,5 +1,5 @@
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -print-after=cj-barrier-lowering \
-; RUN:   -print-module-scope -o /dev/null < %s 2>&1 | FileCheck %s
+; RUN:   -o /dev/null < %s 2>&1 | FileCheck %s
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -cj-generational-post-barrier=false \
 ; RUN:   -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 \
 ; RUN:   | FileCheck %s --check-prefix=PHASE
