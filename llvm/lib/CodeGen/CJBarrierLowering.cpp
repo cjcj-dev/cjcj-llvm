@@ -1440,11 +1440,6 @@ static bool combineSafepointStub(Module *M,
   return true;
 }
 
-static bool isGCPointerType(Type *Ty) {
-  auto *PT = dyn_cast<PointerType>(Ty);
-  return PT && PT->getAddressSpace() == 1;
-}
-
 static bool isNonHeapPlace(Value *Ptr) {
   auto *PT = dyn_cast<PointerType>(Ptr->getType());
   return PT && PT->getAddressSpace() == 0;
