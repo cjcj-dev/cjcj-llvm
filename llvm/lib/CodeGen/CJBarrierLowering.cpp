@@ -55,17 +55,17 @@ static cl::opt<bool> EnableWeakLoadBadMask(
     cl::desc("Make g_cjLoadBadMask optional with the legacy mask as fallback"));
 // wbclose2 / WRITE_SIDE_CLOSURE Phase2 + llstore (Z-2): default ON.
 // Heap struct/array/atomic-store writes stay on the MCC path.
-// Scalar heap ref writes take the census store-good test
-// (slot vs g_cjStoreBadMask, plus has-colour ∧ same-target).
-// Paint (OR g_cjStoreGoodMask) is a separate flag, default OFF:
-// raw loads of painted slots crash (LEAD 0820, PAINT_BLOCKED_BY_RAW_LOADS).
+// Scalar heap ref writes colour-test the slot vs g_cjStoreBadMask.
+// Paint (OR g_cjStoreGoodMask) is default ON after paintfull closed the
+// compiler-direct face. Pass -cj-store-good-paint=0 for the census knife
+// (has-colour ∧ same-target, no paint).
 static cl::opt<bool> EnableGenerationalPostBarrier(
     "cj-generational-post-barrier", cl::init(true), cl::Hidden,
     cl::desc("Colour-test heap ref stores; keep bulk/atomic on the runtime path"));
 static cl::opt<bool> EnableStoreGoodPaint(
-    "cj-store-good-paint", cl::init(false), cl::Hidden,
+    "cj-store-good-paint", cl::init(true), cl::Hidden,
     cl::desc("Paint store-good on the hit arm (zAddress.inline.hpp:806). "
-             "Default off: raw loads of painted slots crash"));
+             "Default on; =0 restores the census knife"));
 static cl::opt<bool> EnableGCStateLoop("cj-gcstate-dup-loop", cl::init(false),
                                        cl::ReallyHidden);
 
@@ -819,14 +819,14 @@ private:
 // ZGC store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-706) plus
 // x86 emit_store_fast_path_check (zBarrierSetAssembler_x86.cpp:358-374).
 //
-// Default (EnableStoreGoodPaint=false): census knife from lane/llstore.
-// Test slot vs StoreBad, then has-colour ∧ same-target. Hit is a no-op
-// rewrite; miss stays llvm.cj.gcwrite.ref → MCC. No paint.
+// Default (EnableStoreGoodPaint=true): ZGC color_store_good
+// (zBarrier.inline.hpp:448-450 / zAddress.inline.hpp:806-808). Hit arm
+// peels new, ORs StoreGood, i64 store. Null stays plain 0
+// (WCollector.h:756-758).
 //
-// Flag on: ZGC color_store_good (zBarrier.inline.hpp:448-450 /
-// zAddress.inline.hpp:806-808). Hit arm peels new, ORs StoreGood, i64
-// store. Null stays plain 0 (WCollector.h:756-758). Default off because
-// raw loads of painted slots crash (LEAD 0820).
+// Flag off (=0): census knife from lane/llstore. Test slot vs StoreBad,
+// then has-colour ∧ same-target. Hit is a no-op rewrite; miss stays
+// llvm.cj.gcwrite.ref → MCC. No paint.
 class WriteBarrier {
 public:
   explicit WriteBarrier(Function &F) : M(F.getParent()), C(F.getContext()) {}
@@ -1571,8 +1571,8 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
     return Changed;
   }
 
-  // Paint-on needs load peel at every opt level (zAddress.inline.hpp:609).
-  // Default (no paint) matches lane/llstore: skip both at -O0.
+  // Paint-on (now the default) needs load peel at every opt level
+  // (zAddress.inline.hpp:609). Census-only (=0) still skips both at -O0.
   if (OptLevel != CodeGenOpt::None || EnableStoreGoodPaint) {
     readBarrierFastPath(F, Barriers);
     writeBarrierFastPath(F, Barriers);

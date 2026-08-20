@@ -3,7 +3,7 @@
 ; RUN:   -o /dev/null < %s 2>&1 \
 ; RUN:   | FileCheck %s --check-prefix=DEFAULT
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -cj-weak-load-bad-mask \
-; RUN:   -cj-generational-post-barrier -print-module-scope \
+; RUN:   -cj-store-good-paint=0 -print-module-scope \
 ; RUN:   -print-after=cj-barrier-lowering \
 ; RUN:   -o /dev/null < %s 2>&1 | FileCheck %s --check-prefix=WEAK
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -cj-weak-load-bad-mask \

@@ -1,10 +1,10 @@
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -cj-gcstate-dup-loop=true \
 ; RUN:   -cj-generational-post-barrier=false -o - < %s | FileCheck %s
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -cj-gcstate-dup-loop=true \
-; RUN:   -cj-generational-post-barrier -print-after=cj-barrier-lowering \
-; RUN:   -o /dev/null < %s 2>&1 | FileCheck %s --check-prefix=GEN
+; RUN:   -cj-store-good-paint=0 -print-after=cj-barrier-lowering \
+; RUN:   -o /dev/null < %s 2>&1 | FileCheck %s --check-prefix=NOPAINT
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -cj-gcstate-dup-loop=true \
-; RUN:   -cj-store-good-paint -print-after=cj-barrier-lowering \
+; RUN:   -print-after=cj-barrier-lowering \
 ; RUN:   -o /dev/null < %s 2>&1 | FileCheck %s --check-prefix=PAINT
 
 define void @foo1(i8 addrspace(1)* %arg0, i64 %arg1, i8 addrspace(1)* %arg2) gc "cangjie" {
@@ -23,14 +23,14 @@ define void @foo1(i8 addrspace(1)* %arg0, i64 %arg1, i8 addrspace(1)* %arg2) gc 
 ; CHECK: cmpl    $9, %eax
 ; CHECK: %gcRunning
 ; CHECK: callq   CJ_MCC_WriteRefField@PLT
-; GEN-LABEL: define void @foo1
-; GEN-NOT: .pin
-; GEN-NOT: gcNoRunning
-; GEN: load i64, i64* @g_cjStoreBadMask
-; GEN-NOT: g_cjStoreGoodMask
-; GEN: gcStoreBad:
-; GEN: call void @CJ_MCC_WriteRefField
-; GEN: ret void
+; NOPAINT-LABEL: define void @foo1
+; NOPAINT-NOT: .pin
+; NOPAINT-NOT: gcNoRunning
+; NOPAINT: load i64, i64* @g_cjStoreBadMask
+; NOPAINT-NOT: g_cjStoreGoodMask
+; NOPAINT: gcStoreBad:
+; NOPAINT: call void @CJ_MCC_WriteRefField
+; NOPAINT: ret void
 ; PAINT-LABEL: define void @foo1
 ; PAINT-NOT: .pin
 ; PAINT-NOT: gcNoRunning
