@@ -1440,6 +1440,60 @@ static bool combineSafepointStub(Module *M,
   return true;
 }
 
+static bool isGCPointerType(Type *Ty) {
+  auto *PT = dyn_cast<PointerType>(Ty);
+  return PT && PT->getAddressSpace() == 1;
+}
+
+static bool isNonHeapPlace(Value *Ptr) {
+  auto *PT = dyn_cast<PointerType>(Ptr->getType());
+  return PT && PT->getAddressSpace() == 0;
+}
+
+// STACK_ROOTS_STAY_PLAIN: AS1 refs that enter or leave a non-heap slot must
+// be plain. Value-struct fields (String.myData) are scalar loads/stores of
+// addrspace(1)* through an AS0 place — not gcread/gcwrite (zBarrier load
+// side; COLOUR_BOUNDARY F3). Heap-place raw loads stay untouched.
+static bool uncolorNonHeapGCPtrCopies(Function &F) {
+  bool Changed = false;
+  SmallVector<LoadInst *, 8> Loads;
+  SmallVector<StoreInst *, 8> Stores;
+  for (BasicBlock &BB : F) {
+    for (Instruction &I : BB) {
+      if (auto *LI = dyn_cast<LoadInst>(&I)) {
+        if (isGCPointerType(LI->getType()) &&
+            isNonHeapPlace(LI->getPointerOperand()))
+          Loads.push_back(LI);
+      } else if (auto *SI = dyn_cast<StoreInst>(&I)) {
+        if (isGCPointerType(SI->getValueOperand()->getType()) &&
+            isNonHeapPlace(SI->getPointerOperand()))
+          Stores.push_back(SI);
+      }
+    }
+  }
+  for (LoadInst *LI : Loads) {
+    Instruction *Next = LI->getNextNode();
+    if (!Next)
+      continue;
+    IRBuilder<> Builder(Next);
+    Value *Plain = uncolorIfGCPtr(LI, Builder);
+    if (Plain == LI)
+      continue;
+    LI->replaceUsesWithIf(Plain, [Plain](Use &U) { return U.getUser() != Plain; });
+    Changed = true;
+  }
+  for (StoreInst *SI : Stores) {
+    IRBuilder<> Builder(SI);
+    Value *Val = SI->getValueOperand();
+    Value *Plain = uncolorIfGCPtr(Val, Builder);
+    if (Plain == Val)
+      continue;
+    SI->setOperand(0, Plain);
+    Changed = true;
+  }
+  return Changed;
+}
+
 // Bare CreateCopyTo memmove/memcpy on AS1 interiors (mmstrip). Helper is shared
 // with createStoreOrMems place peeling (llvm::uncolorIfGCPtr).
 static bool uncolorMemTransferOperands(Function &F) {
@@ -1504,6 +1558,9 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
 
   // Independent of barrier set: bare CreateMemMove has no CJ barrier intrinsic.
   Changed |= uncolorMemTransferOperands(F);
+  // Independent of barrier set: value-struct field load/store is a raw
+  // LoadInst/StoreInst, not llvm.cj.gcread/gcwrite.
+  Changed |= uncolorNonHeapGCPtrCopies(F);
 
   if (Barriers.empty()) {
     return Changed;
