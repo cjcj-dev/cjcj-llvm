@@ -55,13 +55,17 @@ static cl::opt<bool> EnableWeakLoadBadMask(
     cl::desc("Make g_cjLoadBadMask optional with the legacy mask as fallback"));
 // wbclose2 / WRITE_SIDE_CLOSURE Phase2 + llstore (Z-2): default ON.
 // Heap struct/array/atomic-store writes stay on the MCC path.
-// Scalar heap ref writes take the ZGC store-good colour fast path
-// (test slot vs g_cjStoreBadMask, then OR g_cjStoreGoodMask) instead of
-// the Idle bare store.
-// Off only for non-GC / explicit opt-out consumers.
+// Scalar heap ref writes take the census store-good test
+// (slot vs g_cjStoreBadMask, plus has-colour ∧ same-target).
+// Paint (OR g_cjStoreGoodMask) is a separate flag, default OFF:
+// raw loads of painted slots crash (LEAD 0820, PAINT_BLOCKED_BY_RAW_LOADS).
 static cl::opt<bool> EnableGenerationalPostBarrier(
     "cj-generational-post-barrier", cl::init(true), cl::Hidden,
     cl::desc("Colour-test heap ref stores; keep bulk/atomic on the runtime path"));
+static cl::opt<bool> EnableStoreGoodPaint(
+    "cj-store-good-paint", cl::init(false), cl::Hidden,
+    cl::desc("Paint store-good on the hit arm (zAddress.inline.hpp:806). "
+             "Default off: raw loads of painted slots crash"));
 static cl::opt<bool> EnableGCStateLoop("cj-gcstate-dup-loop", cl::init(false),
                                        cl::ReallyHidden);
 
@@ -813,23 +817,16 @@ private:
 };
 
 // ZGC store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-706) plus
-// x86 emit_store_fast_path_check (zBarrierSetAssembler_x86.cpp:358-374):
-//   testl ref_addr, StoreBad; jcc nz, medium
-// and color_store_good (zBarrier.inline.hpp:448-450) =
-//   ZAddress::store_good(new) (zAddress.inline.hpp:806-808).
+// x86 emit_store_fast_path_check (zBarrierSetAssembler_x86.cpp:358-374).
 //
-// Fast path is phase-independent: test the *slot* (prev) only.
-// Compiler new values are uncoloured (load fast path peels colour), so a
-// value-side StoreBad test would be (plain & mask)==0 and restore Idle bare
-// store. There is no has-colour and no same-target: ZGC first-write of a
-// zeroed slot is (0 & StoreBad)==0 and still paints store-good.
+// Default (EnableStoreGoodPaint=false): census knife from lane/llstore.
+// Test slot vs StoreBad, then has-colour ∧ same-target. Hit is a no-op
+// rewrite; miss stays llvm.cj.gcwrite.ref → MCC. No paint.
 //
-// Hit arm: ptrmask-peel new, OR g_cjStoreGoodMask, i64 store.
-// Null stays plain 0: our GetAndTryTagRefField(nullptr) returns an uncoloured
-// field (WCollector.h:756-758). ZGC store_good(null) colours 0, but we have
-// no is_null_any — colouring null is 0x151… (whozero site 56 poison).
-// Store the word as i64 so a later GEP cannot reuse the coloured pointer.
-// Miss arm keeps llvm.cj.gcwrite.ref for doLowering → MCC.
+// Flag on: ZGC color_store_good (zBarrier.inline.hpp:448-450 /
+// zAddress.inline.hpp:806-808). Hit arm peels new, ORs StoreGood, i64
+// store. Null stays plain 0 (WCollector.h:756-758). Default off because
+// raw loads of painted slots crash (LEAD 0820).
 class WriteBarrier {
 public:
   explicit WriteBarrier(Function &F) : M(F.getParent()), C(F.getContext()) {}
@@ -857,57 +854,79 @@ public:
                              "cj.store.colourok");
     cast<Instruction>(ColourOk)->setDebugLoc(DL);
 
-    // Then = color_store_good + bare store (ColourOk); Else = MCC slow path.
-    // SplitBlockAndInsertIfThenElse splits at CI so the gcwrite starts Tail;
-    // move it into Else. Do not split at CI->getNextNode() (terminator-unsafe
-    // with assertions off).
-    Instruction *ThenTerm = nullptr;
-    Instruction *ElseTerm = nullptr;
-    SplitBlockAndInsertIfThenElse(ColourOk, CI, &ThenTerm, &ElseTerm);
-    ThenTerm->setDebugLoc(DL);
-    ElseTerm->setDebugLoc(DL);
-    ThenTerm->getParent()->setName("storeFinish");
-    ElseTerm->getParent()->setName("gcStoreBad");
-
-    // Hit arm: copy oop bits to an early-clobber i64, peel+OR StoreGood on
-    // that i64 only. Do not ptrmask/ptrtoint NewVal: those are no-ops and
-    // two-address `and`/`or` paint the live oop (String.indexOf this=0x151…).
-    // ZGC keeps the coloured word only in the stored slot (zAddress.inline.hpp:806).
-    IRBuilder<> FastBuilder(ThenTerm);
-    FunctionType *CopyTy = FunctionType::get(I64, {NewVal->getType()}, false);
-    InlineAsm *CopyAsm = InlineAsm::get(CopyTy, "movq $1, $0", "=&r,r",
-                                        /*hasSideEffects=*/false);
-    Value *NewBits = FastBuilder.CreateCall(CopyAsm, NewVal, "cj.store.new.bits");
-    cast<CallInst>(NewBits)->setDebugLoc(DL);
     constexpr uint64_t AddressMask = (uint64_t(1) << 48) - 1;
-    Value *NewI = FastBuilder.CreateAnd(
-        NewBits, ConstantInt::get(I64, AddressMask), "cj.store.new.i");
-    cast<Instruction>(NewI)->setDebugLoc(DL);
-    Constant *GoodGV = M->getOrInsertGlobal("g_cjStoreGoodMask", I64);
-    Value *GoodMask = FastBuilder.CreateLoad(I64, GoodGV, "cj.storegoodmask");
-    cast<Instruction>(GoodMask)->setDebugLoc(DL);
-    Value *ColoredI =
-        FastBuilder.CreateOr(NewI, GoodMask, "cj.store.colored.i");
-    cast<Instruction>(ColoredI)->setDebugLoc(DL);
-    Value *IsNull = FastBuilder.CreateICmpEQ(
-        NewI, ConstantInt::get(I64, (uint64_t)0), "cj.store.new.isnull");
-    cast<Instruction>(IsNull)->setDebugLoc(DL);
-    Value *Word = FastBuilder.CreateSelect(IsNull, NewI, ColoredI,
-                                           "cj.store.word");
-    cast<Instruction>(Word)->setDebugLoc(DL);
-    unsigned PlaceAS = Place->getType()->getPointerAddressSpace();
-    Value *PlaceI64 = FastBuilder.CreateBitCast(
-        Place, PointerType::get(I64, PlaceAS), "cj.store.place.i64");
-    if (auto *BC = dyn_cast<Instruction>(PlaceI64))
-      BC->setDebugLoc(DL);
-    // Volatile: a non-volatile i64 store is forwarded into a later pointer
-    // load as inttoptr(coloured), which puts StoreGood bits in an oop vreg
-    // (pinned_boost idle r13=0x151…). ZGC never holds a coloured oop in a
-    // Java pointer register; the colour exists only as the stored word.
-    StoreInst *St = FastBuilder.CreateStore(Word, PlaceI64, /*isVolatile=*/true);
-    St->setDebugLoc(DL);
 
-    CI->moveBefore(ElseTerm);
+    if (EnableStoreGoodPaint) {
+      // Then = color_store_good + bare store; Else = MCC.
+      // Split at CI so the gcwrite starts Tail; move it into Else.
+      Instruction *ThenTerm = nullptr;
+      Instruction *ElseTerm = nullptr;
+      SplitBlockAndInsertIfThenElse(ColourOk, CI, &ThenTerm, &ElseTerm);
+      ThenTerm->setDebugLoc(DL);
+      ElseTerm->setDebugLoc(DL);
+      ThenTerm->getParent()->setName("storeFinish");
+      ElseTerm->getParent()->setName("gcStoreBad");
+
+      // Copy oop bits to an early-clobber i64; peel+OR StoreGood on that
+      // i64 only (zAddress.inline.hpp:806). Do not ptrmask/ptrtoint NewVal.
+      IRBuilder<> FastBuilder(ThenTerm);
+      FunctionType *CopyTy = FunctionType::get(I64, {NewVal->getType()}, false);
+      InlineAsm *CopyAsm = InlineAsm::get(CopyTy, "movq $1, $0", "=&r,r",
+                                          /*hasSideEffects=*/false);
+      Value *NewBits =
+          FastBuilder.CreateCall(CopyAsm, NewVal, "cj.store.new.bits");
+      cast<CallInst>(NewBits)->setDebugLoc(DL);
+      Value *NewI = FastBuilder.CreateAnd(
+          NewBits, ConstantInt::get(I64, AddressMask), "cj.store.new.i");
+      cast<Instruction>(NewI)->setDebugLoc(DL);
+      Constant *GoodGV = M->getOrInsertGlobal("g_cjStoreGoodMask", I64);
+      Value *GoodMask = FastBuilder.CreateLoad(I64, GoodGV, "cj.storegoodmask");
+      cast<Instruction>(GoodMask)->setDebugLoc(DL);
+      Value *ColoredI =
+          FastBuilder.CreateOr(NewI, GoodMask, "cj.store.colored.i");
+      cast<Instruction>(ColoredI)->setDebugLoc(DL);
+      Value *IsNull = FastBuilder.CreateICmpEQ(
+          NewI, ConstantInt::get(I64, (uint64_t)0), "cj.store.new.isnull");
+      cast<Instruction>(IsNull)->setDebugLoc(DL);
+      Value *Word = FastBuilder.CreateSelect(IsNull, NewI, ColoredI,
+                                             "cj.store.word");
+      cast<Instruction>(Word)->setDebugLoc(DL);
+      unsigned PlaceAS = Place->getType()->getPointerAddressSpace();
+      Value *PlaceI64 = FastBuilder.CreateBitCast(
+          Place, PointerType::get(I64, PlaceAS), "cj.store.place.i64");
+      if (auto *BC = dyn_cast<Instruction>(PlaceI64))
+        BC->setDebugLoc(DL);
+      StoreInst *St =
+          FastBuilder.CreateStore(Word, PlaceI64, /*isVolatile=*/true);
+      St->setDebugLoc(DL);
+      CI->moveBefore(ElseTerm);
+      return;
+    }
+
+    // Census (default): has-colour ∧ same-target, no paint.
+    // Collector.h:265: is_store_good rejects null and plain.
+    Value *Meta = Builder.CreateAnd(
+        PrevI, ConstantInt::get(I64, ~AddressMask), "cj.store.meta");
+    cast<Instruction>(Meta)->setDebugLoc(DL);
+    Value *HasColour = Builder.CreateICmpNE(
+        Meta, ConstantInt::get(I64, (uint64_t)0), "cj.store.hascolour");
+    cast<Instruction>(HasColour)->setDebugLoc(DL);
+    Value *PrevPlain = uncolorIfGCPtr(Prev, Builder);
+    Value *NewPlain = uncolorIfGCPtr(NewVal, Builder);
+    Value *Same = Builder.CreateICmpEQ(PrevPlain, NewPlain, "cj.store.same");
+    cast<Instruction>(Same)->setDebugLoc(DL);
+    Value *Fast = Builder.CreateAnd(ColourOk, HasColour, "cj.store.good");
+    cast<Instruction>(Fast)->setDebugLoc(DL);
+    Fast = Builder.CreateAnd(Fast, Same, "cj.store.fast");
+    cast<Instruction>(Fast)->setDebugLoc(DL);
+    Value *Slow = Builder.CreateNot(Fast, "cj.store.slow");
+    cast<Instruction>(Slow)->setDebugLoc(DL);
+    Instruction *ThenTerm =
+        SplitBlockAndInsertIfThen(Slow, CI, /*Unreachable=*/false);
+    ThenTerm->setDebugLoc(DL);
+    CI->getParent()->setName("storeFinish");
+    ThenTerm->getParent()->setName("gcStoreBad");
+    CI->moveBefore(ThenTerm);
   }
 
   Module *M;
@@ -1490,13 +1509,12 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
     return Changed;
   }
 
-  // Load peel is required at every opt level once the store-good hit arm
-  // paints the slot. doLowering's bare gcread would otherwise hand a
-  // coloured oop to the mutator (pinned_boost idle r13=0x151…, si_code=128).
-  // ZGC uncolor is part of every load (zAddress.inline.hpp:609-614).
-  readBarrierFastPath(F, Barriers);
-  if (OptLevel != CodeGenOpt::None)
+  // Paint-on needs load peel at every opt level (zAddress.inline.hpp:609).
+  // Default (no paint) matches lane/llstore: skip both at -O0.
+  if (OptLevel != CodeGenOpt::None || EnableStoreGoodPaint) {
+    readBarrierFastPath(F, Barriers);
     writeBarrierFastPath(F, Barriers);
+  }
   doLowering(F);
   return true;
 }

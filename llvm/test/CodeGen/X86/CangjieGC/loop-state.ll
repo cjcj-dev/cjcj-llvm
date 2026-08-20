@@ -3,6 +3,9 @@
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -cj-gcstate-dup-loop=true \
 ; RUN:   -cj-generational-post-barrier -print-after=cj-barrier-lowering \
 ; RUN:   -o /dev/null < %s 2>&1 | FileCheck %s --check-prefix=GEN
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 -cj-gcstate-dup-loop=true \
+; RUN:   -cj-store-good-paint -print-after=cj-barrier-lowering \
+; RUN:   -o /dev/null < %s 2>&1 | FileCheck %s --check-prefix=PAINT
 
 define void @foo1(i8 addrspace(1)* %arg0, i64 %arg1, i8 addrspace(1)* %arg2) gc "cangjie" {
 ; CHECK: foo1
@@ -24,11 +27,19 @@ define void @foo1(i8 addrspace(1)* %arg0, i64 %arg1, i8 addrspace(1)* %arg2) gc 
 ; GEN-NOT: .pin
 ; GEN-NOT: gcNoRunning
 ; GEN: load i64, i64* @g_cjStoreBadMask
-; GEN: storeFinish:
-; GEN: load i64, i64* @g_cjStoreGoodMask
+; GEN-NOT: g_cjStoreGoodMask
 ; GEN: gcStoreBad:
 ; GEN: call void @CJ_MCC_WriteRefField
 ; GEN: ret void
+; PAINT-LABEL: define void @foo1
+; PAINT-NOT: .pin
+; PAINT-NOT: gcNoRunning
+; PAINT: load i64, i64* @g_cjStoreBadMask
+; PAINT: storeFinish:
+; PAINT: load i64, i64* @g_cjStoreGoodMask
+; PAINT: gcStoreBad:
+; PAINT: call void @CJ_MCC_WriteRefField
+; PAINT: ret void
 
 entry:
   %a = bitcast i8 addrspace(1)* %arg0 to i8 addrspace(1)* addrspace(1) *
@@ -48,4 +59,4 @@ loopexit:
   ret void
 }
 
-declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)* nocapture, i8 addrspace(1)* addrspace(1)* nocapture)
+declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %arg0, i8 addrspace(1)* nocapture, i8 addrspace(1)* addrspace(1)* nocapture)
