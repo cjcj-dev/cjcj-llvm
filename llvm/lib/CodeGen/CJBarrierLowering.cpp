@@ -869,27 +869,25 @@ public:
     ThenTerm->getParent()->setName("storeFinish");
     ElseTerm->getParent()->setName("gcStoreBad");
 
-    // Hit arm: ptrmask-peel new, OR StoreGood unless new is null.
-    // ptrmask NewVal rather than ptrtoint(NewVal): ptrtoint of a load-barrier
-    // phi corrupts later GEPs (std.core Error.init).
+    // Hit arm: copy oop bits to an early-clobber i64, peel+OR StoreGood on
+    // that i64 only. Do not ptrmask/ptrtoint NewVal: those are no-ops and
+    // two-address `and`/`or` paint the live oop (String.indexOf this=0x151…).
+    // ZGC keeps the coloured word only in the stored slot (zAddress.inline.hpp:806).
     IRBuilder<> FastBuilder(ThenTerm);
-    Value *NewPlain = uncolorIfGCPtr(NewVal, FastBuilder);
-    Value *NewI = FastBuilder.CreatePtrToInt(NewPlain, I64, "cj.store.new.i");
-    cast<Instruction>(NewI)->setDebugLoc(DL);
-    // ptrtoint is a no-op: two-address `or mask, %oop` paints the live
-    // pointer (String.indexOf this=0x151…). Copy to an early-clobber
-    // i64 so the colour never shares the oop register. ZGC keeps the
-    // coloured word only in the stored slot (zAddress.inline.hpp:806).
-    FunctionType *CopyTy = FunctionType::get(I64, {I64}, false);
+    FunctionType *CopyTy = FunctionType::get(I64, {NewVal->getType()}, false);
     InlineAsm *CopyAsm = InlineAsm::get(CopyTy, "movq $1, $0", "=&r,r",
                                         /*hasSideEffects=*/false);
-    Value *NewBits = FastBuilder.CreateCall(CopyAsm, NewI, "cj.store.new.bits");
+    Value *NewBits = FastBuilder.CreateCall(CopyAsm, NewVal, "cj.store.new.bits");
     cast<CallInst>(NewBits)->setDebugLoc(DL);
+    constexpr uint64_t AddressMask = (uint64_t(1) << 48) - 1;
+    Value *NewI = FastBuilder.CreateAnd(
+        NewBits, ConstantInt::get(I64, AddressMask), "cj.store.new.i");
+    cast<Instruction>(NewI)->setDebugLoc(DL);
     Constant *GoodGV = M->getOrInsertGlobal("g_cjStoreGoodMask", I64);
     Value *GoodMask = FastBuilder.CreateLoad(I64, GoodGV, "cj.storegoodmask");
     cast<Instruction>(GoodMask)->setDebugLoc(DL);
     Value *ColoredI =
-        FastBuilder.CreateOr(NewBits, GoodMask, "cj.store.colored.i");
+        FastBuilder.CreateOr(NewI, GoodMask, "cj.store.colored.i");
     cast<Instruction>(ColoredI)->setDebugLoc(DL);
     Value *IsNull = FastBuilder.CreateICmpEQ(
         NewI, ConstantInt::get(I64, (uint64_t)0), "cj.store.new.isnull");
