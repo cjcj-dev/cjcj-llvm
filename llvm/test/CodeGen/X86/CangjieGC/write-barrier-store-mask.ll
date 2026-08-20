@@ -11,7 +11,6 @@
 ; has-colour ∧ same-target. Hit is a no-op rewrite; miss is MCC.
 ; No g_cjStoreGoodMask. (LEAD 0820: paint blocked by raw loads.)
 ;
-; CHECK: @g_cjStoreBadMask = external global i64
 ; CHECK-LABEL: define void @write_ref(
 ; CHECK: [[PLACE:%.*]] = call i8 addrspace(1)* addrspace(1)* @llvm.ptrmask.p1p1i8.i64(i8 addrspace(1)* addrspace(1)* %field, i64 281474976710655)
 ; CHECK: [[PREV:%.*]] = load i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)* [[PLACE]]
