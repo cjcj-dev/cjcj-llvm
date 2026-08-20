@@ -27,6 +27,7 @@ define void @string_rawdata(%"record.std.core:String"* %this,
 ; CHECK-LABEL: define void @string_rawdata(
 ; CHECK: [[RAW:%.*]] = load i8 addrspace(1)*, i8 addrspace(1)**
 ; CHECK: [[PLAIN:%.*]] = call i8 addrspace(1)* @llvm.ptrmask.p1i8.i64(i8 addrspace(1)* [[RAW]], i64 281474976710655)
+; CHECK-NOT: llvm.ptrmask
 ; CHECK: store i8 addrspace(1)* [[PLAIN]], i8 addrspace(1)** %dst
 entry:
   %p = getelementptr inbounds %"record.std.core:String", %"record.std.core:String"* %this, i64 0, i32 0

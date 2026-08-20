@@ -1445,6 +1445,12 @@ static bool isNonHeapPlace(Value *Ptr) {
   return PT && PT->getAddressSpace() == 0;
 }
 
+static bool isAlreadyUncolored(Value *V) {
+  if (auto *II = dyn_cast<IntrinsicInst>(V))
+    return II->getIntrinsicID() == Intrinsic::ptrmask;
+  return false;
+}
+
 // STACK_ROOTS_STAY_PLAIN: AS1 refs that enter or leave a non-heap slot must
 // be plain. Value-struct fields (String.myData) are scalar loads/stores of
 // addrspace(1)* through an AS0 place — not gcread/gcwrite (zBarrier load
@@ -1477,9 +1483,13 @@ static bool uncolorNonHeapGCPtrCopies(Function &F) {
     LI->replaceUsesWithIf(Plain, [Plain](Use &U) { return U.getUser() != Plain; });
     Changed = true;
   }
+  // Incoming AS1 args stored to an AS0 slot (no preceding load).
+  // Skip values already peeled by the load walk.
   for (StoreInst *SI : Stores) {
-    IRBuilder<> Builder(SI);
     Value *Val = SI->getValueOperand();
+    if (isAlreadyUncolored(Val))
+      continue;
+    IRBuilder<> Builder(SI);
     Value *Plain = uncolorIfGCPtr(Val, Builder);
     if (Plain == Val)
       continue;
