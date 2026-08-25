@@ -38,6 +38,7 @@
 #include "llvm/Transforms/Utils/CJSimpleGraphColoring.h"
 
 #include <set>
+#include <unordered_map>
 
 using namespace llvm;
 
