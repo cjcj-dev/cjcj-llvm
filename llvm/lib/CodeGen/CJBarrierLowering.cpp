@@ -12,19 +12,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/ADT/PriorityWorklist.h"
-#include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/CJIntrinsics.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/NoFolder.h"
 #include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Statepoint.h"
 #include "llvm/IR/CJStructTypeGCInfo.h"
@@ -33,9 +28,6 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
-#include "llvm/Transforms/Utils/Cloning.h"
-#include "llvm/Transforms/Utils/LoopSimplify.h"
-#include "llvm/Transforms/Utils/LoopUtils.h"
 
 #include <unordered_map>
 
@@ -50,24 +42,6 @@ static cl::opt<bool> EnableGCPhase("enable-gc-phase", cl::init(true),
                                    cl::Hidden);
 static cl::opt<bool> EnableGCFastPath("enable-gc-fast-path", cl::init(true),
                                       cl::Hidden);
-static cl::opt<bool> EnableWeakLoadBadMask(
-    "cj-weak-load-bad-mask", cl::init(false), cl::Hidden,
-    cl::desc("Make g_cjLoadBadMask optional with the legacy mask as fallback"));
-// wbclose2 / WRITE_SIDE_CLOSURE Phase2 + llstore (Z-2): default ON.
-// Heap struct/array/atomic-store writes stay on the MCC path.
-// Scalar heap ref writes colour-test the slot vs g_cjStoreBadMask.
-// Paint (OR g_cjStoreGoodMask) is default ON after paintfull closed the
-// compiler-direct face. Pass -cj-store-good-paint=0 for the census knife
-// (has-colour ∧ same-target, no paint).
-static cl::opt<bool> EnableGenerationalPostBarrier(
-    "cj-generational-post-barrier", cl::init(true), cl::Hidden,
-    cl::desc("Colour-test heap ref stores; keep bulk/atomic on the runtime path"));
-static cl::opt<bool> EnableStoreGoodPaint(
-    "cj-store-good-paint", cl::init(true), cl::Hidden,
-    cl::desc("Paint store-good on the hit arm (zAddress.inline.hpp:806). "
-             "Default on; =0 restores the census knife"));
-static cl::opt<bool> EnableGCStateLoop("cj-gcstate-dup-loop", cl::init(false),
-                                       cl::ReallyHidden);
 
 namespace llvm {
 extern cl::opt<bool> CangjieJIT;
@@ -126,9 +100,6 @@ struct BBInfo {
     InCheck = nullptr;
   }
 };
-
-static const unsigned MaxLoopBlock = 64;
-static const char *ClonedPinLoopTag = "cj.pin.loop.clone";
 
 static bool mayBeSafepoint(Instruction *Inst) {
   if (auto CI = dyn_cast<CallBase>(Inst)) {
@@ -398,12 +369,14 @@ public:
       break;
     }
 
-    if (EnableGenerationalPostBarrier &&
-        (IID == Intrinsic::cj_gcwrite_ref ||
-         IID == Intrinsic::cj_gcwrite_struct ||
-         IID == Intrinsic::cj_array_copy_ref ||
-         IID == Intrinsic::cj_array_copy_struct ||
-         IID == Intrinsic::cj_atomic_store)) {
+    // A generational collector needs the runtime path for these even while no
+    // tracing cycle is active, so old-to-young writes enter its remembered set.
+    // Never lower them to a phase-guarded plain store.
+    if (IID == Intrinsic::cj_gcwrite_ref ||
+        IID == Intrinsic::cj_gcwrite_struct ||
+        IID == Intrinsic::cj_array_copy_ref ||
+        IID == Intrinsic::cj_array_copy_struct ||
+        IID == Intrinsic::cj_atomic_store) {
       return false;
     }
 
@@ -665,89 +638,26 @@ public:
   // mask the runtime owns instead, so a later phase can give good a non-zero value and flip it at
   // a phase boundary -- ZGC does the same with ZPointerLoadBadMask (zBarrier.inline.hpp:626-628).
   //
-  // The mask is `0xFFFF000000000000` for now, so this computes the same predicate as the shift it
-  // replaces; only the instruction shape changes. Code built by an older compiler keeps the shift
-  // form and stays correct, because both spell the same question.
-  //
-  // By default this remains an unconditional load from a strong declaration.
-  // The opt-in dual-ABI measurement mode instead emits an external-weak
-  // declaration and guards the load. A missing provider means an older runtime,
-  // whose `lshr 48; icmp eq 0` predicate is exactly the fallback mask below.
+  // The runtime owns the mask and republishes it at every phase boundary
+  // (WCollector.h set_good_masks), so the provider is not optional: a build
+  // without `g_cjLoadBadMask` is a build against a runtime this compiler does
+  // not target. The declaration is therefore strong and the load unconditional
+  // -- a missing provider must fail at load time, not silently fall back to a
+  // predicate that cannot see a flipped good colour.
   //
   // %mask = load i64, i64* @g_cjLoadBadMask
   // %bad  = and i64 %Ptr, %mask
   // %ret  = icmp eq i64 %bad, 0
   Value *cmpTaggedPointer(Value *TagPtr, IRBuilder<> &Builder) {
     Type *I64 = Type::getInt64Ty(C);
-    Value *Mask = nullptr;
-    if (!EnableWeakLoadBadMask) {
-      Constant *MaskGV = M->getOrInsertGlobal("g_cjLoadBadMask", I64);
-      Mask = Builder.CreateLoad(I64, MaskGV, "cj.loadbadmask");
-      cast<Instruction>(Mask)->setDebugLoc(*Loc);
-    } else {
-      GlobalVariable *MaskGV = getWeakLoadBadMask(I64);
-      BasicBlock *CheckBB = Builder.GetInsertBlock();
-      BasicBlock *MergeBB =
-          CheckBB->splitBasicBlock(ReadInst, "cj.loadbadmask.merge");
-      BasicBlock *LoadBB = BasicBlock::Create(
-          C, "cj.loadbadmask.present", CheckBB->getParent(), MergeBB);
-
-      Instruction *OldTerminator = CheckBB->getTerminator();
-      IRBuilder<NoFolder> CheckBuilder(OldTerminator);
-      Value *IsPresent =
-          CheckBuilder.CreateIsNotNull(MaskGV, "cj.loadbadmask.ispresent");
-      cast<Instruction>(IsPresent)->setDebugLoc(*Loc);
-      Instruction *CheckBranch =
-          CheckBuilder.CreateCondBr(IsPresent, LoadBB, MergeBB);
-      CheckBranch->setDebugLoc(*Loc);
-      OldTerminator->eraseFromParent();
-
-      IRBuilder<> LoadBuilder(LoadBB);
-      Value *RuntimeMask =
-          LoadBuilder.CreateLoad(I64, MaskGV, "cj.loadbadmask.runtime");
-      cast<Instruction>(RuntimeMask)->setDebugLoc(*Loc);
-      Instruction *LoadBranch = LoadBuilder.CreateBr(MergeBB);
-      LoadBranch->setDebugLoc(*Loc);
-
-      IRBuilder<> MergeBuilder(&*MergeBB->getFirstInsertionPt());
-      PHINode *MaskPhi = MergeBuilder.CreatePHI(I64, 2, "cj.loadbadmask");
-      MaskPhi->setDebugLoc(*Loc);
-      MaskPhi->addIncoming(RuntimeMask, LoadBB);
-      MaskPhi->addIncoming(
-          ConstantInt::get(I64, UINT64_C(0xffff000000000000)), CheckBB);
-      Mask = MaskPhi;
-      Builder.SetInsertPoint(MergeBB, MergeBB->getFirstInsertionPt());
-    }
+    Constant *MaskGV = M->getOrInsertGlobal("g_cjLoadBadMask", I64);
+    Value *Mask = Builder.CreateLoad(I64, MaskGV, "cj.loadbadmask");
+    cast<Instruction>(Mask)->setDebugLoc(*Loc);
     Value *Bad = Builder.CreateAnd(TagPtr, Mask);
     cast<Instruction>(Bad)->setDebugLoc(*Loc);
     Value *CmpEQ = Builder.CreateICmpEQ(Bad, ConstantInt::get(I64, (uint64_t)0));
     cast<Instruction>(CmpEQ)->setDebugLoc(*Loc);
     return CmpEQ;
-  }
-
-  GlobalVariable *getWeakLoadBadMask(Type *I64) {
-    GlobalVariable *MaskGV = M->getNamedGlobal("g_cjLoadBadMask");
-    if (!MaskGV)
-      return new GlobalVariable(*M, I64, false,
-                                GlobalValue::ExternalWeakLinkage, nullptr,
-                                "g_cjLoadBadMask");
-
-    if (MaskGV->getValueType() != I64)
-      report_fatal_error(
-          "g_cjLoadBadMask has a type incompatible with the read barrier");
-    if (!MaskGV->isDeclaration())
-      report_fatal_error(
-          "g_cjLoadBadMask must remain a declaration in weak-mask mode");
-    if (MaskGV->hasExternalLinkage()) {
-      if (!MaskGV->use_empty())
-        report_fatal_error(
-            "g_cjLoadBadMask already has strong uses in weak-mask mode");
-      MaskGV->setLinkage(GlobalValue::ExternalWeakLinkage);
-    } else if (!MaskGV->hasExternalWeakLinkage()) {
-      report_fatal_error(
-          "g_cjLoadBadMask has incompatible linkage in weak-mask mode");
-    }
-    return MaskGV;
   }
 
   // preBB:
@@ -819,14 +729,9 @@ private:
 // ZGC store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-706) plus
 // x86 emit_store_fast_path_check (zBarrierSetAssembler_x86.cpp:358-374).
 //
-// Default (EnableStoreGoodPaint=true): ZGC color_store_good
-// (zBarrier.inline.hpp:448-450 / zAddress.inline.hpp:806-808). Hit arm
-// peels new, ORs StoreGood, i64 store. Null stays plain 0
-// (WCollector.h:756-758).
-//
-// Flag off (=0): census knife from lane/llstore. Test slot vs StoreBad,
-// then has-colour ∧ same-target. Hit is a no-op rewrite; miss stays
-// llvm.cj.gcwrite.ref → MCC. No paint.
+// ZGC color_store_good (zBarrier.inline.hpp:448-450 /
+// zAddress.inline.hpp:806-808). Hit arm peels new, ORs StoreGood, i64 store.
+// Null stays plain 0 (WCollector.h:756-758). Miss goes to MCC.
 class WriteBarrier {
 public:
   explicit WriteBarrier(Function &F) : M(F.getParent()), C(F.getContext()) {}
@@ -856,77 +761,49 @@ public:
 
     constexpr uint64_t AddressMask = (uint64_t(1) << 48) - 1;
 
-    if (EnableStoreGoodPaint) {
-      // Then = color_store_good + bare store; Else = MCC.
-      // Split at CI so the gcwrite starts Tail; move it into Else.
-      Instruction *ThenTerm = nullptr;
-      Instruction *ElseTerm = nullptr;
-      SplitBlockAndInsertIfThenElse(ColourOk, CI, &ThenTerm, &ElseTerm);
-      ThenTerm->setDebugLoc(DL);
-      ElseTerm->setDebugLoc(DL);
-      ThenTerm->getParent()->setName("storeFinish");
-      ElseTerm->getParent()->setName("gcStoreBad");
-
-      // Copy oop bits to an early-clobber i64; peel+OR StoreGood on that
-      // i64 only (zAddress.inline.hpp:806). Do not ptrmask/ptrtoint NewVal.
-      IRBuilder<> FastBuilder(ThenTerm);
-      FunctionType *CopyTy = FunctionType::get(I64, {NewVal->getType()}, false);
-      InlineAsm *CopyAsm = InlineAsm::get(CopyTy, "movq $1, $0", "=&r,r",
-                                          /*hasSideEffects=*/false);
-      Value *NewBits =
-          FastBuilder.CreateCall(CopyAsm, NewVal, "cj.store.new.bits");
-      cast<CallInst>(NewBits)->setDebugLoc(DL);
-      Value *NewI = FastBuilder.CreateAnd(
-          NewBits, ConstantInt::get(I64, AddressMask), "cj.store.new.i");
-      cast<Instruction>(NewI)->setDebugLoc(DL);
-      Constant *GoodGV = M->getOrInsertGlobal("g_cjStoreGoodMask", I64);
-      Value *GoodMask = FastBuilder.CreateLoad(I64, GoodGV, "cj.storegoodmask");
-      cast<Instruction>(GoodMask)->setDebugLoc(DL);
-      Value *ColoredI =
-          FastBuilder.CreateOr(NewI, GoodMask, "cj.store.colored.i");
-      cast<Instruction>(ColoredI)->setDebugLoc(DL);
-      Value *IsNull = FastBuilder.CreateICmpEQ(
-          NewI, ConstantInt::get(I64, (uint64_t)0), "cj.store.new.isnull");
-      cast<Instruction>(IsNull)->setDebugLoc(DL);
-      Value *Word = FastBuilder.CreateSelect(IsNull, NewI, ColoredI,
-                                             "cj.store.word");
-      cast<Instruction>(Word)->setDebugLoc(DL);
-      unsigned PlaceAS = Place->getType()->getPointerAddressSpace();
-      Value *PlaceI64 = FastBuilder.CreateBitCast(
-          Place, PointerType::get(I64, PlaceAS), "cj.store.place.i64");
-      if (auto *BC = dyn_cast<Instruction>(PlaceI64))
-        BC->setDebugLoc(DL);
-      StoreInst *St =
-          FastBuilder.CreateStore(Word, PlaceI64, /*isVolatile=*/true);
-      St->setDebugLoc(DL);
-      CI->moveBefore(ElseTerm);
-      return;
-    }
-
-    // Census (default): has-colour ∧ same-target, no paint.
-    // Collector.h:265: is_store_good rejects null and plain.
-    Value *Meta = Builder.CreateAnd(
-        PrevI, ConstantInt::get(I64, ~AddressMask), "cj.store.meta");
-    cast<Instruction>(Meta)->setDebugLoc(DL);
-    Value *HasColour = Builder.CreateICmpNE(
-        Meta, ConstantInt::get(I64, (uint64_t)0), "cj.store.hascolour");
-    cast<Instruction>(HasColour)->setDebugLoc(DL);
-    Value *PrevPlain = uncolorIfGCPtr(Prev, Builder);
-    Value *NewPlain = uncolorIfGCPtr(NewVal, Builder);
-    Value *Same = Builder.CreateICmpEQ(PrevPlain, NewPlain, "cj.store.same");
-    cast<Instruction>(Same)->setDebugLoc(DL);
-    Value *Fast = Builder.CreateAnd(ColourOk, HasColour, "cj.store.good");
-    cast<Instruction>(Fast)->setDebugLoc(DL);
-    Fast = Builder.CreateAnd(Fast, Same, "cj.store.fast");
-    cast<Instruction>(Fast)->setDebugLoc(DL);
-    Value *Slow = Builder.CreateNot(Fast, "cj.store.slow");
-    cast<Instruction>(Slow)->setDebugLoc(DL);
-    Instruction *ThenTerm =
-        SplitBlockAndInsertIfThen(Slow, CI, /*Unreachable=*/false);
+    // Then = color_store_good + bare store; Else = MCC.
+    // Split at CI so the gcwrite starts Tail; move it into Else.
+    Instruction *ThenTerm = nullptr;
+    Instruction *ElseTerm = nullptr;
+    SplitBlockAndInsertIfThenElse(ColourOk, CI, &ThenTerm, &ElseTerm);
     ThenTerm->setDebugLoc(DL);
-    CI->getParent()->setName("storeFinish");
-    ThenTerm->getParent()->setName("gcStoreBad");
-    CI->moveBefore(ThenTerm);
+    ElseTerm->setDebugLoc(DL);
+    ThenTerm->getParent()->setName("storeFinish");
+    ElseTerm->getParent()->setName("gcStoreBad");
+
+    // Copy oop bits to an early-clobber i64; peel+OR StoreGood on that
+    // i64 only (zAddress.inline.hpp:806). Do not ptrmask/ptrtoint NewVal.
+    IRBuilder<> FastBuilder(ThenTerm);
+    FunctionType *CopyTy = FunctionType::get(I64, {NewVal->getType()}, false);
+    InlineAsm *CopyAsm = InlineAsm::get(CopyTy, "movq $1, $0", "=&r,r",
+                                        /*hasSideEffects=*/false);
+    Value *NewBits =
+        FastBuilder.CreateCall(CopyAsm, NewVal, "cj.store.new.bits");
+    cast<CallInst>(NewBits)->setDebugLoc(DL);
+    Value *NewI = FastBuilder.CreateAnd(
+        NewBits, ConstantInt::get(I64, AddressMask), "cj.store.new.i");
+    cast<Instruction>(NewI)->setDebugLoc(DL);
+    Constant *GoodGV = M->getOrInsertGlobal("g_cjStoreGoodMask", I64);
+    Value *GoodMask = FastBuilder.CreateLoad(I64, GoodGV, "cj.storegoodmask");
+    cast<Instruction>(GoodMask)->setDebugLoc(DL);
+    Value *ColoredI =
+        FastBuilder.CreateOr(NewI, GoodMask, "cj.store.colored.i");
+    cast<Instruction>(ColoredI)->setDebugLoc(DL);
+    Value *IsNull = FastBuilder.CreateICmpEQ(
+        NewI, ConstantInt::get(I64, (uint64_t)0), "cj.store.new.isnull");
+    cast<Instruction>(IsNull)->setDebugLoc(DL);
+    Value *Word = FastBuilder.CreateSelect(IsNull, NewI, ColoredI,
+                                           "cj.store.word");
+    cast<Instruction>(Word)->setDebugLoc(DL);
+    unsigned PlaceAS = Place->getType()->getPointerAddressSpace();
+    Value *PlaceI64 = FastBuilder.CreateBitCast(
+        Place, PointerType::get(I64, PlaceAS), "cj.store.place.i64");
+    if (auto *BC = dyn_cast<Instruction>(PlaceI64))
+      BC->setDebugLoc(DL);
+    StoreInst *St =
+        FastBuilder.CreateStore(Word, PlaceI64, /*isVolatile=*/true);
+    St->setDebugLoc(DL);
+    CI->moveBefore(ElseTerm);
   }
 
   Module *M;
@@ -968,9 +845,6 @@ public:
 
 INITIALIZE_PASS_BEGIN(CJBarrierLowering, "cj-barrier-lowering",
                       "Cangjie Barrier Lowering", false, false)
-INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
-INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_END(CJBarrierLowering, "cj-barrier-lowering",
                     "Cangjie Barrier Lowering", false, false)
 
@@ -992,14 +866,6 @@ StringRef CJBarrierLowering::getPassName() const {
 
 void CJBarrierLowering::getAnalysisUsage(AnalysisUsage &AU) const {
   FunctionPass::getAnalysisUsage(AU);
-  if (EnableGCStateLoop) {
-    AU.addRequired<LoopInfoWrapperPass>();
-    AU.addPreserved<LoopInfoWrapperPass>();
-    AU.addRequired<DominatorTreeWrapperPass>();
-    AU.addPreserved<DominatorTreeWrapperPass>();
-    AU.addRequired<ScalarEvolutionWrapperPass>();
-    AU.addPreserved<ScalarEvolutionWrapperPass>();
-  }
 }
 
 /// doInitialization - If this module uses the GC intrinsics, find them now.
@@ -1065,169 +931,9 @@ static bool fastBarrierInline(Function &F, GCPhaseCheck &GCPhase) {
   return Changed;
 }
 
-static SmallVector<CallBase *, 8> GCWriteBarriers;
-
-// on safepoint and contain barriers's loop
-static bool containBarrier(Loop &L, bool &containSafepoint) {
-  if (!L.isInnermost() || L.getNumBlocks() > MaxLoopBlock ||
-      !L.getLoopPreheader()) {
-    return false;
-  }
-  GCWriteBarriers.clear();
-  BasicBlock *Latch = L.getLoopLatch();
-  assert(Latch && "Simplified loops only have one latch!");
-  if (Latch->getTerminator()->getMetadata(ClonedPinLoopTag)) {
-    return false;
-  }
-  Value *BP = nullptr;
-  for (auto *LoopBB : L.blocks()) {
-    for (auto It = LoopBB->begin(), E = LoopBB->end(); It != E;) {
-      auto *CI = dyn_cast<CallBase>(&*It++);
-      if (!CI) {
-        continue;
-      }
-      containSafepoint |= mayBeSafepoint(CI);
-      unsigned IID = CI->getIntrinsicID();
-      switch (IID) {
-      default:
-        break;
-      case Intrinsic::cj_gcwrite_ref:
-        BP = getBaseObj(CI);
-        break;
-      case Intrinsic::cj_gcwrite_static_ref:
-        BP = getPointerArg(CI);
-        break;
-      case Intrinsic::cj_gcwrite_struct:
-        BP = getBaseObj(CI);
-        break;
-      case Intrinsic::cj_gcwrite_static_struct:
-        BP = getDest(CI);
-        break;
-      case Intrinsic::cj_array_copy_ref:
-      case Intrinsic::cj_array_copy_struct:
-        BP = CI->getArgOperand(ArrayCopy::DstObj);
-        break;
-      }
-      if (BP == nullptr) {
-        continue;
-      }
-      GCWriteBarriers.push_back(CI);
-      BP = nullptr;
-    }
-  }
-  return GCWriteBarriers.size() != 0;
-}
-
-static Loop &cloneLoop(Loop *L, Function &F, LoopInfo &LI) {
-  ValueToValueMapTy Map;
-  SmallVector<BasicBlock *, 64> Blocks;
-  for (BasicBlock *BB : L->getBlocks()) {
-    BasicBlock *Clone = CloneBasicBlock(BB, Map, Twine(".pin"), &F);
-    Blocks.push_back(Clone);
-    Map[BB] = Clone;
-  }
-  auto GetClonedValue = [&Map](Value *V) {
-    assert(V && "null values not in domain!");
-    auto It = Map.find(V);
-    if (It == Map.end()) {
-      return V;
-    }
-    return static_cast<Value *>(It->second);
-  };
-  auto *ClonedLatch = cast<BasicBlock>(GetClonedValue(L->getLoopLatch()));
-  LLVMContext &Ctx = L->getHeader()->getContext();
-  ClonedLatch->getTerminator()->setMetadata(ClonedPinLoopTag,
-                                            MDNode::get(Ctx, {}));
-  for (unsigned i = 0, e = Blocks.size(); i != e; ++i) {
-    BasicBlock *ClonedBB = Blocks[i];
-    BasicBlock *OriginalBB = L->getBlocks()[i];
-    for (Instruction &I : *ClonedBB) {
-      RemapInstruction(&I, Map,
-                       RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
-    }
-    for (auto *SBB : successors(OriginalBB)) {
-      if (L->contains(SBB)) {
-        continue;
-      }
-      for (PHINode &PN : SBB->phis()) {
-        Value *OldIncoming = PN.getIncomingValueForBlock(OriginalBB);
-        PN.addIncoming(GetClonedValue(OldIncoming), ClonedBB);
-      }
-    }
-  }
-  Loop &New = *LI.AllocateLoop();
-  if (L->getParentLoop()) {
-    L->getParentLoop()->addChildLoop(&New);
-  } else {
-    LI.addTopLevelLoop(&New);
-  }
-  for (auto *BB : L->blocks()) {
-    if (LI.getLoopFor(BB) == L) {
-      New.addBasicBlockToLoop(cast<BasicBlock>(Map[BB]), LI);
-    }
-  }
-  return New;
-}
-
-static void handleGCStateLoop(Loop &New, Loop &L, GCPhaseCheck &GCPhase) {
-  BasicBlock *PreHeader = L.getLoopPreheader();
-  BranchInst *PreTerm = dyn_cast<BranchInst>(PreHeader->getTerminator());
-  assert(PreTerm != nullptr && "PreHeader's trem inst is not branch inst");
-  BasicBlock *Header = L.getHeader();
-  assert(!PreTerm->isConditional() && "PreHeader's term has conditional");
-  GCPhase.createGCCheck(PreHeader, Header, New.getHeader());
-  PreTerm->eraseFromParent();
-}
-
-static void replaceBarriers() {
-  for (unsigned Index = 0; Index < GCWriteBarriers.size(); Index++) {
-    CallBase *CI = GCWriteBarriers[Index];
-    IRBuilder<> IRB(CI);
-    Instruction *Inst = createStoreOrMems(CI, IRB);
-    if (Inst != nullptr) {
-      Inst->setDebugLoc(CI->getDebugLoc());
-      CI->eraseFromParent();
-    }
-  }
-}
-
-static void checkLoopBarrier(Function &F, LoopInfo &LI, DominatorTree &DT,
-                             ScalarEvolution &SE, GCPhaseCheck &GCPhase) {
-  if (LI.empty()) {
-    return;
-  }
-
-  for (auto L : LI) {
-    simplifyLoop(L, &DT, &LI, &SE, nullptr, nullptr, false);
-    formLCSSARecursively(*L, DT, &LI, &SE);
-  }
-
-  SmallPriorityWorklist<Loop *, 4> Worklist;
-  appendLoopsToWorklist(LI, Worklist);
-
-  while (!Worklist.empty()) {
-    Loop *L = Worklist.pop_back_val();
-    bool containSafepoint = false;
-    if (!containBarrier(*L, containSafepoint)) {
-      continue;
-    }
-    if (!containSafepoint && EnableGCStateLoop &&
-        !EnableGenerationalPostBarrier) {
-      Loop &New = cloneLoop(L, F, LI);
-      handleGCStateLoop(New, *L, GCPhase);
-      replaceBarriers();
-      DT.recalculate(F);
-      formLCSSARecursively(New, DT, &LI, &SE);
-      simplifyLoop(&New, &DT, &LI, &SE, nullptr, nullptr, true);
-      formLCSSARecursively(*L, DT, &LI, &SE);
-      simplifyLoop(L, &DT, &LI, &SE, nullptr, nullptr, true);
-    }
-  }
-}
-
 void CJBarrierLowering::writeBarrierFastPath(Function &F,
                                              SetVector<CallInst *> &Barriers) {
-  if (EnableGenerationalPostBarrier && EnableTaggedPointer && !CangjieJIT) {
+  if (EnableTaggedPointer && !CangjieJIT) {
     WriteBarrier WB(F);
     for (CallInst *CI : Barriers) {
       if (!CI->getParent())
@@ -1238,33 +944,12 @@ void CJBarrierLowering::writeBarrierFastPath(Function &F,
         continue;
       WB.storeFastPath(CI);
     }
-    // storeFastPath splits the write (zBarrierSetAssembler_x86.cpp:358-374).
-    // checkLoopBarrier still calls simplifyLoop whenever EnableGCStateLoop,
-    // even if the clone is skipped (EnableGenerationalPostBarrier). Rebuild
-    // DT/LI/SE so LoopSimplify does not walk a stale tree.
-    if (EnableGCStateLoop) {
-      if (auto *DTWP = getAnalysisIfAvailable<DominatorTreeWrapperPass>()) {
-        auto &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
-        SE.forgetAllLoops();
-        DominatorTree &DT = DTWP->getDomTree();
-        DT.recalculate(F);
-        LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-        LI.releaseMemory();
-        LI.analyze(DT);
-      }
-    }
   }
 
   if (!EnableGCPhase || CangjieJIT)
     return;
 
   GCPhaseCheck GCPhase(F);
-  if (EnableGCStateLoop) {
-    auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
-    auto &DT = getAnalysisIfAvailable<DominatorTreeWrapperPass>()->getDomTree();
-    auto &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
-    checkLoopBarrier(F, LI, DT, SE, GCPhase);
-  }
   fastBarrierInline(F, GCPhase);
 }
 
@@ -1571,12 +1256,10 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
     return Changed;
   }
 
-  // Paint-on (now the default) needs load peel at every opt level
-  // (zAddress.inline.hpp:609). Census-only (=0) still skips both at -O0.
-  if (OptLevel != CodeGenOpt::None || EnableStoreGoodPaint) {
-    readBarrierFastPath(F, Barriers);
-    writeBarrierFastPath(F, Barriers);
-  }
+  // Store-good paint needs the load peel at every opt level, -O0 included
+  // (zAddress.inline.hpp:609).
+  readBarrierFastPath(F, Barriers);
+  writeBarrierFastPath(F, Barriers);
   doLowering(F);
   return true;
 }
