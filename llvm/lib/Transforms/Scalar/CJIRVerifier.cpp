@@ -243,35 +243,23 @@ public:
       Value *Dst = Call.getArgOperand(0);
       Value *Src = Call.getArgOperand(1);
       Value *SizeArg = Call.getArgOperand(2);
-      if (hasKnownReferencePayload(Dst, SizeArg) ||
-          hasKnownReferencePayload(Src, SizeArg)) {
+      ReferencePayloadKind DstPayload =
+          classifyReferencePayload(Dst, SizeArg);
+      ReferencePayloadKind SrcPayload =
+          classifyReferencePayload(Src, SizeArg);
+      if (DstPayload == ReferencePayloadKind::ContainsReference ||
+          SrcPayload == ReferencePayloadKind::ContainsReference) {
         checkFailed("Bare memcpy/memmove of reference payload must use "
                     "cj_array_copy_ref or another typed GC barrier.",
                     &Call);
         break;
       }
-
-      ConstantInt *SizeOpr = dyn_cast<ConstantInt>(Call.getArgOperand(2));
-      if (SizeOpr == nullptr) {
-        break;
-      }
-      uint64_t Size = SizeOpr->getZExtValue();
-      Type *DstBaseTy = findMemoryBasePointer(Dst)->getType();
-      Type *SrcBaseTy = findMemoryBasePointer(Src)->getType();
-      // do nothing if stack copy to stack.
-      if (!isGCPointerType(DstBaseTy) && !isGCPointerType(SrcBaseTy)) {
-        break;
-      }
-
-      auto containGCPtr = [this, Size](Value *Ptr) {
-        SmallVector<uint64_t, 8> AllRefPos;
-        return findReferencePositions(Ptr, Size, AllRefPos);
-      };
-      if (!isGCPointerType(DstBaseTy) && containGCPtr(Dst)) {
-        checkFailed("The ReadBarrier instruction should be used here!", &Call);
-      }
-      if (!isGCPointerType(SrcBaseTy) && containGCPtr(Src)) {
-        checkFailed("The WriteBarrier instruction should be used here!", &Call);
+      if (DstPayload == ReferencePayloadKind::Unknown ||
+          SrcPayload == ReferencePayloadKind::Unknown) {
+        checkFailed("Bare memcpy/memmove payload provenance is unknown; use "
+                    "cj_array_copy_ref, a typed helper, or supply typed "
+                    "provenance.",
+                    &Call);
       }
       break;
     }
@@ -708,43 +696,49 @@ private:
     return false;
   }
 
-  // A bare memtransfer may erase its payload to i8*, but casts/GEPs still let
-  // us recover a typed allocation in the common frontend form.  Reject every
-  // range that is known to contain (or may overlap) a managed reference.  An
-  // opaque/generic i8* with no recoverable aggregate type remains unknown; it
-  // must not be guessed to contain references here.
-  bool hasKnownReferencePayload(Value *Ptr, Value *SizeValue) {
+  enum class ReferencePayloadKind { ContainsReference, NoReference, Unknown };
+
+  // A bare memtransfer is legal only when typed provenance and a constant,
+  // in-bounds range prove the copied bytes contain no managed references.
+  // Type erasure, dynamic sizes, and ranges outside the recovered layout are
+  // unknown and therefore rejected by the caller.
+  ReferencePayloadKind classifyReferencePayload(Value *Ptr, Value *SizeValue) {
     auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
     if (!PtrTy)
-      return false;
+      return ReferencePayloadKind::Unknown;
+
+    auto *Size = dyn_cast<ConstantInt>(SizeValue);
+    if (!Size)
+      return ReferencePayloadKind::Unknown;
 
     APInt Offset(DL.getIndexSizeInBits(PtrTy->getAddressSpace()), 0);
     Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
     auto *BasePtrTy = dyn_cast<PointerType>(Base->getType());
     if (!BasePtrTy || BasePtrTy->isOpaque())
-      return false;
+      return ReferencePayloadKind::Unknown;
 
     Type *PayloadTy = BasePtrTy->getNonOpaquePointerElementType();
-    if (!containsGCPtrType(PayloadTy))
-      return false;
+    // A bare i8* (argument, inttoptr, or another erased carrier) describes no
+    // enclosing layout. An i8 alloca is still concrete typed storage.
+    if (PayloadTy->isIntegerTy(8) && !isa<AllocaInst>(Base))
+      return ReferencePayloadKind::Unknown;
 
-    auto *Size = dyn_cast<ConstantInt>(SizeValue);
-    if (!Size)
-      return true;
     uint64_t CopySize = Size->getZExtValue();
-    if (CopySize == 0)
-      return false;
     if (Offset.isNegative() || Offset.getActiveBits() > 64)
-      return true;
+      return ReferencePayloadKind::Unknown;
 
     uint64_t Begin = Offset.getZExtValue();
     uint64_t End = Begin + CopySize;
     if (End < Begin)
-      return true;
+      return ReferencePayloadKind::Unknown;
 
     uint64_t AllocSize = DL.getTypeAllocSize(PayloadTy).getFixedSize();
-    if (Begin >= AllocSize || End > AllocSize)
-      return true;
+    if (Begin > AllocSize || End > AllocSize)
+      return ReferencePayloadKind::Unknown;
+    if (CopySize == 0)
+      return ReferencePayloadKind::NoReference;
+    if (!containsGCPtrType(PayloadTy))
+      return ReferencePayloadKind::NoReference;
 
     SmallVector<uint64_t, 8> RefPositions;
     if (isGCPointerType(PayloadTy)) {
@@ -757,13 +751,16 @@ private:
       // containsGCPtrType() also recognizes vectors.  Until a field-level
       // vector layout rule exists, rejecting the whole typed range is the
       // fail-closed answer.
-      return true;
+      return ReferencePayloadKind::ContainsReference;
     }
 
     uint64_t RefSize = DL.getPointerSize(1);
-    return llvm::any_of(RefPositions, [Begin, End, RefSize](uint64_t Pos) {
-      return Pos < End && Begin < Pos + RefSize;
-    });
+    bool OverlapsReference = llvm::any_of(
+        RefPositions, [Begin, End, RefSize](uint64_t Pos) {
+          return Pos < End && Begin < Pos + RefSize;
+        });
+    return OverlapsReference ? ReferencePayloadKind::ContainsReference
+                             : ReferencePayloadKind::NoReference;
   }
 
   bool findReferencePositions(Value *Ptr, uint64_t Size,
