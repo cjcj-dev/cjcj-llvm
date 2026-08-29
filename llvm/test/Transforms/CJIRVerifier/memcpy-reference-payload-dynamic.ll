@@ -4,7 +4,7 @@
 
 ; A dynamic copy size cannot prove that the known reference field is excluded,
 ; so the typed payload is rejected fail-closed.
-; CHECK: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
+; CHECK: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance.
 ; CHECK-NEXT: call void @llvm.memcpy.p0i8.p0i8.i64
 ; CHECK: in function reject_dynamic_bare_memcpy_ref_payload
 define void @reject_dynamic_bare_memcpy_ref_payload(i64 %size) gc "cangjie" {
