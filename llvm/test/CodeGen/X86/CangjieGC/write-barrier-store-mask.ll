@@ -33,11 +33,26 @@
 ; CHECK: store volatile i64
 ; CHECK: gcStoreBad:
 ;
-; Compile-time-provable null-base (stack/AS0 contract) stays a plain store.
+; A null base cannot prove that an addrspace(1) destination is non-heap. Route
+; it through the MCC producer instead of the old raw-store special case.
+; Static/root writes use the distinct gcwrite.static.ref contract.
 ; CHECK-LABEL: define void @write_ref_null_base(
-; CHECK-NOT: g_cjStoreBadMask
+; CHECK: call void @CJ_MCC_WriteRefField
+; CHECK-NOT: store i8 addrspace(1)* %val
+; CHECK: ret void
+;
+; A null base plus a destination derived from an AS0 alloca is a structural
+; non-heap proof. Preserve the frozen stack contract and lower it to a raw
+; root store (the mutator/root representation remains plain).
+; CHECK-LABEL: define void @write_ref_null_base_alloca(
+; CHECK-NOT: call void @CJ_MCC_WriteRefField
 ; CHECK: store i8 addrspace(1)* %val
-; CHECK-NOT: CJ_MCC_WriteRefField
+; CHECK: ret void
+; STACK-LABEL: define void @write_ref_null_base_alloca(
+; STACK-NOT: call void @CJ_MCC_WriteRefField
+; STACK: store i8 addrspace(1)* %val
+; STACK-NOT: call void @CJ_MCC_WriteRefField
+; STACK: ret void
 ;
 ; Bulk/atomic stay on the MCC path (A14-A16).
 ; CHECK-LABEL: define void @atomic_store_ref(
@@ -67,6 +82,16 @@ entry:
   call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val,
                                  i8 addrspace(1)* null,
                                  i8 addrspace(1)* addrspace(1)* %field)
+  ret void
+}
+
+define void @write_ref_null_base_alloca(i8 addrspace(1)* %val) gc "cangjie" {
+entry:
+  %slot = alloca i8 addrspace(1)*, align 8
+  %slot.as1 = addrspacecast i8 addrspace(1)** %slot to i8 addrspace(1)* addrspace(1)*
+  call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val,
+                                 i8 addrspace(1)* null,
+                                 i8 addrspace(1)* addrspace(1)* %slot.as1)
   ret void
 }
 

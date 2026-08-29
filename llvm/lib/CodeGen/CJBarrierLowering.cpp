@@ -337,14 +337,42 @@ public:
     return false;
   }
 
+  // A null base object is not a storage-class proof.  Raw lowering is valid
+  // only when the destination itself is rooted in an alloca or AS0; an
+  // unknown AS1 destination may still be a heap reference slot and must stay
+  // on the MCC path so the runtime publishes a coloured word.
+  bool hasProvenNonHeapDestination(CallBase *CI) {
+    Value *Dst = nullptr;
+    switch (CI->getIntrinsicID()) {
+    case Intrinsic::cj_gcwrite_ref:
+      Dst = getPointerArg(CI);
+      break;
+    case Intrinsic::cj_gcwrite_struct:
+      Dst = getDest(CI);
+      break;
+    default:
+      return false;
+    }
+
+    auto *DstTy = dyn_cast<PointerType>(Dst->getType());
+    if (DstTy && DstTy->getAddressSpace() == 0)
+      return true;
+
+    Value *Base = findMemoryBasePointer(Dst);
+    if (isa<AllocaInst>(Base))
+      return true;
+    auto *BaseTy = dyn_cast<PointerType>(Base->getType());
+    return BaseTy && BaseTy->getAddressSpace() == 0;
+  }
+
   bool fastBarrier(unsigned IID, CallBase *CI) {
     switch (IID) {
-    // If Write barrier baseObj is null, we will replace to store.
-    // Others, inline to fastbarrier.
+    // Stack/AS0 writes have no HeapSlot colour contract.  Null alone proves
+    // nothing: keep an unproven AS1 destination on MCC.
     case Intrinsic::cj_gcwrite_ref:
     case Intrinsic::cj_gcwrite_struct: {
       Value *BaseObj = getBaseObj(CI);
-      if (isNullPointer(BaseObj)) {
+      if (isNullPointer(BaseObj) && hasProvenNonHeapDestination(CI)) {
         IRBuilder<> Builder(CI);
         createStoreOrMems(CI, Builder);
         CI->eraseFromParent();
