@@ -759,7 +759,10 @@ private:
 //
 // ZGC color_store_good (zBarrier.inline.hpp:448-450 /
 // zAddress.inline.hpp:806-808). Hit arm peels new, ORs StoreGood, i64 store.
-// Null stays plain 0 (WCollector.h:756-758). Miss goes to MCC.
+// Null stays plain 0 (WCollector.h:756-758). Miss goes to MCC. The hit arm
+// hands the pre-store word to the runtime exit: like ZGC's load_atomic(p)
+// capture (zBarrier.inline.hpp:695-706), this is the SATB deletion record and
+// cannot be reconstructed from the installed new word.
 class WriteBarrier {
 public:
   explicit WriteBarrier(Function &F) : M(F.getParent()), C(F.getContext()) {}
@@ -831,6 +834,15 @@ public:
     StoreInst *St =
         FastBuilder.CreateStore(Word, PlaceI64, /*isVolatile=*/true);
     St->setDebugLoc(DL);
+    Value *BaseObj = getBaseObj(CI);
+    FunctionType *PostStoreTy = FunctionType::get(
+        Type::getVoidTy(C),
+        {NewVal->getType(), BaseObj->getType(), FieldPtr->getType(), I64}, false);
+    FunctionCallee PostStore =
+        M->getOrInsertFunction("CJ_MCC_PostWriteRefField", PostStoreTy);
+    CallInst *PostStoreCall = FastBuilder.CreateCall(
+        PostStore, {NewVal, BaseObj, FieldPtr, PrevI});
+    PostStoreCall->setDebugLoc(DL);
     CI->moveBefore(ElseTerm);
   }
 
