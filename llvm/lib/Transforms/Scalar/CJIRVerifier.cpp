@@ -243,6 +243,9 @@ public:
       Value *Dst = Call.getArgOperand(0);
       Value *Src = Call.getArgOperand(1);
       Value *SizeArg = Call.getArgOperand(2);
+      auto *ConstantSize = dyn_cast<ConstantInt>(SizeArg);
+      if (ConstantSize && ConstantSize->isZero())
+        break;
       ReferencePayloadKind DstPayload =
           classifyReferencePayload(Dst, SizeArg);
       ReferencePayloadKind SrcPayload =
