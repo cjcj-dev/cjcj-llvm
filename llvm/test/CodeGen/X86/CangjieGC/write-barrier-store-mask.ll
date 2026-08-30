@@ -23,6 +23,7 @@
 ; CHECK: [[ISNULL:%.*]] = icmp eq i64 [[NEW_I]], 0
 ; CHECK: [[WORD:%.*]] = select i1 [[ISNULL]], i64 [[NEW_I]], i64 [[COLORED_I]]
 ; CHECK: store volatile i64 [[WORD]]
+; CHECK-NEXT: call void @CJ_MCC_PostWriteRefField(i8 addrspace(1)* %val, i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %field, i64 [[PREV_I]])
 ; CHECK: gcStoreBad:
 ; CHECK: call void @CJ_MCC_WriteRefField
 ;
@@ -31,6 +32,7 @@
 ; CHECK: cj.store.new.isnull
 ; CHECK: select i1
 ; CHECK: store volatile i64
+; CHECK-NEXT: call void @CJ_MCC_PostWriteRefField(i8 addrspace(1)* null, i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %field, i64 {{%.*}})
 ; CHECK: gcStoreBad:
 ;
 ; A null base cannot prove that an addrspace(1) destination is non-heap. Route
