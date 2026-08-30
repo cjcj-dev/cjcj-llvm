@@ -248,7 +248,10 @@ public:
         break;
       Type *DstCompleteTy = getCompleteTypedNonHeapObjectType(Dst, SizeArg);
       Type *SrcCompleteTy = getCompleteTypedNonHeapObjectType(Src, SizeArg);
-      if (DstCompleteTy && DstCompleteTy == SrcCompleteTy)
+      // Both sides independently prove a complete typed non-heap object copy.
+      // Same-type is not required: the invariant is "does not cross the GC
+      // heap boundary", not "contains no managed references".
+      if (DstCompleteTy && SrcCompleteTy)
         break;
       ReferencePayloadKind DstPayload =
           classifyReferencePayload(Dst, SizeArg);
@@ -706,9 +709,10 @@ private:
   enum class ReferencePayloadKind { ContainsReference, NoReference, Unknown };
 
   // Stack/runtime roots are plain. A whole-object transfer between two typed
-  // non-heap locations therefore needs no heap reference barrier. Keep this
-  // proof deliberately narrower than address-space checks alone: both sides
-  // must recover the same complete object type at offset zero.
+  // non-heap locations therefore needs no heap reference barrier, even when
+  // the payload contains managed references. Each side must independently
+  // prove: addrspace(0), typed (recoverable layout), offset==0, and
+  // size==allocsize. Types need not match.
   Type *getCompleteTypedNonHeapObjectType(Value *Ptr, Value *SizeValue) {
     auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
     auto *Size = dyn_cast<ConstantInt>(SizeValue);
