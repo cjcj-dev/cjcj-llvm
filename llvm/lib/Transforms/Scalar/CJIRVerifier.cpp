@@ -246,6 +246,10 @@ public:
       auto *ConstantSize = dyn_cast<ConstantInt>(SizeArg);
       if (ConstantSize && ConstantSize->isZero())
         break;
+      Type *DstCompleteTy = getCompleteTypedNonHeapObjectType(Dst, SizeArg);
+      Type *SrcCompleteTy = getCompleteTypedNonHeapObjectType(Src, SizeArg);
+      if (DstCompleteTy && DstCompleteTy == SrcCompleteTy)
+        break;
       ReferencePayloadKind DstPayload =
           classifyReferencePayload(Dst, SizeArg);
       ReferencePayloadKind SrcPayload =
@@ -700,6 +704,33 @@ private:
   }
 
   enum class ReferencePayloadKind { ContainsReference, NoReference, Unknown };
+
+  // Stack/runtime roots are plain. A whole-object transfer between two typed
+  // non-heap locations therefore needs no heap reference barrier. Keep this
+  // proof deliberately narrower than address-space checks alone: both sides
+  // must recover the same complete object type at offset zero.
+  Type *getCompleteTypedNonHeapObjectType(Value *Ptr, Value *SizeValue) {
+    auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
+    auto *Size = dyn_cast<ConstantInt>(SizeValue);
+    if (!PtrTy || PtrTy->getAddressSpace() != 0 || !Size)
+      return nullptr;
+
+    APInt Offset(DL.getIndexSizeInBits(PtrTy->getAddressSpace()), 0);
+    Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
+    auto *BasePtrTy = dyn_cast<PointerType>(Base->getType());
+    if (!BasePtrTy || BasePtrTy->getAddressSpace() != 0 ||
+        BasePtrTy->isOpaque() || !Offset.isZero())
+      return nullptr;
+
+    Type *PayloadTy = BasePtrTy->getNonOpaquePointerElementType();
+    if (!PayloadTy->isSized())
+      return nullptr;
+    auto AllocSize = DL.getTypeAllocSize(PayloadTy);
+    if (AllocSize.isScalable() ||
+        Size->getZExtValue() != AllocSize.getFixedSize())
+      return nullptr;
+    return PayloadTy;
+  }
 
   // A bare memtransfer is legal only when typed provenance and a constant,
   // in-bounds range prove the copied bytes contain no managed references.
