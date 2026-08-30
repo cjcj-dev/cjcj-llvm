@@ -1,11 +1,10 @@
-; RUN: not not opt -passes=cj-ir-verifier < %s -disable-output 2>&1 | FileCheck %s -check-prefixes=CHECK,ABORT
+; RUN: opt -passes=cj-ir-verifier < %s -disable-output
 
 %payload = type { i8 addrspace(1)* }
 
-; CHECK: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
-; CHECK-NEXT: call void @llvm.memcpy.p0i8.p0i8.i64
-; CHECK: in function reject_nonzero_memcpy_with_reference_payload
-define void @reject_nonzero_memcpy_with_reference_payload() gc "cangjie" {
+; Stack/runtime roots stay plain. This is the IR analogue of
+; Barrier.cpp::CopyStructPlainToNonHeap's non-heap memmove path.
+define void @allow_complete_nonheap_memcpy_with_reference_payload() gc "cangjie" {
 entry:
   %dst = alloca %payload, align 8
   %src = alloca %payload, align 8
@@ -20,6 +19,3 @@ entry:
 
 declare void @llvm.cj.memset(i8*, i8, i64, i1)
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
-
-; ABORT: LLVM ERROR: Broken function found, compilation aborted
-; ABORT: error: Aborted
