@@ -165,7 +165,3 @@ add_llvm_component_library(LLVMAnalysis
   ProfileData
   Support
   )
-
-if(BUILD_SHARED_LIBS)
-  target_link_libraries(LLVMAnalysis PRIVATE ${CANGJIE_DEMANGLE_DIR}/libcangjie-demangle.a)
-endif()
