@@ -3,7 +3,7 @@
 %record = type { i64, i8 addrspace(1)* }
 
 ; CHECK: gcwrite/gcread.static.struct has no Metadata.
-; CHECK-NEXT: call void @llvm.cj.gcwrite.static.struct(i8* bitcast (%record* @record_global0 to i8*), i8* %0, i64 16)
+; CHECK-NEXT: call void @llvm.cj.gcwrite.static.struct.i64(i8* bitcast (%record* @record_global0 to i8*), i8* %0, i64 16)
 ; CHECK-NEXT: in function foo
 
 @"record_global0" = internal global %record zeroinitializer

@@ -253,10 +253,21 @@ public:
       // heap boundary", not "contains no managed references".
       if (DstCompleteTy && SrcCompleteTy)
         break;
+      ReferencePayloadKind SrcGenericPayload =
+          classifyCompleteGenericPayload(Src, SizeArg);
+      // A generic allocation is an erased heap carrier, but its canonical
+      // payload still has recoverable provenance through the TypeInfo operand.
+      // Admit it only when both complete layouts independently prove that the
+      // copied payload contains no managed references.
+      if (SrcGenericPayload == ReferencePayloadKind::NoReference &&
+          DstCompleteTy && !containsGCPtrType(DstCompleteTy))
+        break;
       ReferencePayloadKind DstPayload =
           classifyReferencePayload(Dst, SizeArg);
       ReferencePayloadKind SrcPayload =
-          classifyReferencePayload(Src, SizeArg);
+          SrcGenericPayload == ReferencePayloadKind::Unknown
+              ? classifyReferencePayload(Src, SizeArg)
+              : SrcGenericPayload;
       if (DstPayload == ReferencePayloadKind::ContainsReference ||
           SrcPayload == ReferencePayloadKind::ContainsReference) {
         checkFailed("Bare memcpy/memmove of reference payload must use "
@@ -707,6 +718,54 @@ private:
   }
 
   enum class ReferencePayloadKind { ContainsReference, NoReference, Unknown };
+
+  // Recover the complete payload layout of the canonical
+  //   alloca.generic -> bitcast -> GEP(one TypeInfo pointer) -> bitcast
+  // chain.  Any dynamic/interior carrier or inconsistent size remains
+  // unknown.  A recovered reference-bearing layout is reported explicitly so
+  // the caller retains the ContainsReference diagnostic.
+  ReferencePayloadKind classifyCompleteGenericPayload(Value *Ptr,
+                                                       Value *SizeValue) {
+    auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
+    auto *CopySize = dyn_cast<ConstantInt>(SizeValue);
+    if (!PtrTy || !CopySize)
+      return ReferencePayloadKind::Unknown;
+
+    APInt Offset(DL.getIndexSizeInBits(PtrTy->getAddressSpace()), 0);
+    Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
+    auto *Allocation = dyn_cast<IntrinsicInst>(Base);
+    if (!Allocation ||
+        Allocation->getIntrinsicID() != Intrinsic::cj_alloca_generic)
+      return ReferencePayloadKind::Unknown;
+
+    uint64_t HeaderSize =
+        DL.getTypeAllocSize(Type::getInt8PtrTy(C)).getFixedSize();
+    if (Offset.isNegative() || Offset.getActiveBits() > 64 ||
+        Offset.getZExtValue() != HeaderSize)
+      return ReferencePayloadKind::Unknown;
+
+    auto *AllocationSize =
+        dyn_cast<ConstantInt>(Allocation->getArgOperand(1));
+    auto *TI = dyn_cast<GlobalVariable>(
+        Allocation->getArgOperand(0)->stripPointerCasts());
+    if (!AllocationSize || !TI)
+      return ReferencePayloadKind::Unknown;
+
+    StructType *PayloadTy = getTypeLayoutType(TI);
+    if (!PayloadTy || !PayloadTy->isSized())
+      return ReferencePayloadKind::Unknown;
+    TypeSize PayloadSize = DL.getTypeAllocSize(PayloadTy);
+    if (PayloadSize.isScalable())
+      return ReferencePayloadKind::Unknown;
+
+    uint64_t Size = PayloadSize.getFixedSize();
+    if (CopySize->getZExtValue() != Size ||
+        AllocationSize->getZExtValue() != Size)
+      return ReferencePayloadKind::Unknown;
+    return containsGCPtrType(PayloadTy)
+               ? ReferencePayloadKind::ContainsReference
+               : ReferencePayloadKind::NoReference;
+  }
 
   // Stack/runtime roots are plain. A whole-object transfer between two typed
   // non-heap locations therefore needs no heap reference barrier, even when
