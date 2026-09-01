@@ -1,11 +1,13 @@
 ; RUN: opt -passes='default<O0>' --cangjie-pipeline -S < %s | FileCheck %s
 
 ; This test enters through the product Cangjie pipeline.  CJBoxedValueBarrier
-; must rewrite the memcpy before CJIRVerifier runs, and CJRuntimeLowering must
-; then lower the replacement intrinsic to the existing runtime entry.
+; must rewrite the memcpy before CJIRVerifier runs.  The replacement intrinsic
+; remains in IR for the later CodeGen CJBarrierLowering pass.
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+
 ; CHECK-LABEL: define i8 addrspace(1)* @box_in_product_pipeline(
 ; CHECK-NOT: llvm.memcpy.p1i8.p0i8.i32
-; CHECK: call void @CJ_MCC_WriteGenericPayload(i8 addrspace(1)* %object, i8* %source, i32 %size)
+; CHECK: call void @llvm.cj.gcwrite.generic.payload(i8 addrspace(1)* %{{[^,]+}}, i8* %source, i32 %size)
 define i8 addrspace(1)* @box_in_product_pipeline(i8* %type.info, i8* %source,
                                                  i32 %size) gc "cangjie" {
 entry:

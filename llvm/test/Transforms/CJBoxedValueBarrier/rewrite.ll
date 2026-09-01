@@ -26,7 +26,7 @@ entry:
 ; CHECK-LABEL: define i8 addrspace(1)* @keep_intervening_call(
 ; CHECK: call void @opaque()
 ; CHECK-NEXT: call void @llvm.memcpy.p1i8.p0i8.i32
-; CHECK-NOT: llvm.cj.gcwrite.generic.payload
+; CHECK-NOT: call void @llvm.cj.gcwrite.generic.payload
 define i8 addrspace(1)* @keep_intervening_call(i8* %type.info, i8* %source,
                                                 i32 %size) gc "cangjie" {
 entry:
@@ -48,7 +48,7 @@ entry:
 ; CHECK-LABEL: define i8 addrspace(1)* @keep_alloca_generic(
 ; CHECK: %object = call i8 addrspace(1)* @llvm.cj.alloca.generic
 ; CHECK: call void @llvm.memcpy.p1i8.p0i8.i32
-; CHECK-NOT: llvm.cj.gcwrite.generic.payload
+; CHECK-NOT: call void @llvm.cj.gcwrite.generic.payload
 define i8 addrspace(1)* @keep_alloca_generic(i8* %type.info, i8* %source,
                                               i32 %size) gc "cangjie" {
 entry:
@@ -66,7 +66,7 @@ entry:
 ; the dynamic-size repair.
 ; CHECK-LABEL: define i8 addrspace(1)* @keep_constant_i64(
 ; CHECK: call void @llvm.memcpy.p1i8.p0i8.i64
-; CHECK-NOT: llvm.cj.gcwrite.generic.payload
+; CHECK-NOT: call void @llvm.cj.gcwrite.generic.payload
 define i8 addrspace(1)* @keep_constant_i64(i8* %type.info,
                                             i8* %source) gc "cangjie" {
 entry:
@@ -84,7 +84,7 @@ entry:
 ; CHECK-LABEL: define void @keep_loaded_destination(
 ; CHECK: %destination = load i8 addrspace(1)*
 ; CHECK: call void @llvm.memcpy.p1i8.p0i8.i32
-; CHECK-NOT: llvm.cj.gcwrite.generic.payload
+; CHECK-NOT: call void @llvm.cj.gcwrite.generic.payload
 define void @keep_loaded_destination(i8 addrspace(1)** %slot, i8* %source,
                                      i32 %size) gc "cangjie" {
 entry:
@@ -98,7 +98,7 @@ entry:
 ; CHECK-LABEL: define i8 addrspace(1)* @keep_malloc_array(
 ; CHECK: %object = call i8 addrspace(1)* @llvm.cj.malloc.array
 ; CHECK: call void @llvm.memcpy.p1i8.p0i8.i32
-; CHECK-NOT: llvm.cj.gcwrite.generic.payload
+; CHECK-NOT: call void @llvm.cj.gcwrite.generic.payload
 define i8 addrspace(1)* @keep_malloc_array(i8* %type.info, i8* %source,
                                             i32 %size) gc "cangjie" {
 entry:
@@ -116,7 +116,7 @@ entry:
 ; A synthetic source without malloc.object is the zero-match control arm.
 ; CHECK-LABEL: define void @keep_argument_object(
 ; CHECK: call void @llvm.memcpy.p1i8.p0i8.i32
-; CHECK-NOT: llvm.cj.gcwrite.generic.payload
+; CHECK-NOT: call void @llvm.cj.gcwrite.generic.payload
 define void @keep_argument_object(i8 addrspace(1)* %object, i8* %source,
                                   i32 %size) gc "cangjie" {
 entry:
