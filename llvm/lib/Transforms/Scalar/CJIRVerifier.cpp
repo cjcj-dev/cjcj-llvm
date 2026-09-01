@@ -971,6 +971,10 @@ private:
 
   bool isRegisteredSubObjectCopy(Value *Dst, Type *SrcCompleteTy,
                                  Value *SizeValue) {
+    // Safety contract: CJRewriteStatepoint.cpp::computeStructTypeLayouts must
+    // register every recursively nested GC slot in each entry-block struct
+    // alloca.  Narrowing that registration surface would silently invalidate
+    // this admission predicate; keep its nested-struct lit in that pass.
     if (!SrcCompleteTy || !containsGCPtrType(SrcCompleteTy))
       return false;
 

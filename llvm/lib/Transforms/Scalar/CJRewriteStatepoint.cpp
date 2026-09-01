@@ -2096,6 +2096,10 @@ static unsigned computeStructTypeOffsets(StructType *ST,
 
 static void computeStructTypeLayouts(Function &F,
                                      AllocaAnalysisData &AllocaData) {
+  // CJIRVerifier.cpp::isRegisteredSubObjectCopy relies on this whole recursive
+  // registration surface for entry-block struct allocas.  Registering only a
+  // subset of nested GC slots would silently weaken that admission premise;
+  // keep nested-struct-layout.ll as the cross-pass tripwire.
   // Collect all AllocaInsts
   for (auto &I : F.getEntryBlock()) {
     auto *AI = dyn_cast<AllocaInst>(&I);
