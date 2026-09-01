@@ -255,19 +255,33 @@ public:
         break;
       ReferencePayloadKind SrcGenericPayload =
           classifyCompleteGenericPayload(Src, SizeArg);
-      // A generic allocation is an erased heap carrier, but its canonical
-      // payload still has recoverable provenance through the TypeInfo operand.
-      // Admit it only when both complete layouts independently prove that the
-      // copied payload contains no managed references.
-      if (SrcGenericPayload == ReferencePayloadKind::NoReference &&
-          DstCompleteTy && !containsGCPtrType(DstCompleteTy))
-        break;
       ReferencePayloadKind DstPayload =
-          classifyReferencePayload(Dst, SizeArg);
+          classifyCompleteGenericPayload(Dst, SizeArg);
+      if (DstPayload == ReferencePayloadKind::Unknown)
+        DstPayload = classifyCompleteArrayPayload(Dst, SizeArg);
+      if (DstPayload == ReferencePayloadKind::Unknown)
+        DstPayload = classifyReferencePayload(Dst, SizeArg);
       ReferencePayloadKind SrcPayload =
           SrcGenericPayload == ReferencePayloadKind::Unknown
-              ? classifyReferencePayload(Src, SizeArg)
+              ? classifyCompleteArrayPayload(Src, SizeArg)
               : SrcGenericPayload;
+      if (SrcPayload == ReferencePayloadKind::Unknown)
+        SrcPayload = classifyReferencePayload(Src, SizeArg);
+      // Cangjie lowers a payload of a canonical ABI base-pointer argument as
+      //   bitcast (bitcast (gep (bitcast %base), 1) to %Payload AS1*) to i8*.
+      // The exact header GEP plus complete pointee type proves source payload
+      // provenance.  Local allocations are intentionally excluded here: they
+      // must pass one of the stronger TypeInfo-based classifiers above.
+      if (SrcPayload == ReferencePayloadKind::Unknown)
+        SrcPayload = classifyTypedHeapPayload(Src, SizeArg);
+      // The source must always independently prove NoReference.  The
+      // destination must additionally be a complete, zero-offset typed
+      // non-heap object whose recovered layout contains no managed pointer.
+      // Address space alone is insufficient: an AS0 struct alloca may contain
+      // AS1 fields and is then a tracked reference slot.
+      if (SrcPayload == ReferencePayloadKind::NoReference &&
+          DstCompleteTy && !containsGCPtrType(DstCompleteTy))
+        break;
       if (DstPayload == ReferencePayloadKind::ContainsReference ||
           SrcPayload == ReferencePayloadKind::ContainsReference) {
         checkFailed("Bare memcpy/memmove of reference payload must use "
@@ -767,6 +781,123 @@ private:
                : ReferencePayloadKind::NoReference;
   }
 
+  ReferencePayloadKind classifyTypedHeapPayload(Value *Ptr,
+                                                 Value *SizeValue) {
+    auto *CopySize = dyn_cast<ConstantInt>(SizeValue);
+    auto *OuterCast = dyn_cast<BitCastInst>(Ptr);
+    if (!CopySize || !OuterCast ||
+        OuterCast->getDestTy() != Type::getInt8PtrTy(C, 1))
+      return ReferencePayloadKind::Unknown;
+
+    auto *PayloadPtrTy = dyn_cast<PointerType>(OuterCast->getSrcTy());
+    if (!PayloadPtrTy || PayloadPtrTy->getAddressSpace() != 1 ||
+        PayloadPtrTy->isOpaque())
+      return ReferencePayloadKind::Unknown;
+    Type *PayloadTy = PayloadPtrTy->getNonOpaquePointerElementType();
+    if (!PayloadTy->isSized())
+      return ReferencePayloadKind::Unknown;
+    TypeSize PayloadSize = DL.getTypeAllocSize(PayloadTy);
+    if (PayloadSize.isScalable() ||
+        CopySize->getZExtValue() != PayloadSize.getFixedSize())
+      return ReferencePayloadKind::Unknown;
+
+    auto *InnerCast = dyn_cast<BitCastInst>(OuterCast->getOperand(0));
+    if (!InnerCast)
+      return ReferencePayloadKind::Unknown;
+
+    auto *GEP = dyn_cast<GetElementPtrInst>(InnerCast->getOperand(0));
+    if (!GEP || GEP->getNumIndices() != 1 ||
+        GEP->getSourceElementType() != Type::getInt8PtrTy(C) ||
+        GEP->getAddressSpace() != 1)
+      return ReferencePayloadKind::Unknown;
+    auto *HeaderIndex = dyn_cast<ConstantInt>(GEP->idx_begin()->get());
+    if (!HeaderIndex || !HeaderIndex->isOne())
+      return ReferencePayloadKind::Unknown;
+
+    auto *BaseCast = dyn_cast<BitCastInst>(GEP->getPointerOperand());
+    if (!BaseCast || BaseCast->getSrcTy() != Type::getInt8PtrTy(C, 1) ||
+        BaseCast->getDestTy() != PointerType::get(Type::getInt8PtrTy(C), 1))
+      return ReferencePayloadKind::Unknown;
+
+    // visitFunction verifies that non-mutator-this GC pointer parameters are
+    // canonical i8 AS1 base pointers.  Restrict this typed fallback to that
+    // ABI provenance; selects, PHIs, interior pointers, and locally fabricated
+    // allocation chains remain Unknown.
+    auto *BaseArg = dyn_cast<Argument>(BaseCast->getOperand(0));
+    if (!BaseArg)
+      return ReferencePayloadKind::Unknown;
+    Function *Parent = BaseArg->getParent();
+    bool HasSRet = Parent->arg_size() != 0 &&
+                   Parent->getAttributes()
+                       .getParamAttrs(0)
+                       .hasAttribute(Attribute::StructRet);
+    unsigned ThisIndex = HasSRet ? 1 : 0;
+    if (Parent->hasFnAttribute("record_mut") &&
+        BaseArg->getArgNo() == ThisIndex)
+      return ReferencePayloadKind::Unknown;
+
+    return containsGCPtrType(PayloadTy)
+               ? ReferencePayloadKind::ContainsReference
+               : ReferencePayloadKind::NoReference;
+  }
+
+  // Recover a complete array payload rooted at llvm.cj.malloc.array.  The
+  // intrinsic carries the canonical TypeInfo, element count, and element
+  // size, while the result points at the object header.  Admit only the exact
+  // [ArrayHeadSize, ArrayHeadSize + count * element-size) payload range; an
+  // interior, partial, dynamic, or type-erased range remains unknown.
+  ReferencePayloadKind classifyCompleteArrayPayload(Value *Ptr,
+                                                     Value *SizeValue) {
+    auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
+    auto *CopySize = dyn_cast<ConstantInt>(SizeValue);
+    if (!PtrTy || !CopySize)
+      return ReferencePayloadKind::Unknown;
+
+    APInt Offset(DL.getIndexSizeInBits(PtrTy->getAddressSpace()), 0);
+    Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
+    auto *Allocation = dyn_cast<IntrinsicInst>(Base);
+    if (!Allocation ||
+        Allocation->getIntrinsicID() != Intrinsic::cj_malloc_array)
+      return ReferencePayloadKind::Unknown;
+
+    auto *Length = dyn_cast<ConstantInt>(Allocation->getArgOperand(1));
+    auto *ElementSize = dyn_cast<ConstantInt>(Allocation->getArgOperand(2));
+    auto *TI = dyn_cast<GlobalVariable>(
+        Allocation->getArgOperand(0)->stripPointerCasts());
+    if (!Length || !ElementSize || !TI)
+      return ReferencePayloadKind::Unknown;
+
+    StructType *LayoutTy = getTypeLayoutType(TI);
+    if (!LayoutTy || !LayoutTy->isSized() || LayoutTy->getNumElements() != 2)
+      return ReferencePayloadKind::Unknown;
+    auto *FlexibleArrayTy = dyn_cast<ArrayType>(LayoutTy->getElementType(1));
+    if (!FlexibleArrayTy || FlexibleArrayTy->getNumElements() != 0)
+      return ReferencePayloadKind::Unknown;
+    Type *ElementTy = FlexibleArrayTy->getElementType();
+    if (!ElementTy->isSized())
+      return ReferencePayloadKind::Unknown;
+    TypeSize LayoutElementSize = DL.getTypeAllocSize(ElementTy);
+    if (LayoutElementSize.isScalable())
+      return ReferencePayloadKind::Unknown;
+
+    if (Offset.isNegative() || Offset.getActiveBits() > 64 ||
+        Offset.getZExtValue() != ArrayHeadSize)
+      return ReferencePayloadKind::Unknown;
+
+    uint64_t Count = Length->getZExtValue();
+    uint64_t Stride = ElementSize->getZExtValue();
+    if (Stride != LayoutElementSize.getFixedSize() ||
+        (Stride != 0 && Count > UINT64_MAX / Stride))
+      return ReferencePayloadKind::Unknown;
+    uint64_t PayloadSize = Count * Stride;
+    if (CopySize->getZExtValue() != PayloadSize)
+      return ReferencePayloadKind::Unknown;
+
+    return containsGCPtrType(ElementTy)
+               ? ReferencePayloadKind::ContainsReference
+               : ReferencePayloadKind::NoReference;
+  }
+
   // Stack/runtime roots are plain. A whole-object transfer between two typed
   // non-heap locations therefore needs no heap reference barrier, even when
   // the payload contains managed references. Each side must independently
@@ -809,7 +940,27 @@ private:
       return ReferencePayloadKind::Unknown;
 
     APInt Offset(DL.getIndexSizeInBits(PtrTy->getAddressSpace()), 0);
-    Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
+    Value *Base = nullptr;
+    // Constant addrspacecasts, as emitted for static primitive arrays, are
+    // inspected before the generic offset stripper.  The generic helper can
+    // otherwise consume both the cast and its source GEP, losing the fact that
+    // the frontend cast an interior address.  Only a zero-offset source is a
+    // complete typed provenance anchor; dynamic and interior carriers stay
+    // fail-closed as Unknown.
+    if (auto *Cast = dyn_cast<ConstantExpr>(Ptr);
+        Cast && Cast->getOpcode() == Instruction::AddrSpaceCast) {
+      APInt SourceOffset(
+          DL.getIndexSizeInBits(Cast->getOperand(0)->getType()
+                                    ->getPointerAddressSpace()),
+          0);
+      Value *SourceBase = Cast->getOperand(0)->stripAndAccumulateConstantOffsets(
+          DL, SourceOffset, true);
+      if (!SourceOffset.isZero())
+        return ReferencePayloadKind::Unknown;
+      Base = SourceBase;
+    } else {
+      Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
+    }
     auto *BasePtrTy = dyn_cast<PointerType>(Base->getType());
     if (!BasePtrTy || BasePtrTy->isOpaque())
       return ReferencePayloadKind::Unknown;
