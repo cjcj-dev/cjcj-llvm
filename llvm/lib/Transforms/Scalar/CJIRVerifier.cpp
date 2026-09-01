@@ -252,9 +252,11 @@ public:
       Type *DstCompleteTy = getCompleteTypedNonHeapObjectType(Dst, SizeArg);
       Type *SrcCompleteTy = getCompleteTypedNonHeapObjectType(Src, SizeArg);
       // Both sides independently prove a complete typed non-heap object copy.
-      // Same-type is not required on this zero-offset path; the independent
-      // registered-subobject path below handles the destination-side offset.
-      if (DstCompleteTy && SrcCompleteTy)
+      // Managed-reference payloads additionally require equal byte offsets of
+      // their GC pointer slots; heterogeneous layouts with different maps are
+      // rejected before the generic provenance fallbacks.
+      if (DstCompleteTy && SrcCompleteTy &&
+          hasEqualGCPointerOffsets(DstCompleteTy, SrcCompleteTy))
         break;
 
       // A complete source object may be copied into a registered subobject of
@@ -1000,6 +1002,57 @@ private:
                DL.getTypeAllocSize(SrcCompleteTy).getFixedSize() &&
            "registered subobject size must equal helper allocsize");
     return true;
+  }
+
+  bool collectGCPointerOffsets(Type *Ty, uint64_t BaseOffset,
+                               SmallVectorImpl<uint64_t> &Offsets) {
+    if (auto *PT = dyn_cast<PointerType>(Ty)) {
+      if (isGCPointerType(PT))
+        Offsets.push_back(BaseOffset);
+      return true;
+    }
+    if (auto *ST = dyn_cast<StructType>(Ty)) {
+      if (!ST->isSized())
+        return false;
+      const StructLayout *Layout = DL.getStructLayout(ST);
+      for (unsigned I = 0, E = ST->getNumElements(); I != E; ++I) {
+        if (!collectGCPointerOffsets(
+                ST->getElementType(I),
+                BaseOffset + Layout->getElementOffset(I), Offsets))
+          return false;
+      }
+      return true;
+    }
+    if (auto *AT = dyn_cast<ArrayType>(Ty)) {
+      if (!AT->getElementType()->isSized())
+        return false;
+      uint64_t ElementSize =
+          DL.getTypeAllocSize(AT->getElementType()).getFixedSize();
+      for (uint64_t I = 0, E = AT->getNumElements(); I != E; ++I) {
+        if (!collectGCPointerOffsets(AT->getElementType(),
+                                     BaseOffset + I * ElementSize, Offsets))
+          return false;
+      }
+      return true;
+    }
+    // containsGCPtrType can see vectors, but no field-level byte offset rule
+    // exists for them here; fail closed rather than inventing one.
+    return !containsGCPtrType(Ty);
+  }
+
+  bool hasEqualGCPointerOffsets(Type *DstTy, Type *SrcTy) {
+    SmallVector<uint64_t, 8> DstOffsets;
+    SmallVector<uint64_t, 8> SrcOffsets;
+    if (!collectGCPointerOffsets(DstTy, 0, DstOffsets) ||
+        !collectGCPointerOffsets(SrcTy, 0, SrcOffsets))
+      return false;
+    llvm::sort(DstOffsets);
+    llvm::sort(SrcOffsets);
+    DstOffsets.erase(std::unique(DstOffsets.begin(), DstOffsets.end()),
+                     DstOffsets.end());
+    SrcOffsets.erase(std::unique(SrcOffsets.begin(), SrcOffsets.end()),
+                     SrcOffsets.end());
+    return DstOffsets == SrcOffsets;
   }
 
   // A bare memtransfer is legal only when typed provenance and a constant,
