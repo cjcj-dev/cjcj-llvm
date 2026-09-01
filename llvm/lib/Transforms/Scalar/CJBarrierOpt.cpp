@@ -554,6 +554,21 @@ private:
     return hasGlobalOrArgumentOrigin(Ptr, Visited);
   }
 
+  // A null base object is not a storage-class proof. Raw barrier replacement
+  // is valid only when the destination itself is rooted in an alloca or AS0;
+  // an allocation-derived AS1 destination may be a heap reference slot.
+  bool hasProvenNonHeapDestination(Value *Dst) {
+    auto *DstTy = dyn_cast<PointerType>(Dst->getType());
+    if (DstTy && DstTy->getAddressSpace() == 0)
+      return true;
+
+    Value *Base = findMemoryBasePointer(Dst);
+    if (isa<AllocaInst>(Base))
+      return true;
+    auto *BaseTy = dyn_cast<PointerType>(Base->getType());
+    return BaseTy && BaseTy->getAddressSpace() == 0;
+  }
+
   bool optStructBarrier(CallBase *Barrier) {
     auto PtrCheck = [this](Value *Ptr,
                            const std::function<bool(Value *)> &Check) {
@@ -583,9 +598,12 @@ private:
       bool IsFieldNotGV = PtrCheck(FieldPtr, [this](Value *Ptr) {
         return !hasGlobalOrArgumentOrigin(Ptr);
       });
+      bool IsFieldNonHeap = PtrCheck(FieldPtr, [this](Value *Ptr) {
+        return hasProvenNonHeapDestination(Ptr);
+      });
       // gcread/gcwrite to static pointer cannot be replace, even if base is
       // nullptr.
-      if (IsBaseNull && IsFieldNotGV) {
+      if (IsBaseNull && IsFieldNotGV && IsFieldNonHeap) {
         replaceBarrier(Barrier);
         return true;
       }
