@@ -6,6 +6,7 @@ add_llvm_component_library(LLVMScalarOpts
   CJAllocationSizeCheck.cpp
   CJIRVerifier.cpp
   CJBarrierSplit.cpp
+  CJBoxedValueBarrier.cpp
   CJDevirtualOpt.cpp
   CJRuntimeLowering.cpp
   CallSiteSplitting.cpp
