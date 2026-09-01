@@ -33,6 +33,9 @@
 #include "llvm/Transforms/Scalar/CJFillMetadata.h"
 #include "llvm/Transforms/Scalar/ReflectionInfo.h"
 
+#include <algorithm>
+#include <cassert>
+
 using namespace llvm;
 using namespace cangjie;
 
@@ -249,9 +252,16 @@ public:
       Type *DstCompleteTy = getCompleteTypedNonHeapObjectType(Dst, SizeArg);
       Type *SrcCompleteTy = getCompleteTypedNonHeapObjectType(Src, SizeArg);
       // Both sides independently prove a complete typed non-heap object copy.
-      // Same-type is not required: the invariant is "does not cross the GC
-      // heap boundary", not "contains no managed references".
+      // Same-type is not required on this zero-offset path; the independent
+      // registered-subobject path below handles the destination-side offset.
       if (DstCompleteTy && SrcCompleteTy)
+        break;
+
+      // A complete source object may be copied into a registered subobject of
+      // an entry-block struct alloca.  This path is deliberately independent
+      // from getCompleteTypedNonHeapObjectType: changing that shared helper
+      // would also widen the zero-offset :254 path and the source side.
+      if (isRegisteredSubObjectCopy(Dst, SrcCompleteTy, SizeArg))
         break;
       ReferencePayloadKind SrcGenericPayload =
           classifyCompleteGenericPayload(Src, SizeArg);
@@ -924,6 +934,72 @@ private:
         Size->getZExtValue() != AllocSize.getFixedSize())
       return nullptr;
     return PayloadTy;
+  }
+
+  // Return the type reached by a byte offset through struct fields.  Array
+  // steps are intentionally not modelled in this admission path: the
+  // statepoint registration contract currently binds entry-block struct
+  // allocas, while array descent has no exercised frontend witness here.
+  Type *findStructSubObjectType(StructType *ST, uint64_t TargetOffset,
+                                Type *Wanted, uint64_t BaseOffset = 0) {
+    if (BaseOffset == TargetOffset && ST == Wanted)
+      return ST;
+
+    const StructLayout *Layout = DL.getStructLayout(ST);
+    for (unsigned I = 0, E = ST->getNumElements(); I != E; ++I) {
+      Type *ElementTy = ST->getElementType(I);
+      uint64_t ElementOffset = BaseOffset + Layout->getElementOffset(I);
+      if (ElementOffset == TargetOffset && ElementTy == Wanted)
+        return ElementTy;
+
+      auto *Nested = dyn_cast<StructType>(ElementTy);
+      if (!Nested || !ElementTy->isSized())
+        continue;
+      uint64_t ElementSize = DL.getTypeAllocSize(ElementTy).getFixedSize();
+      if (TargetOffset < ElementOffset ||
+          TargetOffset >= ElementOffset + ElementSize)
+        continue;
+      if (Type *Found = findStructSubObjectType(
+              Nested, TargetOffset, Wanted, ElementOffset))
+        return Found;
+    }
+    return nullptr;
+  }
+
+  bool isRegisteredSubObjectCopy(Value *Dst, Type *SrcCompleteTy,
+                                 Value *SizeValue) {
+    if (!SrcCompleteTy || !containsGCPtrType(SrcCompleteTy))
+      return false;
+
+    auto *DstPtrTy = dyn_cast<PointerType>(Dst->getType());
+    auto *Size = dyn_cast<ConstantInt>(SizeValue);
+    if (!DstPtrTy || DstPtrTy->getAddressSpace() != 0 || !Size)
+      return false;
+
+    APInt Offset(DL.getIndexSizeInBits(0), 0);
+    Value *Base = Dst->stripAndAccumulateConstantOffsets(DL, Offset, true);
+    auto *AI = dyn_cast<AllocaInst>(Base);
+    if (!AI || AI->getParent() != &AI->getFunction()->getEntryBlock() ||
+        Offset.isNegative() || Offset.getActiveBits() > 64)
+      return false;
+
+    auto *Root = dyn_cast<StructType>(AI->getAllocatedType());
+    if (!Root)
+      return false;
+
+    uint64_t TargetOffset = Offset.getZExtValue();
+    Type *DstSubObject =
+        findStructSubObjectType(Root, TargetOffset, SrcCompleteTy);
+    if (!DstSubObject)
+      return false;
+
+    // P4 is implied by T coming from the unmodified :250 helper.  Keep this
+    // assertion as a tripwire so a future alternate source of T cannot make
+    // the size check silently disappear.
+    assert(Size->getZExtValue() ==
+               DL.getTypeAllocSize(SrcCompleteTy).getFixedSize() &&
+           "registered subobject size must equal helper allocsize");
+    return true;
   }
 
   // A bare memtransfer is legal only when typed provenance and a constant,
