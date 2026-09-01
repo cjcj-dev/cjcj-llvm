@@ -256,7 +256,8 @@ public:
       // their GC pointer slots; heterogeneous layouts with different maps are
       // rejected before the generic provenance fallbacks.
       if (DstCompleteTy && SrcCompleteTy &&
-          hasEqualGCPointerOffsets(DstCompleteTy, SrcCompleteTy))
+          hasEqualGCPointerOffsets(DstCompleteTy, SrcCompleteTy) &&
+          !isGlobalGCPointerDestination(Dst, DstCompleteTy))
         break;
 
       // A complete source object may be copied into a registered subobject of
@@ -1053,6 +1054,16 @@ private:
     SrcOffsets.erase(std::unique(SrcOffsets.begin(), SrcOffsets.end()),
                      SrcOffsets.end());
     return DstOffsets == SrcOffsets;
+  }
+
+  // Static destinations carrying managed references require the typed static
+  // barrier path.  Plain static data (no GC slots) remains on the memcpy path.
+  bool isGlobalGCPointerDestination(Value *Dst, Type *DstCompleteTy) {
+    if (!containsGCPtrType(DstCompleteTy))
+      return false;
+    APInt Offset(DL.getIndexSizeInBits(0), 0);
+    Value *Base = Dst->stripAndAccumulateConstantOffsets(DL, Offset, true);
+    return Offset.isZero() && isa<GlobalVariable>(Base);
   }
 
   // A bare memtransfer is legal only when typed provenance and a constant,

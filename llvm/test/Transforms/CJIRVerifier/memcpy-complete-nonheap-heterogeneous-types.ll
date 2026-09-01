@@ -1,4 +1,6 @@
-; RUN: opt -passes=cj-ir-verifier < %s -disable-output
+; RUN: not not opt -passes=cj-ir-verifier < %s -disable-output 2>&1 | FileCheck %s
+
+; CHECK: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
 
 %stack_trace_data = type { i8 addrspace(1)*, i8 addrspace(1)*,
                            i8 addrspace(1)*, i64 }
@@ -6,7 +8,7 @@
 
 ; Complete typed p0<-p0 copies of equal allocsize are non-heap even when the
 ; recovered object types differ and the payload contains GC pointers.
-define void @allow_complete_nonheap_heterogeneous_types() gc "cangjie" {
+define void @reject_complete_nonheap_heterogeneous_types_with_mismatched_gc_layout() gc "cangjie" {
 entry:
   %dst = alloca %stack_trace_data, align 8
   %src = alloca %same_size_alias, align 8
