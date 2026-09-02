@@ -4,6 +4,9 @@
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-dynamic-native-bytes.ll -disable-output
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-stack-to-heap.ll -disable-output
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-different-types.ll -disable-output
+; RUN: opt -passes=cj-ir-verifier < %t/allow-as0-entry-alloca-ref.ll -disable-output
+; RUN: not not opt -passes=cj-ir-verifier < %t/attack-as0-two-load-ref.ll -disable-output 2>&1 | FileCheck %s --check-prefix=AS0LOADREF
+; RUN: not not opt -passes=cj-ir-verifier < %t/attack-as0-two-call-ref.ll -disable-output 2>&1 | FileCheck %s --check-prefix=AS0CALLREF
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-reference.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REF
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-as1-bare-dst.ll -disable-output 2>&1 | FileCheck %s --check-prefix=BARE
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-dynamic-size.ll -disable-output 2>&1 | FileCheck %s --check-prefix=DYNAMIC
@@ -41,6 +44,10 @@
 ; CALL: in function attack_called_pointer
 ; PARTIALREF: Bare memcpy/memmove of reference payload
 ; PARTIALREF: in function attack_partial_nested_ref
+; AS0LOADREF: Bare memcpy/memmove payload provenance is unknown
+; AS0LOADREF: in function attack_as0_two_loaded_ref_objects
+; AS0CALLREF: Bare memcpy/memmove payload provenance is unknown
+; AS0CALLREF: in function attack_as0_two_called_ref_objects
 
 ;--- allow-as1-parent.ll
 %Parent = type { i8 addrspace(1)*, i32 }
@@ -195,6 +202,55 @@ entry:
 }
 
 declare void @llvm.memmove.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+
+;--- allow-as0-entry-alloca-ref.ll
+%HasRef = type { i8 addrspace(1)*, i64 }
+
+define void @allow_as0_entry_alloca_ref() gc "cangjie" {
+entry:
+  %src = alloca %HasRef, align 8
+  %dst = alloca %HasRef, align 8
+  %src.b = bitcast %HasRef* %src to i8*
+  %dst.b = bitcast %HasRef* %dst to i8*
+  call void @llvm.cj.memset(i8* %src.b, i8 0, i64 16, i1 false)
+  call void @llvm.cj.memset(i8* %dst.b, i8 0, i64 16, i1 false)
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst.b, i8* %src.b, i64 16, i1 false)
+  ret void
+}
+
+declare void @llvm.cj.memset(i8*, i8, i64, i1)
+declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+
+;--- attack-as0-two-load-ref.ll
+%HasRef = type { i8 addrspace(1)*, i64 }
+
+define void @attack_as0_two_loaded_ref_objects(%HasRef** %slot1, %HasRef** %slot2) gc "cangjie" {
+entry:
+  %p = load %HasRef*, %HasRef** %slot1
+  %q = load %HasRef*, %HasRef** %slot2
+  %src.b = bitcast %HasRef* %p to i8*
+  %dst.b = bitcast %HasRef* %q to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst.b, i8* %src.b, i64 16, i1 false)
+  ret void
+}
+
+declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+
+;--- attack-as0-two-call-ref.ll
+%HasRef = type { i8 addrspace(1)*, i64 }
+declare %HasRef* @make_ref()
+
+define void @attack_as0_two_called_ref_objects() gc "cangjie" {
+entry:
+  %p = call %HasRef* @make_ref()
+  %q = call %HasRef* @make_ref()
+  %src.b = bitcast %HasRef* %p to i8*
+  %dst.b = bitcast %HasRef* %q to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst.b, i8* %src.b, i64 16, i1 false)
+  ret void
+}
+
+declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
 
 ;--- reject-reference.ll
 %RefPayload = type { i8 addrspace(1)* }

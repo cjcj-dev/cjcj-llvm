@@ -988,6 +988,14 @@ private:
            BaseArg->getArgNo() != ThisIndex;
   }
 
+  // A stripped pointer may describe an object layout only when it still
+  // terminates at a declaration root. SSA producers such as load/call/phi
+  // carry a pointee type, but that type is not an object declaration.
+  bool isTrustedDeclarationRoot(Value *Base) {
+    return isa<AllocaInst>(Base) || isa<Argument>(Base) ||
+           isa<GlobalVariable>(Base);
+  }
+
   IntrinsicInst *getKnownHeapAllocation(Value *Base,
                                         StructType *&LayoutTy) {
     LayoutTy = nullptr;
@@ -1299,6 +1307,8 @@ private:
     auto *BasePtrTy = dyn_cast<PointerType>(Base->getType());
     if (!BasePtrTy || BasePtrTy->getAddressSpace() != 0 ||
         BasePtrTy->isOpaque() || !Offset.isZero())
+      return nullptr;
+    if (!isTrustedDeclarationRoot(Base))
       return nullptr;
 
     Type *PayloadTy = BasePtrTy->getNonOpaquePointerElementType();
@@ -1612,8 +1622,7 @@ private:
     // inttoptr describes only the SSA value, not the object it designates.
     // Dedicated classifiers above validate supported allocation intrinsics;
     // this structural fallback therefore accepts only declaration roots.
-    if (!isa<AllocaInst>(Base) && !isa<Argument>(Base) &&
-        !isa<GlobalVariable>(Base))
+    if (!isTrustedDeclarationRoot(Base))
       return ReferencePayloadKind::Unknown;
 
     Type *PayloadTy = BasePtrTy->getNonOpaquePointerElementType();
