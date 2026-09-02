@@ -17,7 +17,7 @@
 
 ;--- allow.ll
 %"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
-%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, i8*, i8*, i8*, i8* }
 %StringData = type { i8*, i64, [4 x i8] }
 
 @"RawArray<UInt8>.ti" = external global %TypeInfo, !RelatedType !0
@@ -39,7 +39,7 @@ attributes #2 = { "cjstring_literal" }
 
 ;--- reject-mutable.ll
 %"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
-%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, i8*, i8*, i8*, i8* }
 %StringData = type { i8*, i64, [4 x i8] }
 @"RawArray<UInt8>.ti" = external global %TypeInfo, !RelatedType !0
 @data = private constant %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 4, [4 x i8] c"abcd" } #1
@@ -58,7 +58,7 @@ attributes #2 = { "cjstring_literal" }
 
 ;--- reject-noattr.ll
 %"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
-%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, i8*, i8*, i8*, i8* }
 %StringData = type { i8*, i64, [4 x i8] }
 @"RawArray<UInt8>.ti" = external global %TypeInfo, !RelatedType !0
 @data = private constant %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 4, [4 x i8] c"abcd" } #1
@@ -76,7 +76,7 @@ attributes #1 = { "cjstring_data" }
 
 ;--- reject-baddata.ll
 %"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
-%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, i8*, i8*, i8*, i8* }
 %StringData = type { i8*, i64, [4 x i8] }
 @"RawArray<UInt8>.ti" = external global %TypeInfo, !RelatedType !1
 @data = private constant %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 4, [4 x i8] c"abcd" } #1
@@ -95,7 +95,7 @@ attributes #2 = { "cjstring_literal" }
 
 ;--- reject-bounds.ll
 %"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
-%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, i8*, i8*, i8*, i8* }
 %StringData = type { i8*, i64, [4 x i8] }
 @"RawArray<UInt8>.ti" = external global %TypeInfo, !RelatedType !0
 @data = private constant %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 4, [4 x i8] c"abcd" } #1
@@ -114,7 +114,7 @@ attributes #2 = { "cjstring_literal" }
 
 ;--- reject-dynamic.ll
 %"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
-%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, i8*, i8*, i8*, i8* }
 %StringData = type { i8*, i64, [4 x i8] }
 @"RawArray<UInt8>.ti" = external global %TypeInfo, !RelatedType !0
 @data = private constant %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 4, [4 x i8] c"abcd" } #1
@@ -144,7 +144,7 @@ attributes #2 = { "cjstring_literal" }
 
 ;--- reject-partial.ll
 %"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
-%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, i8*, i8*, i8*, i8* }
 %StringData = type { i8*, i64, [4 x i8] }
 @"RawArray<UInt8>.ti" = external global %TypeInfo, !RelatedType !0
 @data = private constant %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 4, [4 x i8] c"abcd" } #1
@@ -165,7 +165,7 @@ attributes #2 = { "cjstring_literal" }
 
 ;--- reject-inttoptr.ll
 %"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
-%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, i8*, i8*, i8*, i8* }
 %StringData = type { i8*, i64, [4 x i8] }
 @data = private constant %StringData { i8* null, i64 4, [4 x i8] c"abcd" } #1
 @literal = private constant %"record.std.core:String" { i8 addrspace(1)* inttoptr (i64 123 to i8 addrspace(1)*), i32 0, i32 4 } #2
@@ -182,7 +182,7 @@ attributes #2 = { "cjstring_literal" }
 
 ;--- reject-gep.ll
 %"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
-%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, i8*, i8*, i8*, i8* }
 %StringData = type { i8*, i64, [4 x i8] }
 @data = private constant %StringData { i8* null, i64 4, [4 x i8] c"abcd" } #1
 @literal = private constant %"record.std.core:String" { i8 addrspace(1)* addrspacecast (i8* getelementptr (%StringData, %StringData* @data, i64 0, i32 2, i64 1) to i8 addrspace(1)*), i32 0, i32 4 } #2
@@ -199,7 +199,7 @@ attributes #2 = { "cjstring_literal" }
 
 ;--- reject-data-noattr.ll
 %"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
-%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, i8*, i8*, i8*, i8* }
 %StringData = type { i8*, i64, [4 x i8] }
 @"RawArray<UInt8>.ti" = external global %TypeInfo, !RelatedType !0
 @data = private constant %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 4, [4 x i8] c"abcd"
@@ -218,7 +218,7 @@ attributes #2 = { "cjstring_literal" }
 
 ;--- reject-data-mutable.ll
 %"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
-%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, i8*, i8*, i8*, i8* }
 %StringData = type { i8*, i64, [4 x i8] }
 @"RawArray<UInt8>.ti" = external global %TypeInfo, !RelatedType !0
 @data = private global %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 4, [4 x i8] c"abcd" } #1
@@ -237,7 +237,7 @@ attributes #2 = { "cjstring_literal" }
 
 ;--- reject-data-length.ll
 %"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
-%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, i8*, i8*, i8*, i8* }
 %StringData = type { i8*, i64, [4 x i8] }
 @"RawArray<UInt8>.ti" = external global %TypeInfo, !RelatedType !0
 @data = private constant %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 3, [4 x i8] c"abcd" } #1

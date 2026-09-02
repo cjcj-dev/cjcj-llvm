@@ -1504,7 +1504,7 @@ private:
     Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
     auto *StringGV = dyn_cast<GlobalVariable>(Base);
     if (!StringGV || !Offset.isZero() ||
-        StringGV->getLinkage() != GlobalValue::PrivateLinkage ||
+        !StringGV->hasPrivateLinkage() ||
         !StringGV->isConstant() ||
         !StringGV->hasAttribute("cjstring_literal"))
       return false;
@@ -1548,7 +1548,7 @@ private:
     uint64_t SliceOffset = OffsetCI->getZExtValue();
     uint64_t SliceLength = LengthCI->getZExtValue();
 
-    if (DataGV->getLinkage() != GlobalValue::PrivateLinkage ||
+    if (!DataGV->hasPrivateLinkage() ||
         !DataGV->isConstant() || !DataGV->hasAttribute("cjstring_data"))
       return false;
     auto *DataTy = dyn_cast<StructType>(DataGV->getValueType());
@@ -1581,7 +1581,7 @@ private:
     if (!HeaderGV)
       return false;
     auto *HeaderTy = dyn_cast<StructType>(HeaderGV->getValueType());
-    if (!HeaderTy || HeaderTy->getNumElements() != 16)
+    if (!HeaderTy || HeaderTy->getNumElements() != 18)
       return false;
     const MDNode *Related = HeaderGV->getMetadata("RelatedType");
     if (!Related || Related->getNumOperands() != 1)
