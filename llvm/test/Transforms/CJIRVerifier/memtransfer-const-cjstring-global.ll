@@ -6,6 +6,11 @@
 ; RUN: not opt -passes=cj-ir-verifier < %t/reject-bounds.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
 ; RUN: not opt -passes=cj-ir-verifier < %t/reject-dynamic.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
 ; RUN: not opt -passes=cj-ir-verifier < %t/reject-partial.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not opt -passes=cj-ir-verifier < %t/reject-inttoptr.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not opt -passes=cj-ir-verifier < %t/reject-gep.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not opt -passes=cj-ir-verifier < %t/reject-data-noattr.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not opt -passes=cj-ir-verifier < %t/reject-data-mutable.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not opt -passes=cj-ir-verifier < %t/reject-data-length.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
 
 ; The source-only exemption is restricted to the compiler's immutable String
 ; literal/data pair.  The destination remains a Cangjie sret root.
@@ -157,3 +162,94 @@ attributes #1 = { "cjstring_data" }
 attributes #2 = { "cjstring_literal" }
 
 ; REJECT: Bare memcpy/memmove
+
+;--- reject-inttoptr.ll
+%"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%StringData = type { i8*, i64, [4 x i8] }
+@data = private constant %StringData { i8* null, i64 4, [4 x i8] c"abcd" } #1
+@literal = private constant %"record.std.core:String" { i8 addrspace(1)* inttoptr (i64 123 to i8 addrspace(1)*), i32 0, i32 4 } #2
+define void @reject_inttoptr(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out) gc "cangjie" {
+entry:
+  %dst = bitcast %"record.std.core:String"* %out to i8*
+  %src = bitcast %"record.std.core:String"* @literal to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
+  ret void
+}
+declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+attributes #1 = { "cjstring_data" }
+attributes #2 = { "cjstring_literal" }
+
+;--- reject-gep.ll
+%"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%StringData = type { i8*, i64, [4 x i8] }
+@data = private constant %StringData { i8* null, i64 4, [4 x i8] c"abcd" } #1
+@literal = private constant %"record.std.core:String" { i8 addrspace(1)* addrspacecast (i8* getelementptr (%StringData, %StringData* @data, i64 0, i32 2, i64 1) to i8 addrspace(1)*), i32 0, i32 4 } #2
+define void @reject_gep(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out) gc "cangjie" {
+entry:
+  %dst = bitcast %"record.std.core:String"* %out to i8*
+  %src = bitcast %"record.std.core:String"* @literal to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
+  ret void
+}
+declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+attributes #1 = { "cjstring_data" }
+attributes #2 = { "cjstring_literal" }
+
+;--- reject-data-noattr.ll
+%"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%StringData = type { i8*, i64, [4 x i8] }
+@"RawArray<UInt8>.ti" = external global %TypeInfo, !RelatedType !0
+@data = private constant %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 4, [4 x i8] c"abcd"
+}
+@literal = private constant %"record.std.core:String" { i8 addrspace(1)* addrspacecast (i8* bitcast (%StringData* @data to i8*) to i8 addrspace(1)*), i32 0, i32 4 } #2
+define void @reject_data_noattr(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out) gc "cangjie" {
+entry:
+  %dst = bitcast %"record.std.core:String"* %out to i8*
+  %src = bitcast %"record.std.core:String"* @literal to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
+  ret void
+}
+declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+!0 = !{!"ArrayLayout.UInt8"}
+attributes #2 = { "cjstring_literal" }
+
+;--- reject-data-mutable.ll
+%"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%StringData = type { i8*, i64, [4 x i8] }
+@"RawArray<UInt8>.ti" = external global %TypeInfo, !RelatedType !0
+@data = private global %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 4, [4 x i8] c"abcd" } #1
+@literal = private constant %"record.std.core:String" { i8 addrspace(1)* addrspacecast (i8* bitcast (%StringData* @data to i8*) to i8 addrspace(1)*), i32 0, i32 4 } #2
+define void @reject_data_mutable(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out) gc "cangjie" {
+entry:
+  %dst = bitcast %"record.std.core:String"* %out to i8*
+  %src = bitcast %"record.std.core:String"* @literal to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
+  ret void
+}
+declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+!0 = !{!"ArrayLayout.UInt8"}
+attributes #1 = { "cjstring_data" }
+attributes #2 = { "cjstring_literal" }
+
+;--- reject-data-length.ll
+%"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
+%StringData = type { i8*, i64, [4 x i8] }
+@"RawArray<UInt8>.ti" = external global %TypeInfo, !RelatedType !0
+@data = private constant %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 3, [4 x i8] c"abcd" } #1
+@literal = private constant %"record.std.core:String" { i8 addrspace(1)* addrspacecast (i8* bitcast (%StringData* @data to i8*) to i8 addrspace(1)*), i32 0, i32 4 } #2
+define void @reject_data_length(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out) gc "cangjie" {
+entry:
+  %dst = bitcast %"record.std.core:String"* %out to i8*
+  %src = bitcast %"record.std.core:String"* @literal to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
+  ret void
+}
+declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+!0 = !{!"ArrayLayout.UInt8"}
+attributes #1 = { "cjstring_data" }
+attributes #2 = { "cjstring_literal" }
