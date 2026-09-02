@@ -272,6 +272,30 @@ public:
       // would also widen the zero-offset :254 path and the source side.
       if (isRegisteredSubObjectCopy(Dst, SrcCompleteTy, SizeArg))
         break;
+
+      // Mirror of the registered-subobject admission above: a complete
+      // struct subobject of a typed AS0 alloca/argument may initialize a
+      // whole entry-block stack root when both layouts expose exactly the
+      // same managed-reference slots.
+      if (isRegisteredWholeObjectMirrorCopy(Dst, Src, SizeArg) &&
+          classifyReferencePayload(Src, SizeArg) ==
+              ReferencePayloadKind::ContainsReference)
+        break;
+      // Once both mirror surfaces are recovered, a layout mismatch or
+      // unmodelled vector is a hard reject.  The generic payload classifier
+      // treats missing vector slots as NoReference and would otherwise admit
+      // them.
+      if (Type *SrcSubObjectTy =
+              getCompleteTypedStructSubObjectType(Src, SizeArg)) {
+        Type *DstRootTy = getRegisteredWholeObjectType(Dst, SizeArg);
+        if (DstRootTy && containsGCPtrType(SrcSubObjectTy) &&
+            !hasEqualGCPointerOffsets(DstRootTy, SrcSubObjectTy)) {
+          checkFailed("Bare memcpy/memmove of reference payload must use "
+                      "cj_array_copy_ref or another typed GC barrier.",
+                      &Call);
+          break;
+        }
+      }
       ReferencePayloadKind SrcGenericPayload =
           classifyCompleteGenericPayload(Src, SizeArg);
       ReferencePayloadKind DstPayload =
@@ -1148,6 +1172,126 @@ private:
     SrcOffsets.erase(std::unique(SrcOffsets.begin(), SrcOffsets.end()),
                      SrcOffsets.end());
     return DstOffsets == SrcOffsets;
+  }
+
+  // A source GEP in this admission may only select struct fields.  In
+  // particular, the leading pointer index must be zero and no array/vector
+  // descent is accepted.  The returned type is the complete subobject named
+  // by this GEP.
+  Type *getConstantStructGEPResultType(const GEPOperator *GEP) {
+    if (GEP->getPointerAddressSpace() != 0 || GEP->getNumIndices() < 2)
+      return nullptr;
+
+    Type *CurrentTy = GEP->getSourceElementType();
+    auto Index = GEP->idx_begin();
+    auto *RootIndex = dyn_cast<ConstantInt>(Index->get());
+    if (!RootIndex || !RootIndex->isZero())
+      return nullptr;
+
+    for (++Index; Index != GEP->idx_end(); ++Index) {
+      auto *ST = dyn_cast<StructType>(CurrentTy);
+      auto *FieldIndex = dyn_cast<ConstantInt>(Index->get());
+      if (!ST || !FieldIndex || FieldIndex->getValue().getActiveBits() > 32)
+        return nullptr;
+      uint64_t Field = FieldIndex->getZExtValue();
+      if (Field >= ST->getNumElements())
+        return nullptr;
+      CurrentTy = ST->getElementType(Field);
+    }
+    return CurrentTy;
+  }
+
+  // Recover a complete struct subobject rooted directly in a typed AS0
+  // alloca or argument.  Casts after the field selection may adapt the value
+  // to the intrinsic's i8 carrier; casts between the root and a GEP are
+  // rejected so a type-punning cast cannot manufacture enclosing provenance.
+  Type *getCompleteTypedStructSubObjectType(Value *Ptr, Value *SizeValue) {
+    auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
+    auto *Size = dyn_cast<ConstantInt>(SizeValue);
+    if (!PtrTy || PtrTy->getAddressSpace() != 0 || !Size || Size->isZero())
+      return nullptr;
+
+    Value *Current = Ptr;
+    Type *SubObjectTy = nullptr;
+    Type *EnclosingTy = nullptr;
+    bool SawStructGEP = false;
+    while (true) {
+      if (auto *Cast = dyn_cast<BitCastOperator>(Current)) {
+        if (SawStructGEP)
+          return nullptr;
+        Current = Cast->getOperand(0);
+        continue;
+      }
+
+      auto *GEP = dyn_cast<GEPOperator>(Current);
+      if (!GEP)
+        break;
+      Type *SelectedTy = getConstantStructGEPResultType(GEP);
+      if (!SelectedTy)
+        return nullptr;
+      if (!SubObjectTy)
+        SubObjectTy = SelectedTy;
+      EnclosingTy = GEP->getSourceElementType();
+      SawStructGEP = true;
+      Current = GEP->getPointerOperand();
+    }
+
+    if (!SawStructGEP || (!isa<AllocaInst>(Current) && !isa<Argument>(Current)))
+      return nullptr;
+    auto *RootPtrTy = dyn_cast<PointerType>(Current->getType());
+    if (!RootPtrTy || RootPtrTy->getAddressSpace() != 0 ||
+        RootPtrTy->isOpaque() || !isa<StructType>(SubObjectTy) ||
+        !SubObjectTy->isSized())
+      return nullptr;
+    Type *RootTy = isa<AllocaInst>(Current)
+                       ? cast<AllocaInst>(Current)->getAllocatedType()
+                       : RootPtrTy->getNonOpaquePointerElementType();
+    if (RootTy != EnclosingTy || !isa<StructType>(RootTy))
+      return nullptr;
+
+    TypeSize SubObjectSize = DL.getTypeAllocSize(SubObjectTy);
+    if (SubObjectSize.isScalable() ||
+        Size->getZExtValue() != SubObjectSize.getFixedSize())
+      return nullptr;
+    return SubObjectTy;
+  }
+
+  // The destination surface intentionally matches
+  // CJRewriteStatepoint.cpp::computeStructTypeLayouts: one whole, statically
+  // sized StructType alloca in the entry block.  Liveness remains a per-
+  // statepoint decision in CJGCLiveAnalysis; this only proves registration
+  // eligibility when the destination is live.
+  Type *getRegisteredWholeObjectType(Value *Ptr, Value *SizeValue) {
+    auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
+    auto *Size = dyn_cast<ConstantInt>(SizeValue);
+    if (!PtrTy || PtrTy->getAddressSpace() != 0 || !Size || Size->isZero())
+      return nullptr;
+
+    APInt Offset(DL.getIndexSizeInBits(0), 0);
+    Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
+    auto *AI = dyn_cast<AllocaInst>(Base);
+    if (!AI || AI->getParent() != &AI->getFunction()->getEntryBlock() ||
+        !AI->isStaticAlloca() || AI->isArrayAllocation() || !Offset.isZero())
+      return nullptr;
+
+    auto *Root = dyn_cast<StructType>(AI->getAllocatedType());
+    if (!Root || !Root->isSized() || !containsGCPtrType(Root))
+      return nullptr;
+    TypeSize RootSize = DL.getTypeAllocSize(Root);
+    if (RootSize.isScalable() ||
+        Size->getZExtValue() != RootSize.getFixedSize())
+      return nullptr;
+    return Root;
+  }
+
+  bool isRegisteredWholeObjectMirrorCopy(Value *Dst, Value *Src,
+                                         Value *SizeValue) {
+    Type *SrcSubObjectTy =
+        getCompleteTypedStructSubObjectType(Src, SizeValue);
+    Type *DstRootTy = getRegisteredWholeObjectType(Dst, SizeValue);
+    return SrcSubObjectTy && DstRootTy &&
+           containsGCPtrType(SrcSubObjectTy) &&
+           hasEqualGCPointerOffsets(DstRootTy, SrcSubObjectTy);
   }
 
   // Static destinations carrying managed references require the typed static
