@@ -269,15 +269,15 @@ public:
         bool ContainsReference = containsGCPtrType(DstCompleteTy) ||
                                  containsGCPtrType(SrcCompleteTy);
         // Alloca-derived reference payloads must stay on the registered root
-        // surface.  Preserve the baseline treatment of typed constant globals
-        // pending-const-global-source-contract; their independent storage/root
-        // contract has not yet been established here.
+        // surface.  A global source is admitted only when it is the immutable
+        // compiler-emitted cjstring literal form; arbitrary constant globals
+        // do not carry that storage contract.
         if (!ContainsReference ||
             ((getRegisteredWholeObjectType(Dst, SizeArg) ||
               getCompleteTypedABISRetObjectType(Dst, SizeArg)) &&
              (getRegisteredWholeObjectType(Src, SizeArg) ||
               getCompleteTypedABIForwardedObjectType(Src, SizeArg) ||
-              isPendingTypedConstantGlobalSource(Src))))
+              isCanonicalCJStringLiteralSource(Src, SizeArg))))
           break;
       }
 
@@ -1491,11 +1491,103 @@ private:
            isa<StructType>(AI->getAllocatedType());
   }
 
-  bool isPendingTypedConstantGlobalSource(Value *Ptr) {
+  // Prove the one immutable global source form emitted for String literals.
+  // This predicate is deliberately source-only: destination admission remains
+  // governed by the registered alloca/sret checks above.
+  bool isCanonicalCJStringLiteralSource(Value *Ptr, Value *SizeValue) {
+    auto *Size = dyn_cast<ConstantInt>(SizeValue);
+    auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
+    if (!Size || !PtrTy || PtrTy->getAddressSpace() != 0)
+      return false;
+
     APInt Offset(DL.getIndexSizeInBits(0), 0);
     Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
-    auto *GV = dyn_cast<GlobalVariable>(Base);
-    return GV && GV->isConstant() && Offset.isZero();
+    auto *StringGV = dyn_cast<GlobalVariable>(Base);
+    if (!StringGV || !Offset.isZero() ||
+        StringGV->getLinkage() != GlobalValue::PrivateLinkage ||
+        !StringGV->isConstant() ||
+        !StringGV->hasAttribute("cjstring_literal"))
+      return false;
+
+    auto *StringTy = dyn_cast<StructType>(StringGV->getValueType());
+    if (!StringTy || !StringTy->hasName() ||
+        StringTy->getName() != "record.std.core:String" ||
+        StringTy->getNumElements() != 3 ||
+        StringTy->getElementType(0) != Type::getInt8PtrTy(C, 1) ||
+        !StringTy->getElementType(1)->isIntegerTy(32) ||
+        !StringTy->getElementType(2)->isIntegerTy(32) || !StringTy->isSized())
+      return false;
+    TypeSize StringSize = DL.getTypeAllocSize(StringTy);
+    if (StringSize.isScalable() ||
+        Size->getZExtValue() != StringSize.getFixedSize())
+      return false;
+
+    auto *StringInit = dyn_cast<ConstantStruct>(StringGV->getInitializer());
+    if (!StringInit || StringInit->getNumOperands() != 3)
+      return false;
+
+    // field 0 = addrspacecast(bitcast(@data AS0) AS1).  No GEP, load, call,
+    // or inttoptr can satisfy this exact ConstantExpr chain.
+    auto *ASCast = dyn_cast<ConstantExpr>(StringInit->getOperand(0));
+    if (!ASCast || ASCast->getOpcode() != Instruction::AddrSpaceCast ||
+        ASCast->getType() != Type::getInt8PtrTy(C, 1))
+      return false;
+    auto *BitCast = dyn_cast<ConstantExpr>(ASCast->getOperand(0));
+    if (!BitCast || BitCast->getOpcode() != Instruction::BitCast ||
+        BitCast->getType() != Type::getInt8PtrTy(C, 0))
+      return false;
+    auto *DataGV = dyn_cast<GlobalVariable>(BitCast->getOperand(0));
+    if (!DataGV || DataGV->getType()->getAddressSpace() != 0)
+      return false;
+
+    auto *OffsetCI = dyn_cast<ConstantInt>(StringInit->getOperand(1));
+    auto *LengthCI = dyn_cast<ConstantInt>(StringInit->getOperand(2));
+    if (!OffsetCI || !LengthCI || !OffsetCI->getType()->isIntegerTy(32) ||
+        !LengthCI->getType()->isIntegerTy(32))
+      return false;
+    uint64_t SliceOffset = OffsetCI->getZExtValue();
+    uint64_t SliceLength = LengthCI->getZExtValue();
+
+    if (DataGV->getLinkage() != GlobalValue::PrivateLinkage ||
+        !DataGV->isConstant() || !DataGV->hasAttribute("cjstring_data"))
+      return false;
+    auto *DataTy = dyn_cast<StructType>(DataGV->getValueType());
+    if (!DataTy || DataTy->getNumElements() != 3 ||
+        DataTy->getElementType(0) != Type::getInt8PtrTy(C, 0) ||
+        !DataTy->getElementType(1)->isIntegerTy(64))
+      return false;
+    auto *BytesTy = dyn_cast<ArrayType>(DataTy->getElementType(2));
+    if (!BytesTy || !BytesTy->getElementType()->isIntegerTy(8))
+      return false;
+    uint64_t ByteCount = BytesTy->getNumElements();
+    if (SliceOffset > ByteCount || SliceLength > ByteCount - SliceOffset)
+      return false;
+
+    auto *DataInit = dyn_cast<ConstantStruct>(DataGV->getInitializer());
+    if (!DataInit || DataInit->getNumOperands() != 3)
+      return false;
+    auto *HeaderLen = dyn_cast<ConstantInt>(DataInit->getOperand(1));
+    if (!HeaderLen || HeaderLen->getZExtValue() != ByteCount)
+      return false;
+
+    // The header must be the compiler's RawArray<UInt8> type-info global.  Its
+    // concrete TypeInfo shape plus RelatedType metadata bind the type contract;
+    // the symbol spelling is intentionally not used as the proof.
+    auto *HeaderCast = dyn_cast<ConstantExpr>(DataInit->getOperand(0));
+    if (!HeaderCast || HeaderCast->getOpcode() != Instruction::BitCast ||
+        HeaderCast->getType() != Type::getInt8PtrTy(C, 0))
+      return false;
+    auto *HeaderGV = dyn_cast<GlobalVariable>(HeaderCast->getOperand(0));
+    if (!HeaderGV)
+      return false;
+    auto *HeaderTy = dyn_cast<StructType>(HeaderGV->getValueType());
+    if (!HeaderTy || HeaderTy->getNumElements() != 16)
+      return false;
+    const MDNode *Related = HeaderGV->getMetadata("RelatedType");
+    if (!Related || Related->getNumOperands() != 1)
+      return false;
+    auto *RelatedName = dyn_cast<MDString>(Related->getOperand(0));
+    return RelatedName && RelatedName->getString() == "ArrayLayout.UInt8";
   }
 
   // Cangjie lowers a known-size aggregate value through an AS0 pointer.  The
