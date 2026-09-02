@@ -1,16 +1,16 @@
 ; RUN: split-file %s %t
 ; RUN: opt -passes=cj-ir-verifier < %t/allow.ll -disable-output
-; RUN: not opt -passes=cj-ir-verifier < %t/reject-mutable.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
-; RUN: not opt -passes=cj-ir-verifier < %t/reject-noattr.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
-; RUN: not opt -passes=cj-ir-verifier < %t/reject-baddata.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
-; RUN: not opt -passes=cj-ir-verifier < %t/reject-bounds.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
-; RUN: not opt -passes=cj-ir-verifier < %t/reject-dynamic.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
-; RUN: not opt -passes=cj-ir-verifier < %t/reject-partial.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
-; RUN: not opt -passes=cj-ir-verifier < %t/reject-inttoptr.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
-; RUN: not opt -passes=cj-ir-verifier < %t/reject-gep.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
-; RUN: not opt -passes=cj-ir-verifier < %t/reject-data-noattr.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
-; RUN: not opt -passes=cj-ir-verifier < %t/reject-data-mutable.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
-; RUN: not opt -passes=cj-ir-verifier < %t/reject-data-length.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-mutable.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-noattr.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-baddata.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-bounds.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-dynamic.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-partial.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-inttoptr.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-gep.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-data-noattr.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-data-mutable.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-data-length.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REJECT
 
 ; The source-only exemption is restricted to the compiler's immutable String
 ; literal/data pair.  The destination remains a Cangjie sret root.

@@ -6,7 +6,7 @@
 ; RUN: opt -passes=cj-ir-verifier < %t/outside-verifier-scope.ll -disable-output 2> %t/outside-verifier-scope.err
 ; RUN: count 0 < %t/outside-verifier-scope.err
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-wrapper.ll -disable-output 2>&1 | FileCheck %s --check-prefixes=WRAPPER,ABORT
-; RUN: not opt -passes=cj-ir-verifier < %t/reject-nonstring-constant-global-source.ll -disable-output 2>&1 | FileCheck %s --check-prefixes=NONSTRING,ABORT
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-nonstring-constant-global-source.ll -disable-output 2>&1 | FileCheck %s --check-prefixes=NONSTRING,ABORT
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-canonical-cjstring-global-source.ll -disable-output
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-mutable-global-source.ll -disable-output 2>&1 | FileCheck %s --check-prefixes=MUTABLE,ABORT
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-layout.ll -disable-output 2>&1 | FileCheck %s --check-prefixes=LAYOUT,ABORT
