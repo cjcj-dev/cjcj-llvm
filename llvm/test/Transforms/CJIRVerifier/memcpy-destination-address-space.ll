@@ -4,7 +4,7 @@
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-as0-reference-slot.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=DSTREF,ABORT
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-multi-index-source.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=MULTI,ABORT
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-selected-base-source.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=SELECT,ABORT
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-local-allocation-source.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=ALLOC,ABORT
+; RUN: opt -passes=cj-ir-verifier < %t/allow-classified-allocation-source.ll -disable-output
 
 ; Source bytes must independently prove NoReference, and an AS0 destination
 ; is admitted only when it is a complete typed object with no managed fields.
@@ -20,9 +20,6 @@
 ; SELECT: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance.
 ; SELECT-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
 ; SELECT: in function reject_typed_source_with_selected_base
-; ALLOC: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance.
-; ALLOC-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
-; ALLOC: in function reject_typed_source_from_unclassified_allocation
 ; ABORT: LLVM ERROR: Broken function found, compilation aborted
 ; ABORT: error: Aborted
 
@@ -44,12 +41,12 @@ entry:
 
 declare void @llvm.memcpy.p0i8.p1i8.i64(i8*, i8 addrspace(1)*, i64, i1)
 
-;--- reject-local-allocation-source.ll
+;--- allow-classified-allocation-source.ll
 %Plain8 = type { i64 }
 %TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, i8*, i8*, i8* }
 @Plain8.ti = external global %TypeInfo, !RelatedType !0
 
-define void @reject_typed_source_from_unclassified_allocation() gc "cangjie" {
+define void @allow_typed_source_from_classified_allocation() gc "cangjie" {
 entry:
   %object = call i8 addrspace(1)* @llvm.cj.malloc.object(
       i8* bitcast (%TypeInfo* @Plain8.ti to i8*), i32 8)

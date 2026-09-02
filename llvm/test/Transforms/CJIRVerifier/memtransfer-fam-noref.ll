@@ -10,6 +10,12 @@
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-dynamic-field.ll -disable-output 2>&1 | FileCheck %s --check-prefix=FIELD
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-partial.ll -disable-output 2>&1 | FileCheck %s --check-prefix=PARTIAL
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-phi-base.ll -disable-output 2>&1 | FileCheck %s --check-prefix=PHI
+; RUN: not not opt -passes=cj-ir-verifier < %t/attack-ascast-native.ll -disable-output 2>&1 | FileCheck %s --check-prefix=ASCAST
+; RUN: not not opt -passes=cj-ir-verifier < %t/attack-bitcast-gep-pun.ll -disable-output 2>&1 | FileCheck %s --check-prefix=PUN
+; RUN: not not opt -passes=cj-ir-verifier < %t/attack-i8-gep-as1.ll -disable-output 2>&1 | FileCheck %s --check-prefix=I8GEP
+; RUN: not not opt -passes=cj-ir-verifier < %t/attack-load-as1.ll -disable-output 2>&1 | FileCheck %s --check-prefix=LOAD
+; RUN: not not opt -passes=cj-ir-verifier < %t/attack-call-as1.ll -disable-output 2>&1 | FileCheck %s --check-prefix=CALL
+; RUN: not not opt -passes=cj-ir-verifier < %t/attack-partial-ref-field.ll -disable-output 2>&1 | FileCheck %s --check-prefix=PARTIALREF
 
 ; REF: Bare memcpy/memmove of reference payload
 ; REF: in function reject_one_endpoint_contains_reference
@@ -23,6 +29,18 @@
 ; PARTIAL: in function reject_partial_plain_object
 ; PHI: Bare memcpy/memmove payload provenance is unknown
 ; PHI: in function reject_selected_or_phi_base
+; ASCAST: Bare memcpy/memmove payload provenance is unknown
+; ASCAST: in function attack_ascast_heap_to_as0_arg
+; PUN: Bare memcpy/memmove of reference payload
+; PUN: in function attack_bitcast_then_gep
+; I8GEP: Bare memcpy/memmove payload provenance is unknown
+; I8GEP: in function attack_i8_gep_as1_one_byte
+; LOAD: Bare memcpy/memmove payload provenance is unknown
+; LOAD: in function attack_loaded_pointer
+; CALL: Bare memcpy/memmove payload provenance is unknown
+; CALL: in function attack_called_pointer
+; PARTIALREF: Bare memcpy/memmove of reference payload
+; PARTIALREF: in function attack_partial_nested_ref
 
 ;--- allow-as1-parent.ll
 %Parent = type { i8 addrspace(1)*, i32 }
@@ -84,6 +102,85 @@ entry:
 }
 
 declare void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)*, i8*, i64, i1)
+
+;--- attack-ascast-native.ll
+%ArrayBase = type { i64 }
+%ArrayLayout.UInt8 = type { %ArrayBase, [0 x i8] }
+define void @attack_ascast_heap_to_as0_arg(i8 addrspace(1)* %heap, i8 addrspace(1)* %src.raw, i64 %size) gc "cangjie" {
+entry:
+  %dst = addrspacecast i8 addrspace(1)* %heap to i8*
+  %layout = bitcast i8 addrspace(1)* %src.raw to %ArrayLayout.UInt8 addrspace(1)*
+  %payload = getelementptr inbounds %ArrayLayout.UInt8, %ArrayLayout.UInt8 addrspace(1)* %layout, i32 0, i32 1
+  %src = bitcast [0 x i8] addrspace(1)* %payload to i8 addrspace(1)*
+  call void @llvm.memcpy.p0i8.p1i8.i64(i8* %dst, i8 addrspace(1)* %src, i64 %size, i1 false)
+  ret void
+}
+declare void @llvm.memcpy.p0i8.p1i8.i64(i8*, i8 addrspace(1)*, i64, i1)
+
+;--- attack-bitcast-gep-pun.ll
+; Type pun: bitcast ref struct to fake {i32,i32} then GEP field 0 (4 bytes).
+%Ref = type { i8 addrspace(1)* }
+%Fake = type { i32, i32 }
+
+define void @attack_bitcast_then_gep(%Ref* %src, i32* %dst) gc "cangjie" {
+entry:
+  %fake = bitcast %Ref* %src to %Fake*
+  %field = getelementptr inbounds %Fake, %Fake* %fake, i32 0, i32 0
+  %s = bitcast i32* %field to i8*
+  %d = bitcast i32* %dst to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %d, i8* %s, i64 4, i1 false)
+  ret void
+}
+declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+
+;--- attack-i8-gep-as1.ll
+; Attack: no-op i8 GEP on bare AS1 carriers should not prove a 1-byte complete object.
+define void @attack_i8_gep_as1_one_byte(i8 addrspace(1)* %dst, i8 addrspace(1)* %src) gc "cangjie" {
+entry:
+  %d = getelementptr i8, i8 addrspace(1)* %dst, i32 0
+  %s = getelementptr i8, i8 addrspace(1)* %src, i32 0
+  call void @llvm.memcpy.p1i8.p1i8.i64(i8 addrspace(1)* %d, i8 addrspace(1)* %s, i64 1, i1 false)
+  ret void
+}
+declare void @llvm.memcpy.p1i8.p1i8.i64(i8 addrspace(1)*, i8 addrspace(1)*, i64, i1)
+
+;--- attack-load-as1.ll
+%Plain = type { i32 }
+define void @attack_loaded_pointer(%Plain addrspace(1)** %slot, %Plain* %src) gc "cangjie" {
+entry:
+  %dst = load %Plain addrspace(1)*, %Plain addrspace(1)** %slot
+  %d = bitcast %Plain addrspace(1)* %dst to i8 addrspace(1)*
+  %s = bitcast %Plain* %src to i8*
+  call void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)* %d, i8* %s, i64 4, i1 false)
+  ret void
+}
+declare void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)*, i8*, i64, i1)
+
+;--- attack-call-as1.ll
+%Plain = type { i32 }
+define void @attack_called_pointer(%Plain* %src) gc "cangjie" {
+entry:
+  %dst = call %Plain addrspace(1)* @get_plain()
+  %d = bitcast %Plain addrspace(1)* %dst to i8 addrspace(1)*
+  %s = bitcast %Plain* %src to i8*
+  call void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)* %d, i8* %s, i64 4, i1 false)
+  ret void
+}
+declare %Plain addrspace(1)* @get_plain()
+declare void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)*, i8*, i64, i1)
+
+;--- attack-partial-ref-field.ll
+; Parent has ref; GEP selects nested struct that itself has a ref; copy partial 4 of 16.
+%Inner = type { i8 addrspace(1)*, i32 }
+%Outer = type { i64, %Inner }
+define void @attack_partial_nested_ref(%Outer addrspace(1)* %src.p, i8 addrspace(1)* %dst) gc "cangjie" {
+entry:
+  %inner = getelementptr inbounds %Outer, %Outer addrspace(1)* %src.p, i32 0, i32 1
+  %s = bitcast %Inner addrspace(1)* %inner to i8 addrspace(1)*
+  call void @llvm.memcpy.p1i8.p1i8.i64(i8 addrspace(1)* %dst, i8 addrspace(1)* %s, i64 4, i1 false)
+  ret void
+}
+declare void @llvm.memcpy.p1i8.p1i8.i64(i8 addrspace(1)*, i8 addrspace(1)*, i64, i1)
 
 ;--- allow-different-types.ll
 %Left = type { i32 }

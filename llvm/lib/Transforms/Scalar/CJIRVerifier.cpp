@@ -16,7 +16,6 @@
 #include "llvm/Transforms/Scalar/CJIRVerifier.h"
 
 #include "llvm/ADT/SetVector.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/IR/CJIntrinsics.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -959,32 +958,146 @@ private:
            !containsGCPtrType(SrcElementTy);
   }
 
-  Type *findCompleteStructSubObjectType(StructType *ST,
-                                        uint64_t TargetOffset,
-                                        uint64_t Size,
-                                        uint64_t BaseOffset = 0) {
-    if (!ST->isSized())
+  bool isAggregateRegionAnchor(Type *Ty) {
+    return Ty && (isa<StructType>(Ty) || isa<ArrayType>(Ty));
+  }
+
+  bool isAllowedRegionOuterCast(Type *SrcTy, Type *DstTy) {
+    auto *SrcPtrTy = dyn_cast<PointerType>(SrcTy);
+    auto *DstPtrTy = dyn_cast<PointerType>(DstTy);
+    if (!SrcPtrTy || !DstPtrTy || SrcPtrTy->isOpaque() ||
+        DstPtrTy->isOpaque())
+      return false;
+    Type *SrcElementTy = SrcPtrTy->getNonOpaquePointerElementType();
+    Type *DstElementTy = DstPtrTy->getNonOpaquePointerElementType();
+    return SrcElementTy == DstElementTy || SrcElementTy->isIntegerTy(8) ||
+           DstElementTy->isIntegerTy(8);
+  }
+
+  bool isCanonicalHeapBaseArgument(Value *Base) {
+    auto *BaseArg = dyn_cast<Argument>(Base);
+    if (!BaseArg || BaseArg->getType() != Type::getInt8PtrTy(C, 1))
+      return false;
+    Function *Parent = BaseArg->getParent();
+    bool HasSRet = Parent->arg_size() != 0 &&
+                   Parent->getAttributes()
+                       .getParamAttrs(0)
+                       .hasAttribute(Attribute::StructRet);
+    unsigned ThisIndex = HasSRet ? 1 : 0;
+    return !Parent->hasFnAttribute("record_mut") ||
+           BaseArg->getArgNo() != ThisIndex;
+  }
+
+  IntrinsicInst *getKnownHeapAllocation(Value *Base,
+                                        StructType *&LayoutTy) {
+    LayoutTy = nullptr;
+    auto *Allocation = dyn_cast<IntrinsicInst>(Base);
+    if (!Allocation)
       return nullptr;
-    const StructLayout *Layout = DL.getStructLayout(ST);
-    for (unsigned I = 0, E = ST->getNumElements(); I != E; ++I) {
-      Type *ElementTy = ST->getElementType(I);
-      if (!ElementTy->isSized())
-        continue;
-      uint64_t ElemOffset = BaseOffset + Layout->getElementOffset(I);
-      TypeSize ElemSizeTS = DL.getTypeAllocSize(ElementTy);
-      if (ElemSizeTS.isScalable())
-        continue;
-      uint64_t ElemSize = ElemSizeTS.getFixedSize();
-      if (ElemOffset == TargetOffset && ElemSize == Size)
-        return ElementTy;
-      if (auto *Nested = dyn_cast<StructType>(ElementTy)) {
-        if (TargetOffset >= ElemOffset && TargetOffset < ElemOffset + ElemSize)
-          if (Type *Found = findCompleteStructSubObjectType(
-                  Nested, TargetOffset, Size, ElemOffset))
-            return Found;
-      }
+    switch (Allocation->getIntrinsicID()) {
+    case Intrinsic::cj_malloc_object:
+    case Intrinsic::cj_malloc_array:
+      break;
+    default:
+      return nullptr;
     }
-    return nullptr;
+    auto *TI = dyn_cast<GlobalVariable>(
+        Allocation->getArgOperand(0)->stripPointerCasts());
+    LayoutTy = TI ? getTypeLayoutType(TI) : nullptr;
+    return LayoutTy ? Allocation : nullptr;
+  }
+
+  // Return the declared payload layout from either of the canonical AS1
+  // object forms already used by the verifier:
+  //
+  //   i8 addrspace(1)* argument -> %Layout addrspace(1)*
+  //
+  // or the ABI payload form accepted by classifyTypedHeapPayload:
+  //
+  //   argument -> i8* addrspace(1)* -> gep 1 -> %Layout addrspace(1)*
+  //
+  // The typed cast is the declaration boundary for an otherwise erased ABI
+  // carrier.  A cast from one typed aggregate pointer to another is not such
+  // a boundary and therefore cannot manufacture a root layout.
+  Type *getCanonicalTypedHeapRootType(Value *Root) {
+    auto *TypedCast = dyn_cast<BitCastOperator>(Root);
+    if (!TypedCast)
+      return nullptr;
+    auto *TypedPtrTy = dyn_cast<PointerType>(TypedCast->getType());
+    if (!TypedPtrTy || TypedPtrTy->getAddressSpace() != 1 ||
+        TypedPtrTy->isOpaque())
+      return nullptr;
+    Type *RootTy = TypedPtrTy->getNonOpaquePointerElementType();
+    if (!isAggregateRegionAnchor(RootTy))
+      return nullptr;
+
+    Value *Carrier = TypedCast->getOperand(0);
+    if (isCanonicalHeapBaseArgument(Carrier))
+      return RootTy;
+
+    auto *HeaderGEP = dyn_cast<GEPOperator>(Carrier);
+    if (!HeaderGEP || HeaderGEP->getNumIndices() != 1 ||
+        HeaderGEP->getSourceElementType() != Type::getInt8PtrTy(C) ||
+        HeaderGEP->getPointerAddressSpace() != 1)
+      return nullptr;
+    auto *HeaderIndex = dyn_cast<ConstantInt>(HeaderGEP->idx_begin()->get());
+    if (!HeaderIndex || !HeaderIndex->isOne())
+      return nullptr;
+
+    auto *BaseCast = dyn_cast<BitCastOperator>(HeaderGEP->getPointerOperand());
+    if (!BaseCast || BaseCast->getSrcTy() != Type::getInt8PtrTy(C, 1) ||
+        BaseCast->getDestTy() !=
+            PointerType::get(Type::getInt8PtrTy(C), 1))
+      return nullptr;
+    Value *Base = BaseCast->getOperand(0);
+    if (!isCanonicalHeapBaseArgument(Base)) {
+      StructType *AllocationLayoutTy = nullptr;
+      if (!getKnownHeapAllocation(Base, AllocationLayoutTy) ||
+          AllocationLayoutTy != RootTy)
+        return nullptr;
+    }
+    return RootTy;
+  }
+
+  // Return the statically selected region type.  The leading pointer index
+  // must be zero; all remaining indices must be constant, in-bounds struct or
+  // array selections.  Scalar/i8 pointer arithmetic is deliberately not a
+  // typed-region proof.
+  Type *getConstantTypedRegionGEPResultType(const GEPOperator *GEP) {
+    Type *CurrentTy = GEP->getSourceElementType();
+    if (GEP->getNumIndices() == 0)
+      return nullptr;
+
+    auto Index = GEP->idx_begin();
+    auto *RootIndex = dyn_cast<ConstantInt>(Index->get());
+    if (!RootIndex || !RootIndex->isZero())
+      return nullptr;
+    // A zero-only GEP preserves an AS0 declaration, including a scalar one.
+    // Any actual subobject selection below must walk aggregate types.
+    if (++Index == GEP->idx_end())
+      return CurrentTy;
+
+    for (; Index != GEP->idx_end(); ++Index) {
+      auto *FieldIndex = dyn_cast<ConstantInt>(Index->get());
+      if (!FieldIndex || FieldIndex->isNegative() ||
+          FieldIndex->getValue().getActiveBits() > 64)
+        return nullptr;
+      uint64_t Field = FieldIndex->getZExtValue();
+      if (auto *ST = dyn_cast<StructType>(CurrentTy)) {
+        if (Field >= ST->getNumElements())
+          return nullptr;
+        CurrentTy = ST->getElementType(Field);
+        continue;
+      }
+      if (auto *AT = dyn_cast<ArrayType>(CurrentTy)) {
+        if (Field >= AT->getNumElements())
+          return nullptr;
+        CurrentTy = AT->getElementType();
+        continue;
+      }
+      return nullptr;
+    }
+    return CurrentTy;
   }
 
   Type *recoverCompleteTypedRegionType(Value *Ptr, Value *SizeValue) {
@@ -993,69 +1106,78 @@ private:
     if (!CopySize || !PtrTy || PtrTy->isOpaque())
       return nullptr;
 
-    APInt Offset(DL.getIndexSizeInBits(PtrTy->getAddressSpace()), 0);
     Value *Current = Ptr;
-    Type *TypedAnchorTy = nullptr;
-    SmallPtrSet<Value *, 8> Seen;
-    while (true) {
-      if (!Seen.insert(Current).second)
-        return nullptr;
-      if (isa<PHINode>(Current) || isa<SelectInst>(Current) ||
-          isa<IntToPtrInst>(Current))
-        return nullptr;
-      auto *CurrentPtrTy = dyn_cast<PointerType>(Current->getType());
-      if (TypedAnchorTy && CurrentPtrTy && !CurrentPtrTy->isOpaque() &&
-          CurrentPtrTy->getNonOpaquePointerElementType() == TypedAnchorTy)
-        break;
-      if (auto *GEP = dyn_cast<GEPOperator>(Current)) {
-        APInt GEPOffset(Offset.getBitWidth(), 0);
-        if (!GEP->accumulateConstantOffset(DL, GEPOffset))
-          return nullptr;
-        if (!TypedAnchorTy)
-          TypedAnchorTy = GEP->getSourceElementType();
-        Offset += GEPOffset;
-        Current = GEP->getPointerOperand();
-        continue;
-      }
+    // Casts may adapt the final selected pointer to the intrinsic carrier,
+    // but may not change one typed aggregate declaration into another.
+    while (!getCanonicalTypedHeapRootType(Current)) {
       if (auto *Cast = dyn_cast<BitCastOperator>(Current)) {
+        if (!isAllowedRegionOuterCast(Cast->getSrcTy(), Cast->getDestTy()))
+          return nullptr;
         Current = Cast->getOperand(0);
         continue;
       }
       if (auto *Cast = dyn_cast<AddrSpaceCastOperator>(Current)) {
+        if (!isAllowedRegionOuterCast(Cast->getOperand(0)->getType(),
+                                      Cast->getType()))
+          return nullptr;
         Current = Cast->getOperand(0);
         continue;
       }
       break;
     }
 
-    auto *BasePtrTy = dyn_cast<PointerType>(Current->getType());
-    if (!BasePtrTy || BasePtrTy->isOpaque() ||
-        BasePtrTy->getAddressSpace() != PtrTy->getAddressSpace() ||
-        Offset.isNegative() || Offset.getActiveBits() > 64)
+    Type *RegionTy = nullptr;
+    Type *ExpectedRootTy = nullptr;
+    while (auto *GEP = dyn_cast<GEPOperator>(Current)) {
+      Type *SelectedTy = getConstantTypedRegionGEPResultType(GEP);
+      if (!SelectedTy || (ExpectedRootTy && SelectedTy != ExpectedRootTy))
+        return nullptr;
+      if (!RegionTy)
+        RegionTy = SelectedTy;
+      ExpectedRootTy = GEP->getSourceElementType();
+      Current = GEP->getPointerOperand();
+      // Any ordinary cast here lies between the declaration root and a GEP.
+      // Only the canonical erased-AS1 declaration boundary is admissible.
+      if ((isa<BitCastOperator>(Current) ||
+           isa<AddrSpaceCastOperator>(Current)) &&
+          !getCanonicalTypedHeapRootType(Current))
+        return nullptr;
+    }
+
+    Type *RootTy = getCanonicalTypedHeapRootType(Current);
+    bool IsAS0Declaration = false;
+    if (!RootTy) {
+      auto *RootPtrTy = dyn_cast<PointerType>(Current->getType());
+      if (!RootPtrTy || RootPtrTy->isOpaque())
+        return nullptr;
+      if (auto *AI = dyn_cast<AllocaInst>(Current)) {
+        if (RootPtrTy->getAddressSpace() != 0)
+          return nullptr;
+        RootTy = AI->getAllocatedType();
+        IsAS0Declaration = true;
+      } else if (isa<Argument>(Current) || isa<GlobalVariable>(Current)) {
+        if (RootPtrTy->getAddressSpace() == 0) {
+          RootTy = RootPtrTy->getNonOpaquePointerElementType();
+          IsAS0Declaration = true;
+        }
+      }
+    }
+
+    if (!RootTy || !RootTy->isSized() ||
+        (IsAS0Declaration
+             ? !RootTy->isFirstClassType()
+             : !isAggregateRegionAnchor(RootTy)) ||
+        (ExpectedRootTy && ExpectedRootTy != RootTy))
       return nullptr;
-    Type *BaseTy = BasePtrTy->getNonOpaquePointerElementType();
-    // A bare i8 carrier does not prove that the copied byte is a complete
-    // object.  In particular, an AS1 i8* may hide a reference-bearing heap
-    // payload.  Only a typed GEP anchor can recover an i8 finite region; the
-    // separately checked native-byte destination path handles repeated bytes.
-    if (BaseTy->isIntegerTy(8) && !TypedAnchorTy)
+    if (!RegionTy)
+      RegionTy = RootTy;
+    if (!RegionTy->isSized())
       return nullptr;
-    if (BaseTy->isIntegerTy(8) && TypedAnchorTy && TypedAnchorTy->isSized())
-      BaseTy = TypedAnchorTy;
-    if (!BaseTy || !BaseTy->isSized())
+    TypeSize RegionSize = DL.getTypeAllocSize(RegionTy);
+    if (RegionSize.isScalable() ||
+        CopySize->getZExtValue() != RegionSize.getFixedSize())
       return nullptr;
-    TypeSize BaseSizeTS = DL.getTypeAllocSize(BaseTy);
-    if (BaseSizeTS.isScalable())
-      return nullptr;
-    uint64_t Size = CopySize->getZExtValue();
-    uint64_t BaseSize = BaseSizeTS.getFixedSize();
-    uint64_t ByteOffset = Offset.getZExtValue();
-    if (ByteOffset == 0 && Size == BaseSize)
-      return BaseTy;
-    auto *Root = dyn_cast<StructType>(BaseTy);
-    if (!Root || ByteOffset >= BaseSize)
-      return nullptr;
-    return findCompleteStructSubObjectType(Root, ByteOffset, Size);
+    return RegionTy;
   }
 
   bool isNativeByteArgumentDestination(Value *Ptr) {
@@ -1108,19 +1230,17 @@ private:
 
     APInt Offset(DL.getIndexSizeInBits(PtrTy->getAddressSpace()), 0);
     Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
-    auto *Allocation = dyn_cast<IntrinsicInst>(Base);
+    StructType *LayoutTy = nullptr;
+    auto *Allocation = getKnownHeapAllocation(Base, LayoutTy);
     if (!Allocation ||
         Allocation->getIntrinsicID() != Intrinsic::cj_malloc_array)
       return ReferencePayloadKind::Unknown;
 
     auto *Length = dyn_cast<ConstantInt>(Allocation->getArgOperand(1));
     auto *ElementSize = dyn_cast<ConstantInt>(Allocation->getArgOperand(2));
-    auto *TI = dyn_cast<GlobalVariable>(
-        Allocation->getArgOperand(0)->stripPointerCasts());
-    if (!Length || !ElementSize || !TI)
+    if (!Length || !ElementSize)
       return ReferencePayloadKind::Unknown;
 
-    StructType *LayoutTy = getTypeLayoutType(TI);
     if (!LayoutTy || !LayoutTy->isSized() || LayoutTy->getNumElements() != 2)
       return ReferencePayloadKind::Unknown;
     auto *FlexibleArrayTy = dyn_cast<ArrayType>(LayoutTy->getElementType(1));
@@ -1486,6 +1606,14 @@ private:
     }
     auto *BasePtrTy = dyn_cast<PointerType>(Base->getType());
     if (!BasePtrTy || BasePtrTy->isOpaque())
+      return ReferencePayloadKind::Unknown;
+
+    // The type of a pointer produced by a load, call, PHI, select, or
+    // inttoptr describes only the SSA value, not the object it designates.
+    // Dedicated classifiers above validate supported allocation intrinsics;
+    // this structural fallback therefore accepts only declaration roots.
+    if (!isa<AllocaInst>(Base) && !isa<Argument>(Base) &&
+        !isa<GlobalVariable>(Base))
       return ReferencePayloadKind::Unknown;
 
     Type *PayloadTy = BasePtrTy->getNonOpaquePointerElementType();
