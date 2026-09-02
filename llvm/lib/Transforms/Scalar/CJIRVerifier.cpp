@@ -856,9 +856,9 @@ private:
 
   // Recover a complete array payload rooted at llvm.cj.malloc.array.  The
   // intrinsic carries the canonical TypeInfo, element count, and element
-  // size, while the result points at the object header.  Admit only the exact
-  // [ArrayHeadSize, ArrayHeadSize + count * element-size) payload range; an
-  // interior, partial, dynamic, or type-erased range remains unknown.
+  // size, while the result points at the object header.  Admit either the
+  // complete payload range or one constant-index, whole-element write;
+  // interior partial, dynamic, or type-erased ranges remain unknown.
   ReferencePayloadKind classifyCompleteArrayPayload(Value *Ptr,
                                                      Value *SizeValue) {
     auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
@@ -893,17 +893,29 @@ private:
     if (LayoutElementSize.isScalable())
       return ReferencePayloadKind::Unknown;
 
-    if (Offset.isNegative() || Offset.getActiveBits() > 64 ||
-        Offset.getZExtValue() != ArrayHeadSize)
-      return ReferencePayloadKind::Unknown;
-
     uint64_t Count = Length->getZExtValue();
     uint64_t Stride = ElementSize->getZExtValue();
     if (Stride != LayoutElementSize.getFixedSize() ||
         (Stride != 0 && Count > UINT64_MAX / Stride))
       return ReferencePayloadKind::Unknown;
     uint64_t PayloadSize = Count * Stride;
-    if (CopySize->getZExtValue() != PayloadSize)
+    uint64_t Sz = CopySize->getZExtValue();
+
+    if (Offset.isNegative() || Offset.getActiveBits() > 64)
+      return ReferencePayloadKind::Unknown;
+    uint64_t Begin = Offset.getZExtValue();
+    if (Begin < ArrayHeadSize)
+      return ReferencePayloadKind::Unknown;
+    uint64_t Rel = Begin - ArrayHeadSize;
+
+    bool WholePayload = (Rel == 0 && Sz == PayloadSize);
+    uint64_t RefSize =
+        DL.getTypeAllocSize(Type::getInt8PtrTy(C, 1)).getFixedSize();
+    bool OneElement =
+        !WholePayload && Stride != 0 && Stride >= RefSize &&
+        !ElementTy->isIntegerTy(8) && Sz == Stride && Rel % Stride == 0 &&
+        Rel / Stride < Count;
+    if (!WholePayload && !OneElement)
       return ReferencePayloadKind::Unknown;
 
     return containsGCPtrType(ElementTy)
