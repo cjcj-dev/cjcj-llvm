@@ -3,8 +3,8 @@
 %stack_trace_data = type { i8 addrspace(1)*, i8 addrspace(1)*,
                            i8 addrspace(1)*, i64 }
 
-; Mirrors _CNat23decodeStackTraceWrapperL_E: a complete typed stack temporary
-; is copied into a typed non-heap sret slot.
+; The sret destination names caller-owned storage; the registered entry alloca
+; source and exact matching layout make this a complete ABI result transfer.
 define void @allow_complete_nonheap_sret_memcpy_with_reference_payload(
     %stack_trace_data* noalias sret(%stack_trace_data) %result)
     gc "cangjie" {

@@ -265,8 +265,21 @@ public:
       // rejected before the generic provenance fallbacks.
       if (DstCompleteTy && SrcCompleteTy &&
           hasEqualGCPointerOffsets(DstCompleteTy, SrcCompleteTy) &&
-          !isGlobalGCPointerDestination(Dst, DstCompleteTy))
-        break;
+          !isGlobalGCPointerDestination(Dst, DstCompleteTy)) {
+        bool ContainsReference = containsGCPtrType(DstCompleteTy) ||
+                                 containsGCPtrType(SrcCompleteTy);
+        // Alloca-derived reference payloads must stay on the registered root
+        // surface.  Preserve the baseline treatment of typed constant globals
+        // pending-const-global-source-contract; their independent storage/root
+        // contract has not yet been established here.
+        if (!ContainsReference ||
+            ((getRegisteredWholeObjectType(Dst, SizeArg) ||
+              getCompleteTypedABISRetObjectType(Dst, SizeArg)) &&
+             (getRegisteredWholeObjectType(Src, SizeArg) ||
+              getCompleteTypedABIForwardedObjectType(Src, SizeArg) ||
+              isPendingTypedConstantGlobalSource(Src))))
+          break;
+      }
 
       // A complete source object may be copied into a registered subobject of
       // an entry-block struct alloca.  This path is deliberately independent
@@ -275,10 +288,10 @@ public:
       if (isRegisteredSubObjectCopy(Dst, SrcCompleteTy, SizeArg))
         break;
 
-      // Mirror of the registered-subobject admission above: a complete
-      // struct subobject of a registered AS0 alloca may initialize a whole
-      // entry-block stack root when both layouts expose exactly the same
-      // managed-reference slots.
+      // Mirror of the registered-subobject admission above: a complete struct
+      // subobject of a registered AS0 alloca or an ABI-forwarded source may
+      // initialize a whole entry-block stack root when both layouts expose
+      // exactly the same managed-reference slots.
       if (isRegisteredWholeObjectMirrorCopy(Dst, Src, SizeArg) &&
           classifyReferencePayload(Src, SizeArg) ==
               ReferencePayloadKind::ContainsReference)
@@ -1478,6 +1491,13 @@ private:
            isa<StructType>(AI->getAllocatedType());
   }
 
+  bool isPendingTypedConstantGlobalSource(Value *Ptr) {
+    APInt Offset(DL.getIndexSizeInBits(0), 0);
+    Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
+    auto *GV = dyn_cast<GlobalVariable>(Base);
+    return GV && GV->isConstant() && Offset.isZero();
+  }
+
   // Cangjie lowers a known-size aggregate value through an AS0 pointer.  The
   // caller owns the typed stack slot and keeps it in struct-live at the call;
   // the callee only sees this forwarding Argument.  Exclude every native ABI
@@ -1499,10 +1519,83 @@ private:
            isa<StructType>(PtrTy->getNonOpaquePointerElementType());
   }
 
-  // Recover a complete struct subobject rooted directly in a registered
-  // typed AS0 alloca.  Casts after the field selection may adapt the value to
-  // the intrinsic's i8 carrier; casts between the root and a GEP are rejected
-  // so a type-punning cast cannot manufacture enclosing provenance.
+  // A Cangjie sret Argument names caller-owned typed storage.  The caller keeps
+  // that result slot live across the call so it can consume the returned value;
+  // unlike a regular destination Argument, this is an ABI-visible root owner.
+  bool isABIForwardedSRetArgument(const Argument *Arg) {
+    if (!Arg || !Arg->hasNoAliasAttr() || !Arg->hasStructRetAttr() ||
+        Arg->hasByValAttr())
+      return false;
+
+    const Function *F = Arg->getParent();
+    if (!F || !F->hasCangjieGC() || F->hasFnAttribute("cfunc") ||
+        F->hasFnAttribute("c2cj") || F->hasFnAttribute("cj2c") ||
+        F->hasFnAttribute("pkg_c_wrapper") || F->hasFnAttribute("cjstub"))
+      return false;
+
+    auto *PtrTy = dyn_cast<PointerType>(Arg->getType());
+    return PtrTy && PtrTy->getAddressSpace() == 0 && !PtrTy->isOpaque() &&
+           isa<StructType>(PtrTy->getNonOpaquePointerElementType());
+  }
+
+  // Recover a complete whole object forwarded by the Cangjie aggregate-value
+  // ABI.  This is source-only; destinations must be roots registered in the
+  // current frame.
+  Type *getCompleteTypedABIForwardedObjectType(Value *Ptr,
+                                               Value *SizeValue) {
+    auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
+    auto *Size = dyn_cast<ConstantInt>(SizeValue);
+    if (!PtrTy || PtrTy->getAddressSpace() != 0 || !Size || Size->isZero())
+      return nullptr;
+
+    APInt Offset(DL.getIndexSizeInBits(0), 0);
+    Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
+    auto *Arg = dyn_cast<Argument>(Base);
+    if (!isABIForwardedAggregateArgument(Arg) || !Offset.isZero())
+      return nullptr;
+
+    Type *RootTy = cast<PointerType>(Arg->getType())
+                       ->getNonOpaquePointerElementType();
+    if (!RootTy->isSized())
+      return nullptr;
+    TypeSize RootSize = DL.getTypeAllocSize(RootTy);
+    if (RootSize.isScalable() ||
+        Size->getZExtValue() != RootSize.getFixedSize())
+      return nullptr;
+    return RootTy;
+  }
+
+  // Recover a complete caller-owned result object from the callee's sret
+  // destination.  Sources retain their independent registered-root or Cangjie
+  // aggregate-value ABI requirement at the call site.
+  Type *getCompleteTypedABISRetObjectType(Value *Ptr, Value *SizeValue) {
+    auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
+    auto *Size = dyn_cast<ConstantInt>(SizeValue);
+    if (!PtrTy || PtrTy->getAddressSpace() != 0 || !Size || Size->isZero())
+      return nullptr;
+
+    APInt Offset(DL.getIndexSizeInBits(0), 0);
+    Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
+    auto *Arg = dyn_cast<Argument>(Base);
+    if (!isABIForwardedSRetArgument(Arg) || !Offset.isZero())
+      return nullptr;
+
+    Type *RootTy = cast<PointerType>(Arg->getType())
+                       ->getNonOpaquePointerElementType();
+    if (!RootTy->isSized())
+      return nullptr;
+    TypeSize RootSize = DL.getTypeAllocSize(RootTy);
+    if (RootSize.isScalable() ||
+        Size->getZExtValue() != RootSize.getFixedSize())
+      return nullptr;
+    return RootTy;
+  }
+
+  // Recover a complete struct subobject rooted directly in a registered typed
+  // AS0 alloca or, when explicitly enabled for the source side, a Cangjie ABI
+  // forwarding Argument.  Casts after the field selection may adapt the value
+  // to the intrinsic's i8 carrier; casts between the root and a GEP are
+  // rejected so a type-punning cast cannot manufacture enclosing provenance.
   Type *getCompleteTypedStructSubObjectType(
       Value *Ptr, Value *SizeValue, bool AllowABIForwardedArgument = false) {
     auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
