@@ -2,7 +2,7 @@
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-nonzero.ll -disable-output
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-first.ll -disable-output
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-equal-maps.ll -disable-output
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-argument.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=SRCARG,ABORT
+; RUN: opt -passes=cj-ir-verifier < %t/allow-argument.ll -disable-output
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-nonentry-source.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=SRCNONENTRY,ABORT
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-dynamic-source.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=SRCDYNAMIC,ABORT
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-erased-dynamic.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=ERASED,ABORT
@@ -18,8 +18,6 @@
 
 ; ERASED: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
 ; ERASED: in function reject_erased_dynamic_field_offset
-; SRCARG: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
-; SRCARG: in function reject_typed_argument_subobject
 ; SRCNONENTRY: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
 ; SRCNONENTRY: in function reject_nonentry_source
 ; SRCDYNAMIC: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
@@ -89,12 +87,12 @@ entry:
 declare void @llvm.cj.memset(i8*, i8, i64, i1)
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
 
-;--- reject-argument.ll
+;--- allow-argument.ll
 target datalayout = "e-p:64:64-p1:64:64"
 %String = type { i8 addrspace(1)*, i64 }
 %Token = type { i32, %String, i64 }
 
-define void @reject_typed_argument_subobject(%Token* %src.outer) gc "cangjie" {
+define void @allow_typed_argument_subobject(%Token* noalias %src.outer) gc "cangjie" {
 entry:
   %dst = alloca %String, align 8
   %dst.i8 = bitcast %String* %dst to i8*
@@ -207,7 +205,7 @@ target datalayout = "e-p:64:64-p1:64:64"
 %Payload = type { i8 addrspace(1)*, i64 }
 %Outer = type { i64, %Payload }
 
-define void @reject_non_entry_destination(%Outer* %src.outer) gc "cangjie" {
+define void @reject_non_entry_destination(%Outer* noalias %src.outer) gc "cangjie" {
 entry:
   br label %body
 body:
@@ -228,7 +226,7 @@ target datalayout = "e-p:64:64-p1:64:64"
 %Payload = type { i8 addrspace(1)*, i64 }
 %Outer = type { i64, %Payload }
 
-define void @reject_destination_argument(%Payload* %dst, %Outer* %src.outer) gc "cangjie" {
+define void @reject_destination_argument(%Payload* noalias %dst, %Outer* noalias %src.outer) gc "cangjie" {
 entry:
   %dst.i8 = bitcast %Payload* %dst to i8*
   %src.field = getelementptr inbounds %Outer, %Outer* %src.outer, i32 0, i32 1
@@ -245,7 +243,7 @@ target datalayout = "e-p:64:64-p1:64:64"
 %Outer = type { i64, %Payload }
 @dst = global %Payload zeroinitializer
 
-define void @reject_destination_global(%Outer* %src.outer) gc "cangjie" {
+define void @reject_destination_global(%Outer* noalias %src.outer) gc "cangjie" {
 entry:
   %dst.i8 = bitcast %Payload* @dst to i8*
   %src.field = getelementptr inbounds %Outer, %Outer* %src.outer, i32 0, i32 1
@@ -261,7 +259,7 @@ target datalayout = "e-p:64:64-p1:64:64"
 %Payload = type { i8 addrspace(1)*, i64 }
 %Outer = type { i64, %Payload }
 
-define void @reject_selected_destination(i1 %pick, %Outer* %src.outer) gc "cangjie" {
+define void @reject_selected_destination(i1 %pick, %Outer* noalias %src.outer) gc "cangjie" {
 entry:
   %dst.a = alloca %Payload, align 8
   %dst.b = alloca %Payload, align 8
@@ -285,7 +283,7 @@ target datalayout = "e-p:64:64-p1:64:64"
 %Payload = type { i8 addrspace(1)*, i64 }
 %Outer = type { i64, %Payload }
 
-define void @reject_partial_source_subobject(%Outer* %src.outer) gc "cangjie" {
+define void @reject_partial_source_subobject(%Outer* noalias %src.outer) gc "cangjie" {
 entry:
   %dst = alloca %Payload, align 8
   %dst.i8 = bitcast %Payload* %dst to i8*
@@ -304,7 +302,7 @@ target datalayout = "e-p:64:64-p1:64:64"
 %Payload = type { i8 addrspace(1)*, i64 }
 %Outer = type { i64, %Payload }
 
-define void @reject_dynamic_size(%Outer* %src.outer, i64 %size) gc "cangjie" {
+define void @reject_dynamic_size(%Outer* noalias %src.outer, i64 %size) gc "cangjie" {
 entry:
   %dst = alloca %Payload, align 8
   %dst.i8 = bitcast %Payload* %dst to i8*
@@ -324,7 +322,7 @@ target datalayout = "e-p:64:64-p1:64:64"
 %Dst = type { i64, i8 addrspace(1)* }
 %Outer = type { i64, %Src }
 
-define void @reject_unequal_gc_offset_maps(%Outer* %src.outer) gc "cangjie" {
+define void @reject_unequal_gc_offset_maps(%Outer* noalias %src.outer) gc "cangjie" {
 entry:
   %dst = alloca %Dst, align 8
   %dst.i8 = bitcast %Dst* %dst to i8*
@@ -365,7 +363,7 @@ target datalayout = "e-p:64:64-p1:64:64"
 %Payload = type { i8 addrspace(1)*, i64 }
 %Outer = type { i64, %Payload }
 
-define void @reject_heap_destination(i8 addrspace(1)* %dst, %Outer* %src.outer) gc "cangjie" {
+define void @reject_heap_destination(i8 addrspace(1)* %dst, %Outer* noalias %src.outer) gc "cangjie" {
 entry:
   %src.field = getelementptr inbounds %Outer, %Outer* %src.outer, i32 0, i32 1
   %src.i8 = bitcast %Payload* %src.field to i8*

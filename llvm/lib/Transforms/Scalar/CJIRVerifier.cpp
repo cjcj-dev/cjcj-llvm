@@ -1478,11 +1478,33 @@ private:
            isa<StructType>(AI->getAllocatedType());
   }
 
+  // Cangjie lowers a known-size aggregate value through an AS0 pointer.  The
+  // caller owns the typed stack slot and keeps it in struct-live at the call;
+  // the callee only sees this forwarding Argument.  Exclude every native ABI
+  // boundary and indirect-result/indirect-input spelling, for which no such
+  // owner contract exists.
+  bool isABIForwardedAggregateArgument(const Argument *Arg) {
+    if (!Arg || !Arg->hasNoAliasAttr() || Arg->hasStructRetAttr() ||
+        Arg->hasByValAttr())
+      return false;
+
+    const Function *F = Arg->getParent();
+    if (!F || !F->hasCangjieGC() || F->hasFnAttribute("cfunc") ||
+        F->hasFnAttribute("c2cj") || F->hasFnAttribute("cj2c") ||
+        F->hasFnAttribute("pkg_c_wrapper") || F->hasFnAttribute("cjstub"))
+      return false;
+
+    auto *PtrTy = dyn_cast<PointerType>(Arg->getType());
+    return PtrTy && PtrTy->getAddressSpace() == 0 && !PtrTy->isOpaque() &&
+           isa<StructType>(PtrTy->getNonOpaquePointerElementType());
+  }
+
   // Recover a complete struct subobject rooted directly in a registered
   // typed AS0 alloca.  Casts after the field selection may adapt the value to
   // the intrinsic's i8 carrier; casts between the root and a GEP are rejected
   // so a type-punning cast cannot manufacture enclosing provenance.
-  Type *getCompleteTypedStructSubObjectType(Value *Ptr, Value *SizeValue) {
+  Type *getCompleteTypedStructSubObjectType(
+      Value *Ptr, Value *SizeValue, bool AllowABIForwardedArgument = false) {
     auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
     auto *Size = dyn_cast<ConstantInt>(SizeValue);
     if (!PtrTy || PtrTy->getAddressSpace() != 0 || !Size || Size->isZero())
@@ -1514,14 +1536,19 @@ private:
     }
 
     auto *AI = dyn_cast<AllocaInst>(Current);
-    if (!SawStructGEP || !isRegisteredStructAlloca(AI))
+    auto *Arg = dyn_cast<Argument>(Current);
+    if (!SawStructGEP ||
+        (!isRegisteredStructAlloca(AI) &&
+         !(AllowABIForwardedArgument &&
+           isABIForwardedAggregateArgument(Arg))))
       return nullptr;
     auto *RootPtrTy = dyn_cast<PointerType>(Current->getType());
     if (!RootPtrTy || RootPtrTy->getAddressSpace() != 0 ||
         RootPtrTy->isOpaque() || !isa<StructType>(SubObjectTy) ||
         !SubObjectTy->isSized())
       return nullptr;
-    Type *RootTy = AI->getAllocatedType();
+    Type *RootTy = AI ? AI->getAllocatedType()
+                      : RootPtrTy->getNonOpaquePointerElementType();
     if (RootTy != EnclosingTy || !isa<StructType>(RootTy))
       return nullptr;
 
@@ -1562,7 +1589,7 @@ private:
   bool isRegisteredWholeObjectMirrorCopy(Value *Dst, Value *Src,
                                          Value *SizeValue) {
     Type *SrcSubObjectTy =
-        getCompleteTypedStructSubObjectType(Src, SizeValue);
+        getCompleteTypedStructSubObjectType(Src, SizeValue, true);
     Type *DstRootTy = getRegisteredWholeObjectType(Dst, SizeValue);
     return SrcSubObjectTy && DstRootTy &&
            containsGCPtrType(SrcSubObjectTy) &&
