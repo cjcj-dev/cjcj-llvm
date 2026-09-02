@@ -274,9 +274,9 @@ public:
         break;
 
       // Mirror of the registered-subobject admission above: a complete
-      // struct subobject of a typed AS0 alloca/argument may initialize a
-      // whole entry-block stack root when both layouts expose exactly the
-      // same managed-reference slots.
+      // struct subobject of a registered AS0 alloca may initialize a whole
+      // entry-block stack root when both layouts expose exactly the same
+      // managed-reference slots.
       if (isRegisteredWholeObjectMirrorCopy(Dst, Src, SizeArg) &&
           classifyReferencePayload(Src, SizeArg) ==
               ReferencePayloadKind::ContainsReference)
@@ -1201,10 +1201,19 @@ private:
     return CurrentTy;
   }
 
-  // Recover a complete struct subobject rooted directly in a typed AS0
-  // alloca or argument.  Casts after the field selection may adapt the value
-  // to the intrinsic's i8 carrier; casts between the root and a GEP are
-  // rejected so a type-punning cast cannot manufacture enclosing provenance.
+  // Match CJRewriteStatepoint.cpp::computeStructTypeLayouts: only a whole,
+  // statically sized StructType alloca in the entry block is eligible for
+  // structural stack-map registration.
+  bool isRegisteredStructAlloca(const AllocaInst *AI) {
+    return AI && AI->getParent() == &AI->getFunction()->getEntryBlock() &&
+           AI->isStaticAlloca() && !AI->isArrayAllocation() &&
+           isa<StructType>(AI->getAllocatedType());
+  }
+
+  // Recover a complete struct subobject rooted directly in a registered
+  // typed AS0 alloca.  Casts after the field selection may adapt the value to
+  // the intrinsic's i8 carrier; casts between the root and a GEP are rejected
+  // so a type-punning cast cannot manufacture enclosing provenance.
   Type *getCompleteTypedStructSubObjectType(Value *Ptr, Value *SizeValue) {
     auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
     auto *Size = dyn_cast<ConstantInt>(SizeValue);
@@ -1236,16 +1245,15 @@ private:
       Current = GEP->getPointerOperand();
     }
 
-    if (!SawStructGEP || (!isa<AllocaInst>(Current) && !isa<Argument>(Current)))
+    auto *AI = dyn_cast<AllocaInst>(Current);
+    if (!SawStructGEP || !isRegisteredStructAlloca(AI))
       return nullptr;
     auto *RootPtrTy = dyn_cast<PointerType>(Current->getType());
     if (!RootPtrTy || RootPtrTy->getAddressSpace() != 0 ||
         RootPtrTy->isOpaque() || !isa<StructType>(SubObjectTy) ||
         !SubObjectTy->isSized())
       return nullptr;
-    Type *RootTy = isa<AllocaInst>(Current)
-                       ? cast<AllocaInst>(Current)->getAllocatedType()
-                       : RootPtrTy->getNonOpaquePointerElementType();
+    Type *RootTy = AI->getAllocatedType();
     if (RootTy != EnclosingTy || !isa<StructType>(RootTy))
       return nullptr;
 
@@ -1270,12 +1278,11 @@ private:
     APInt Offset(DL.getIndexSizeInBits(0), 0);
     Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
     auto *AI = dyn_cast<AllocaInst>(Base);
-    if (!AI || AI->getParent() != &AI->getFunction()->getEntryBlock() ||
-        !AI->isStaticAlloca() || AI->isArrayAllocation() || !Offset.isZero())
+    if (!isRegisteredStructAlloca(AI) || !Offset.isZero())
       return nullptr;
 
-    auto *Root = dyn_cast<StructType>(AI->getAllocatedType());
-    if (!Root || !Root->isSized() || !containsGCPtrType(Root))
+    auto *Root = cast<StructType>(AI->getAllocatedType());
+    if (!Root->isSized() || !containsGCPtrType(Root))
       return nullptr;
     TypeSize RootSize = DL.getTypeAllocSize(Root);
     if (RootSize.isScalable() ||

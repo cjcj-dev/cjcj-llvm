@@ -14,11 +14,14 @@ declare void @safepoint()
 ; liveness pass combines them into the whole registered root.
 ; CHECK-LABEL: define i8 addrspace(1)* @live_destination
 ; CHECK: call token (...) @llvm.cj.gc.statepoint{{.*}}@safepoint{{.*}}[ "struct-live"(%Payload* %dst) ]
-define i8 addrspace(1)* @live_destination(%Outer* %src.outer) gc "cangjie" {
+define i8 addrspace(1)* @live_destination() gc "cangjie" {
 entry:
   %dst = alloca %Payload, align 8
+  %src.outer = alloca %Outer, align 8
   %dst.i8 = bitcast %Payload* %dst to i8*
+  %src.outer.i8 = bitcast %Outer* %src.outer to i8*
   call void @llvm.cj.memset(i8* %dst.i8, i8 0, i64 24, i1 false)
+  call void @llvm.cj.memset(i8* %src.outer.i8, i8 0, i64 32, i1 false)
   %src.field = getelementptr inbounds %Outer, %Outer* %src.outer, i32 0, i32 1
   %src.i8 = bitcast %Payload* %src.field to i8*
   call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst.i8, i8* %src.i8, i64 24, i1 false)
@@ -38,11 +41,14 @@ entry:
 ; CHECK: call token (...) @llvm.cj.gc.statepoint{{.*}}@safepoint
 ; CHECK-NOT: "struct-live"(%Payload* %dst)
 ; CHECK: ret void
-define void @dead_destination(%Outer* %src.outer) gc "cangjie" {
+define void @dead_destination() gc "cangjie" {
 entry:
   %dst = alloca %Payload, align 8
+  %src.outer = alloca %Outer, align 8
   %dst.i8 = bitcast %Payload* %dst to i8*
+  %src.outer.i8 = bitcast %Outer* %src.outer to i8*
   call void @llvm.cj.memset(i8* %dst.i8, i8 0, i64 24, i1 false)
+  call void @llvm.cj.memset(i8* %src.outer.i8, i8 0, i64 32, i1 false)
   %src.field = getelementptr inbounds %Outer, %Outer* %src.outer, i32 0, i32 1
   %src.i8 = bitcast %Payload* %src.field to i8*
   call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst.i8, i8* %src.i8, i64 24, i1 false)

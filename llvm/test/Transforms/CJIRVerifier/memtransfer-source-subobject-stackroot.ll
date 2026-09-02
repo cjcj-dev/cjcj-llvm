@@ -1,8 +1,10 @@
 ; RUN: split-file %s %t
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-nonzero.ll -disable-output
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-first.ll -disable-output
-; RUN: opt -passes=cj-ir-verifier < %t/allow-argument.ll -disable-output
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-equal-maps.ll -disable-output
+; RUN: not not opt -passes=cj-ir-verifier < %t/reject-argument.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=SRCARG,ABORT
+; RUN: not not opt -passes=cj-ir-verifier < %t/reject-nonentry-source.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=SRCNONENTRY,ABORT
+; RUN: not not opt -passes=cj-ir-verifier < %t/reject-dynamic-source.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=SRCDYNAMIC,ABORT
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-erased-dynamic.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=ERASED,ABORT
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-non-entry.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=NONENTRY,ABORT
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-dst-argument.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=DSTARG,ABORT
@@ -16,6 +18,12 @@
 
 ; ERASED: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
 ; ERASED: in function reject_erased_dynamic_field_offset
+; SRCARG: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
+; SRCARG: in function reject_typed_argument_subobject
+; SRCNONENTRY: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
+; SRCNONENTRY: in function reject_nonentry_source
+; SRCDYNAMIC: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
+; SRCDYNAMIC: in function reject_dynamic_source
 ; NONENTRY: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
 ; NONENTRY: in function reject_non_entry_destination
 ; DSTARG: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
@@ -81,12 +89,12 @@ entry:
 declare void @llvm.cj.memset(i8*, i8, i64, i1)
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
 
-;--- allow-argument.ll
+;--- reject-argument.ll
 target datalayout = "e-p:64:64-p1:64:64"
 %String = type { i8 addrspace(1)*, i64 }
 %Token = type { i32, %String, i64 }
 
-define void @allow_typed_argument_subobject_to_entry_root(%Token* %src.outer) gc "cangjie" {
+define void @reject_typed_argument_subobject(%Token* %src.outer) gc "cangjie" {
 entry:
   %dst = alloca %String, align 8
   %dst.i8 = bitcast %String* %dst to i8*
@@ -100,17 +108,70 @@ entry:
 declare void @llvm.cj.memset(i8*, i8, i64, i1)
 declare void @llvm.memmove.p0i8.p0i8.i64(i8*, i8*, i64, i1)
 
+;--- reject-nonentry-source.ll
+target datalayout = "e-p:64:64-p1:64:64"
+%Payload = type { i8 addrspace(1)*, i64 }
+%Outer = type { i64, %Payload }
+
+define void @reject_nonentry_source(i1 %c) gc "cangjie" {
+entry:
+  %dst = alloca %Payload, align 8
+  %dst.i8 = bitcast %Payload* %dst to i8*
+  call void @llvm.cj.memset(i8* %dst.i8, i8 0, i64 16, i1 false)
+  br i1 %c, label %body, label %exit
+body:
+  %src.outer = alloca %Outer, align 8
+  %src.outer.i8 = bitcast %Outer* %src.outer to i8*
+  call void @llvm.cj.memset(i8* %src.outer.i8, i8 0, i64 24, i1 false)
+  %src.field = getelementptr inbounds %Outer, %Outer* %src.outer, i32 0, i32 1
+  %src.i8 = bitcast %Payload* %src.field to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst.i8, i8* %src.i8, i64 16, i1 false)
+  br label %exit
+exit:
+  ret void
+}
+
+declare void @llvm.cj.memset(i8*, i8, i64, i1)
+declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+
+;--- reject-dynamic-source.ll
+target datalayout = "e-p:64:64-p1:64:64"
+%Payload = type { i8 addrspace(1)*, i64 }
+%Outer = type { i64, %Payload }
+
+define void @reject_dynamic_source(i64 %n) gc "cangjie" {
+entry:
+  %dst = alloca %Payload, align 8
+  %dst.i8 = bitcast %Payload* %dst to i8*
+  call void @llvm.cj.memset(i8* %dst.i8, i8 0, i64 16, i1 false)
+  br label %body
+body:
+  %src.outer = alloca %Outer, i64 %n, align 8
+  %src.outer.i8 = bitcast %Outer* %src.outer to i8*
+  call void @llvm.cj.memset(i8* %src.outer.i8, i8 0, i64 24, i1 false)
+  %src.field = getelementptr inbounds %Outer, %Outer* %src.outer, i32 0, i32 1
+  %src.i8 = bitcast %Payload* %src.field to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst.i8, i8* %src.i8, i64 16, i1 false)
+  ret void
+}
+
+declare void @llvm.cj.memset(i8*, i8, i64, i1)
+declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+
 ;--- allow-equal-maps.ll
 target datalayout = "e-p:64:64-p1:64:64"
 %SrcPayload = type { i8 addrspace(1)*, i64, i8 addrspace(1)*, i64 }
 %DstPayload = type { i8 addrspace(1)*, i64, i8 addrspace(1)*, i64 }
 %SrcOuter = type { i32, %SrcPayload }
 
-define void @allow_equal_gc_offset_maps_across_distinct_types(%SrcOuter* %src.outer) gc "cangjie" {
+define void @allow_equal_gc_offset_maps_across_distinct_types() gc "cangjie" {
 entry:
   %dst = alloca %DstPayload, align 8
+  %src.outer = alloca %SrcOuter, align 8
   %dst.i8 = bitcast %DstPayload* %dst to i8*
+  %src.outer.i8 = bitcast %SrcOuter* %src.outer to i8*
   call void @llvm.cj.memset(i8* %dst.i8, i8 0, i64 32, i1 false)
+  call void @llvm.cj.memset(i8* %src.outer.i8, i8 0, i64 40, i1 false)
   %src.field = getelementptr inbounds %SrcOuter, %SrcOuter* %src.outer, i32 0, i32 1
   %src.i8 = bitcast %SrcPayload* %src.field to i8*
   call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst.i8, i8* %src.i8, i64 32, i1 false)
@@ -282,11 +343,14 @@ target datalayout = "e-p:64:64-p1:64:64"
 %VectorPayload = type { <2 x i8 addrspace(1)*> }
 %Outer = type { i64, %VectorPayload }
 
-define void @reject_reference_vector_layout(%Outer* %src.outer) gc "cangjie" {
+define void @reject_reference_vector_layout() gc "cangjie" {
 entry:
   %dst = alloca %VectorPayload, align 16
+  %src.outer = alloca %Outer, align 16
   %dst.i8 = bitcast %VectorPayload* %dst to i8*
+  %src.outer.i8 = bitcast %Outer* %src.outer to i8*
   call void @llvm.cj.memset(i8* %dst.i8, i8 0, i64 16, i1 false)
+  call void @llvm.cj.memset(i8* %src.outer.i8, i8 0, i64 32, i1 false)
   %src.field = getelementptr inbounds %Outer, %Outer* %src.outer, i32 0, i32 1
   %src.i8 = bitcast %VectorPayload* %src.field to i8*
   call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst.i8, i8* %src.i8, i64 16, i1 false)
