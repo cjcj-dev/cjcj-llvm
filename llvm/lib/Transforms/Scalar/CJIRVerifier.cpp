@@ -26,6 +26,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/ModuleSlotTracker.h"
+#include "llvm/IR/Operator.h"
 #include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
@@ -248,6 +249,11 @@ public:
       Value *SizeArg = Call.getArgOperand(2);
       auto *ConstantSize = dyn_cast<ConstantInt>(SizeArg);
       if (ConstantSize && ConstantSize->isZero())
+        break;
+      // Primitive ArrayLayout payloads have no managed-reference slots, so
+      // their copy ranges do not require a GC barrier.  This type-only rule is
+      // intentionally independent of allocation provenance and copy size.
+      if (isPrimitiveArrayPayloadTransfer(Dst, Src))
         break;
       Type *DstCompleteTy = getCompleteTypedNonHeapObjectType(Dst, SizeArg);
       Type *SrcCompleteTy = getCompleteTypedNonHeapObjectType(Src, SizeArg);
@@ -852,6 +858,78 @@ private:
     return containsGCPtrType(PayloadTy)
                ? ReferencePayloadKind::ContainsReference
                : ReferencePayloadKind::NoReference;
+  }
+
+  // Recover E from one unique
+  //   %ArrayLayout.T = type { %ArrayBase, [0 x E] }
+  // payload-selection GEP in a pointer-identity chain.  GEPs after the
+  // selector may index E directly or operate on its i8 carrier; neither
+  // changes whether E contains a managed-reference slot.  GEPs before the
+  // selector are deliberately unconstrained because allocation provenance is
+  // not part of this type-only rule.
+  Type *getUniqueArrayLayoutElementType(Value *Ptr) {
+    Type *ElementTy = nullptr;
+    SmallVector<const GEPOperator *, 4> DescendantGEPs;
+
+    for (Value *Current = Ptr;;) {
+      if (auto *Cast = dyn_cast<BitCastOperator>(Current)) {
+        Current = Cast->getOperand(0);
+        continue;
+      }
+      if (auto *Cast = dyn_cast<AddrSpaceCastOperator>(Current)) {
+        Current = Cast->getOperand(0);
+        continue;
+      }
+
+      auto *GEP = dyn_cast<GEPOperator>(Current);
+      if (!GEP)
+        break;
+
+      auto *LayoutTy = dyn_cast<StructType>(GEP->getSourceElementType());
+      ArrayType *FlexibleArrayTy = nullptr;
+      bool IsPayloadSelector = false;
+      if (LayoutTy && LayoutTy->hasName() &&
+          LayoutTy->getName().startswith("ArrayLayout.") &&
+          LayoutTy->getNumElements() == 2) {
+        auto *ArrayBaseTy = dyn_cast<StructType>(LayoutTy->getElementType(0));
+        FlexibleArrayTy = dyn_cast<ArrayType>(LayoutTy->getElementType(1));
+        auto Index = GEP->idx_begin();
+        auto *Zero = GEP->getNumIndices() == 2
+                         ? dyn_cast<ConstantInt>(Index->get())
+                         : nullptr;
+        auto *One = Zero ? dyn_cast<ConstantInt>((++Index)->get()) : nullptr;
+        IsPayloadSelector =
+            ArrayBaseTy && ArrayBaseTy->hasName() &&
+            ArrayBaseTy->getName() == "ArrayBase" && FlexibleArrayTy &&
+            FlexibleArrayTy->getNumElements() == 0 && Zero && Zero->isZero() &&
+            One && One->isOne();
+      }
+
+      if (IsPayloadSelector) {
+        if (ElementTy)
+          return nullptr;
+        ElementTy = FlexibleArrayTy->getElementType();
+        for (const GEPOperator *Descendant : DescendantGEPs) {
+          Type *IndexedTy = Descendant->getSourceElementType();
+          if (IndexedTy != ElementTy && !IndexedTy->isIntegerTy(8))
+            return nullptr;
+        }
+      } else if (!ElementTy) {
+        DescendantGEPs.push_back(GEP);
+      }
+
+      Current = GEP->getPointerOperand();
+    }
+    return ElementTy;
+  }
+
+  bool isPrimitiveArrayPayloadTransfer(Value *Dst, Value *Src) {
+    Type *DstElementTy = getUniqueArrayLayoutElementType(Dst);
+    Type *SrcElementTy = getUniqueArrayLayoutElementType(Src);
+    if (!DstElementTy || !SrcElementTy)
+      return false;
+    return !containsGCPtrType(DstElementTy) &&
+           !containsGCPtrType(SrcElementTy);
   }
 
   // Recover a complete array payload rooted at llvm.cj.malloc.array.  The
