@@ -16,6 +16,7 @@
 #include "llvm/Transforms/Scalar/CJIRVerifier.h"
 
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/IR/CJIntrinsics.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -254,6 +255,8 @@ public:
       // their copy ranges do not require a GC barrier.  This type-only rule is
       // intentionally independent of allocation provenance and copy size.
       if (isPrimitiveArrayPayloadTransfer(Dst, Src))
+        break;
+      if (isNoReferenceMemTransfer(Dst, Src, SizeArg))
         break;
       Type *DstCompleteTy = getCompleteTypedNonHeapObjectType(Dst, SizeArg);
       Type *SrcCompleteTy = getCompleteTypedNonHeapObjectType(Src, SizeArg);
@@ -954,6 +957,141 @@ private:
       return false;
     return !containsGCPtrType(DstElementTy) &&
            !containsGCPtrType(SrcElementTy);
+  }
+
+  Type *findCompleteStructSubObjectType(StructType *ST,
+                                        uint64_t TargetOffset,
+                                        uint64_t Size,
+                                        uint64_t BaseOffset = 0) {
+    if (!ST->isSized())
+      return nullptr;
+    const StructLayout *Layout = DL.getStructLayout(ST);
+    for (unsigned I = 0, E = ST->getNumElements(); I != E; ++I) {
+      Type *ElementTy = ST->getElementType(I);
+      if (!ElementTy->isSized())
+        continue;
+      uint64_t ElemOffset = BaseOffset + Layout->getElementOffset(I);
+      TypeSize ElemSizeTS = DL.getTypeAllocSize(ElementTy);
+      if (ElemSizeTS.isScalable())
+        continue;
+      uint64_t ElemSize = ElemSizeTS.getFixedSize();
+      if (ElemOffset == TargetOffset && ElemSize == Size)
+        return ElementTy;
+      if (auto *Nested = dyn_cast<StructType>(ElementTy)) {
+        if (TargetOffset >= ElemOffset && TargetOffset < ElemOffset + ElemSize)
+          if (Type *Found = findCompleteStructSubObjectType(
+                  Nested, TargetOffset, Size, ElemOffset))
+            return Found;
+      }
+    }
+    return nullptr;
+  }
+
+  Type *recoverCompleteTypedRegionType(Value *Ptr, Value *SizeValue) {
+    auto *CopySize = dyn_cast<ConstantInt>(SizeValue);
+    auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
+    if (!CopySize || !PtrTy || PtrTy->isOpaque())
+      return nullptr;
+
+    APInt Offset(DL.getIndexSizeInBits(PtrTy->getAddressSpace()), 0);
+    Value *Current = Ptr;
+    Type *TypedAnchorTy = nullptr;
+    SmallPtrSet<Value *, 8> Seen;
+    while (true) {
+      if (!Seen.insert(Current).second)
+        return nullptr;
+      if (isa<PHINode>(Current) || isa<SelectInst>(Current) ||
+          isa<IntToPtrInst>(Current))
+        return nullptr;
+      auto *CurrentPtrTy = dyn_cast<PointerType>(Current->getType());
+      if (TypedAnchorTy && CurrentPtrTy && !CurrentPtrTy->isOpaque() &&
+          CurrentPtrTy->getNonOpaquePointerElementType() == TypedAnchorTy)
+        break;
+      if (auto *GEP = dyn_cast<GEPOperator>(Current)) {
+        APInt GEPOffset(Offset.getBitWidth(), 0);
+        if (!GEP->accumulateConstantOffset(DL, GEPOffset))
+          return nullptr;
+        if (!TypedAnchorTy)
+          TypedAnchorTy = GEP->getSourceElementType();
+        Offset += GEPOffset;
+        Current = GEP->getPointerOperand();
+        continue;
+      }
+      if (auto *Cast = dyn_cast<BitCastOperator>(Current)) {
+        Current = Cast->getOperand(0);
+        continue;
+      }
+      if (auto *Cast = dyn_cast<AddrSpaceCastOperator>(Current)) {
+        Current = Cast->getOperand(0);
+        continue;
+      }
+      break;
+    }
+
+    auto *BasePtrTy = dyn_cast<PointerType>(Current->getType());
+    if (!BasePtrTy || BasePtrTy->isOpaque() ||
+        BasePtrTy->getAddressSpace() != PtrTy->getAddressSpace() ||
+        Offset.isNegative() || Offset.getActiveBits() > 64)
+      return nullptr;
+    Type *BaseTy = BasePtrTy->getNonOpaquePointerElementType();
+    // A bare i8 carrier does not prove that the copied byte is a complete
+    // object.  In particular, an AS1 i8* may hide a reference-bearing heap
+    // payload.  Only a typed GEP anchor can recover an i8 finite region; the
+    // separately checked native-byte destination path handles repeated bytes.
+    if (BaseTy->isIntegerTy(8) && !TypedAnchorTy)
+      return nullptr;
+    if (BaseTy->isIntegerTy(8) && TypedAnchorTy && TypedAnchorTy->isSized())
+      BaseTy = TypedAnchorTy;
+    if (!BaseTy || !BaseTy->isSized())
+      return nullptr;
+    TypeSize BaseSizeTS = DL.getTypeAllocSize(BaseTy);
+    if (BaseSizeTS.isScalable())
+      return nullptr;
+    uint64_t Size = CopySize->getZExtValue();
+    uint64_t BaseSize = BaseSizeTS.getFixedSize();
+    uint64_t ByteOffset = Offset.getZExtValue();
+    if (ByteOffset == 0 && Size == BaseSize)
+      return BaseTy;
+    auto *Root = dyn_cast<StructType>(BaseTy);
+    if (!Root || ByteOffset >= BaseSize)
+      return nullptr;
+    return findCompleteStructSubObjectType(Root, ByteOffset, Size);
+  }
+
+  bool isNativeByteArgumentDestination(Value *Ptr) {
+    auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
+    if (!PtrTy || PtrTy->getAddressSpace() != 0 || PtrTy->isOpaque() ||
+        !PtrTy->getNonOpaquePointerElementType()->isIntegerTy(8))
+      return false;
+    APInt Offset(DL.getIndexSizeInBits(0), 0);
+    Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
+    auto *Arg = dyn_cast<Argument>(Base);
+    if (!Arg)
+      return false;
+    auto *BaseTy = dyn_cast<PointerType>(Arg->getType());
+    return BaseTy && BaseTy->getAddressSpace() == 0 && !BaseTy->isOpaque() &&
+           BaseTy->getNonOpaquePointerElementType()->isIntegerTy(8);
+  }
+
+  bool isNoReferenceMemTransfer(Value *Dst, Value *Src, Value *SizeValue) {
+    // Recover the exact copied region on both sides before consulting the
+    // provenance fallbacks below.  A complete region whose own layout has no
+    // managed-reference slots is safe to move regardless of whether its
+    // enclosing object is a heap object or an AS0 stack/argument object.
+    // Bare AS1 i8 carriers intentionally do not recover here.
+    Type *DstRegionTy = recoverCompleteTypedRegionType(Dst, SizeValue);
+    Type *SrcRegionTy = recoverCompleteTypedRegionType(Src, SizeValue);
+    if (DstRegionTy && SrcRegionTy && !containsGCPtrType(DstRegionTy) &&
+        !containsGCPtrType(SrcRegionTy))
+      return true;
+
+    // std.core write lowers a proven primitive ArrayLayout byte span into an
+    // AS0 native i8* argument with a dynamic size.  Permit only that repeated
+    // byte sink; an AS1 bare i8* destination remains Unknown.
+    if (!isNativeByteArgumentDestination(Dst))
+      return false;
+    Type *SrcElementTy = getUniqueArrayLayoutElementType(Src);
+    return SrcElementTy && !containsGCPtrType(SrcElementTy);
   }
 
   // Recover a complete array payload rooted at llvm.cj.malloc.array.  The
