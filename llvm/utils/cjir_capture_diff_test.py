@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
+import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -12,7 +14,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from cjir_capture_run import sha256 as file_sha256
+from unittest import mock
+
+from cjir_capture_run import loader_environment, sha256 as file_sha256
 from cjir_capture_diff import capture_sha256
 
 
@@ -153,6 +157,135 @@ class CaptureDiffTest(unittest.TestCase):
         self.assertNotEqual(
             hashlib.sha256((before_dir / "x.jsonl").read_bytes()).hexdigest(),
             hashlib.sha256((after_dir / "x.jsonl").read_bytes()).hexdigest())
+
+    def test_non_jsonl_trace_file_changes_summary_input_hash(self):
+        """Every trace-dir file is part of the analyzer input identity."""
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        for arm, text in (("base", diagnostic(UNKNOWN)), ("candidate", "")):
+            log_dir = root / arm / "logs"
+            log_dir.mkdir(parents=True)
+            (log_dir / "x.log").write_text(text)
+        trace_dir = root / "traces"
+        trace_dir.mkdir()
+        (trace_dir / "x.jsonl").write_text(json.dumps(trace()) + "\n")
+        unrelated = trace_dir / "trace-manifest.tsv"
+        unrelated.write_text("A\n")
+        command = [sys.executable, str(SCRIPT), str(root),
+                   "--trace-dir", str(trace_dir)]
+        first = subprocess.run(command, text=True, capture_output=True,
+                               check=False)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        first_summary = dict(
+            line.split("=", 1) for line in
+            (root / "analysis" / "summary.txt").read_text().splitlines())
+        unrelated.write_text("B\n")
+        second = subprocess.run(command, text=True, capture_output=True,
+                                check=False)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        second_summary = dict(
+            line.split("=", 1) for line in
+            (root / "analysis" / "summary.txt").read_text().splitlines())
+        self.assertNotEqual(first_summary["input_sha256"],
+                            second_summary["input_sha256"])
+
+    def test_loader_environment_is_explicit_allowlist(self):
+        hostile = {
+            "PATH": "/hostile/bin", "HOME": "/expected/home", "LANG": "C",
+            "LD_LIBRARY_PATH": "/outside", "LD_PRELOAD": "/outside/preload.so",
+            "LD_AUDIT": "/outside/audit.so", "LD_DYNAMIC_WEAK": "1",
+            "LD_BIND_NOW": "1", "GLIBC_TUNABLES": "glibc.rtld.nns=8",
+            "MALLOC_CHECK_": "3", "MALLOC_PERTURB_": "99",
+            "UNRELATED": "not-allowed",
+        }
+        with mock.patch.dict(os.environ, hostile, clear=True):
+            self.assertEqual(loader_environment(), {
+                "PATH": "/usr/bin:/bin", "HOME": "/expected/home", "LANG": "C",
+            })
+
+    def test_loader_environment_rejects_ld_audit_redirect(self):
+        """The runner must load the packaged SO despite a hostile LD_AUDIT."""
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        release = root / "release"
+        outside = root / "outside"
+        (release / "bin").mkdir(parents=True)
+        (release / "lib").mkdir()
+        outside.mkdir()
+        compiler = shutil.which("cc")
+        self.assertIsNotNone(compiler, "cc is required for the rtld-audit test")
+        library_source = root / "lib.c"
+        library_source.write_text(
+            '#ifndef MARKER\n#define MARKER "PACKAGED"\n#endif\n'
+            'const char *llvm_identity(void) { return MARKER; }\n')
+        tool_source = root / "tool.c"
+        tool_source.write_text(
+            '#include <stdio.h>\n'
+            'extern const char *llvm_identity(void);\n'
+            'int main(void) {\n'
+            '  printf("LOADED=%s\\n", llvm_identity());\n'
+            '  puts("CJIR_CAPTURE\\t{}");\n'
+            '  return 0;\n'
+            '}\n')
+        external_library = outside / "libLLVM-15.so"
+        packaged_library = release / "lib" / "libLLVM-15.so"
+        tool = release / "bin" / "cjir-capture"
+        subprocess.run(
+            [compiler, "-shared", "-fPIC", str(library_source), "-o",
+             str(packaged_library)], check=True)
+        subprocess.run(
+            [compiler, "-shared", "-fPIC", '-DMARKER="EXTERNAL"',
+             str(library_source), "-o", str(external_library)], check=True)
+        subprocess.run(
+            [compiler, str(tool_source), f"-L{release / 'lib'}",
+             "-l:libLLVM-15.so", "-Wl,-rpath,$ORIGIN/../lib", "-o",
+             str(tool)], check=True)
+        audit_source = root / "audit.c"
+        audit_source.write_text(
+            '#define _GNU_SOURCE\n#include <link.h>\n#include <string.h>\n'
+            'unsigned int la_version(unsigned int version) {\n'
+            '  (void)version; return LAV_CURRENT;\n'
+            '}\n'
+            'char *la_objsearch(const char *name, uintptr_t *cookie, '
+            'unsigned int flag) {\n'
+            '  (void)cookie; (void)flag;\n'
+            '  if (strcmp(name, "libLLVM-15.so") == 0)\n'
+            f'    return "{external_library}";\n'
+            '  return (char *)name;\n'
+            '}\n')
+        audit = root / "audit.so"
+        subprocess.run([compiler, "-shared", "-fPIC", str(audit_source),
+                        "-o", str(audit)], check=True)
+        manifest = release / "MANIFEST.sha256"
+        manifest.write_text(
+            f"{file_sha256(tool)}  bin/cjir-capture\n"
+            f"{file_sha256(packaged_library)}  lib/libLLVM-15.so\n")
+        capture = root / "input.ll"
+        capture.write_text("; input\n")
+        inventory = root / "inventory.tsv"
+        inventory.write_text(f"module\tcapture\nx\t{capture}\n")
+        hostile_environment = dict(os.environ)
+        hostile_environment["LD_AUDIT"] = str(audit)
+        redirected = subprocess.run(
+            [str(tool)], text=True, capture_output=True, check=False,
+            env=hostile_environment)
+        self.assertEqual(redirected.returncode, 0, redirected.stderr)
+        self.assertIn("LOADED=EXTERNAL", redirected.stdout)
+        output = root / "output"
+        command = [
+            sys.executable,
+            str(Path(__file__).with_name("cjir_capture_run.py")),
+            "--inventory", str(inventory), "--output-dir", str(output),
+            "--release", str(release),
+        ]
+        result = subprocess.run(command, text=True, capture_output=True,
+                                check=False, env=hostile_environment)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        actual = (output / "x.jsonl").read_text()
+        self.assertIn("LOADED=PACKAGED", actual)
+        self.assertNotIn("LOADED=EXTERNAL", actual)
 
     def test_release_manifest_binds_packaged_so_and_rejects_tamper(self):
         """The runner accepts only the SO whose packaged hash is verified."""

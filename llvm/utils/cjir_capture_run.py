@@ -19,6 +19,7 @@ MANIFEST_METADATA = {
     "source_commit": "capture_source_commit",
     "source_file_sha256": "capture_source_file_sha256",
 }
+LOADER_ENV_PASSTHROUGH = ("HOME", "LANG")
 
 
 def sha256(path: Path):
@@ -29,7 +30,17 @@ def sha256(path: Path):
     return digest.hexdigest()
 
 
-def validate_release(release: Path):
+def loader_environment():
+    """Return the complete, fail-closed environment for release processes."""
+    environment = {"PATH": "/usr/bin:/bin"}
+    environment.update({
+        name: os.environ[name]
+        for name in LOADER_ENV_PASSTHROUGH if name in os.environ
+    })
+    return environment
+
+
+def validate_release(release: Path, environment):
     """Run sha256sum -c and return the two packaged file hashes."""
     release = release.resolve()
     manifest = release / "MANIFEST.sha256"
@@ -37,7 +48,7 @@ def validate_release(release: Path):
         raise ValueError(f"missing release manifest: {manifest}")
     check = subprocess.run(
         ["sha256sum", "-c", manifest.name], cwd=release,
-        text=True, capture_output=True, check=False)
+        text=True, capture_output=True, check=False, env=environment)
     if check.returncode != 0:
         detail = (check.stdout + check.stderr).strip()
         raise ValueError(
@@ -70,8 +81,10 @@ def main():
     parser.add_argument("--release", type=Path, required=True,
                         help="self-contained release with bin/, lib/, and MANIFEST.sha256")
     args = parser.parse_args()
+    environment = loader_environment()
     try:
-        manifest, release_hashes, release_metadata = validate_release(args.release)
+        manifest, release_hashes, release_metadata = validate_release(
+            args.release, environment)
     except ValueError as error:
         print(f"cjir-capture-run: {error}", file=sys.stderr)
         return 2
@@ -93,8 +106,7 @@ def main():
                 result = subprocess.run(
                     [str(tool), f"--module-name={module}", str(capture)],
                     stdout=stdout, stderr=error, check=False,
-                    env={key: value for key, value in os.environ.items()
-                         if key not in ("LD_LIBRARY_PATH", "LD_PRELOAD")})
+                    env=environment)
             records = sum(
                 1 for line in output.read_text(errors="replace").splitlines()
                 if line.startswith("CJIR_CAPTURE\t"))

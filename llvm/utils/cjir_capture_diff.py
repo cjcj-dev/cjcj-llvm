@@ -166,6 +166,14 @@ def load_trace_dir(trace_dir: Path):
     return records
 
 
+def _file_sha256(path: Path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.digest()
+
+
 def capture_sha256(root: Path, trace_dir: Path | None):
     digest = hashlib.sha256()
     for arm in ("base", "candidate"):
@@ -174,9 +182,12 @@ def capture_sha256(root: Path, trace_dir: Path | None):
             digest.update(log.read_bytes())
             digest.update(b"\0")
     if trace_dir:
-        for trace in sorted(trace_dir.glob("*.jsonl")):
-            digest.update(f"trace/{trace.name}\0".encode())
-            digest.update(trace.read_bytes())
+        traces = sorted(
+            path for path in trace_dir.rglob("*") if path.is_file())
+        for trace in traces:
+            relative = trace.relative_to(trace_dir).as_posix()
+            digest.update(f"trace/{relative}\0".encode())
+            digest.update(_file_sha256(trace))
             digest.update(b"\0")
     return digest.hexdigest()
 
