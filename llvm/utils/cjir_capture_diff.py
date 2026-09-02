@@ -26,7 +26,8 @@ FIELDS = ["module", "function", "dst", "shape", "size", "class", "call"]
 IDENTITY_FIELDS = ["module", "function", "dst", "shape", "size"]
 RUN_METADATA_FIELDS = [
     "base_opt_sha256", "candidate_opt_sha256", "capture_tool_sha256",
-    "capture_product_library_sha256",
+    "capture_product_library_sha256", "capture_release_manifest_sha256",
+    "capture_source_commit", "capture_source_file_sha256",
 ]
 BINDING_FIELDS = [
     "module", "function", "dst", "shape", "size", "class", "bindable",
@@ -336,6 +337,10 @@ def main():
     parser.add_argument("--capture-tool-sha256", default="not_provided")
     parser.add_argument("--capture-product-library-sha256",
                         default="not_provided")
+    parser.add_argument("--capture-release-manifest-sha256",
+                        default="not_provided")
+    parser.add_argument("--capture-source-commit", default="not_provided")
+    parser.add_argument("--capture-source-file-sha256", default="not_provided")
     args = parser.parse_args()
     root = args.root
     base = _load_log_dir(root / "base" / "logs")

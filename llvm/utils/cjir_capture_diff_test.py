@@ -4,11 +4,16 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from cjir_capture_run import sha256 as file_sha256
+from cjir_capture_diff import capture_sha256
 
 
 SCRIPT = Path(__file__).with_name("cjir_capture_diff.py")
@@ -123,6 +128,75 @@ class CaptureDiffTest(unittest.TestCase):
         self.assertEqual(summary["unbound"], "1")
         binding = (root / "analysis" / "BINDING.tsv").read_text()
         self.assertIn("src_complete_type:unrecoverable:bare_i8_carrier", binding)
+
+    def test_fault_before_after_trace_inputs_differ(self):
+        """The analyzer input hash must bind a real before/after mutation."""
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        for arm in ("base", "candidate"):
+            log_dir = root / arm / "logs"
+            log_dir.mkdir(parents=True)
+            (log_dir / "x.log").write_text(diagnostic(UNKNOWN) if arm == "base" else "")
+        before_dir = root / "trace-before"
+        after_dir = root / "trace-after"
+        before_dir.mkdir()
+        after_dir.mkdir()
+        before = trace()
+        after = json.loads(json.dumps(before))
+        after["bounds_result"]["in_bounds"] = False
+        (before_dir / "x.jsonl").write_text(json.dumps(before) + "\n")
+        (after_dir / "x.jsonl").write_text(json.dumps(after) + "\n")
+        before_sha = capture_sha256(root, before_dir)
+        after_sha = capture_sha256(root, after_dir)
+        self.assertNotEqual(before_sha, after_sha)
+        self.assertNotEqual(
+            hashlib.sha256((before_dir / "x.jsonl").read_bytes()).hexdigest(),
+            hashlib.sha256((after_dir / "x.jsonl").read_bytes()).hexdigest())
+
+    def test_release_manifest_binds_packaged_so_and_rejects_tamper(self):
+        """The runner accepts only the SO whose packaged hash is verified."""
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        release = root / "release"
+        (release / "bin").mkdir(parents=True)
+        (release / "lib").mkdir()
+        tool = release / "bin" / "cjir-capture"
+        tool.write_text("#!/usr/bin/env python3\nprint('CJIR_CAPTURE\\t{}')\n")
+        tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+        library = release / "lib" / "libLLVM-15.so"
+        library.write_bytes(b"packaged-product-library-v1")
+        manifest = release / "MANIFEST.sha256"
+        manifest.write_text(
+            f"{file_sha256(tool)}  bin/cjir-capture\n"
+            f"{file_sha256(library)}  lib/libLLVM-15.so\n"
+            "# source_commit: test\n# source_file_sha256: test\n")
+        capture = root / "input.ll"
+        capture.write_text("; input\n")
+        inventory = root / "inventory.tsv"
+        inventory.write_text(f"module\tcapture\nx\t{capture}\n")
+        output = root / "output"
+        command = [sys.executable, str(Path(__file__).with_name("cjir_capture_run.py")),
+                   "--inventory", str(inventory), "--output-dir", str(output),
+                   "--release", str(release)]
+        good = subprocess.run(command, text=True, capture_output=True,
+                              check=False)
+        self.assertEqual(good.returncode, 0, good.stderr)
+        row = (output / "trace-manifest.tsv").read_text().splitlines()[1].split("\t")
+        header = (output / "trace-manifest.tsv").read_text().splitlines()[0].split("\t")
+        values = dict(zip(header, row))
+        self.assertEqual(values["capture_product_library_sha256"], file_sha256(library))
+        self.assertEqual(values["capture_source_commit"], "test")
+        self.assertEqual(values["capture_source_file_sha256"], "test")
+        original = library.read_bytes()
+        library.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+        bad = subprocess.run(command, text=True, capture_output=True, check=False)
+        self.assertNotEqual(bad.returncode, 0)
+        library.write_bytes(original)
+        restored = subprocess.run(command, text=True, capture_output=True,
+                                  check=False)
+        self.assertEqual(restored.returncode, 0, restored.stderr)
 
 
 if __name__ == "__main__":
