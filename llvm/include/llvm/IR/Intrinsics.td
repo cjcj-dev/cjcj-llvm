@@ -466,6 +466,13 @@ def int_cj_gcread_static_struct     : Intrinsic<[],
                                                 [llvm_ptr_ty, llvm_ptr_ty, llvm_anyint_ty],
                                                 [IntrArgMemOnly, NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>,
                                                  NoAlias<ArgIndex<0>>, NoAlias<ArgIndex<1>>, WriteOnly<ArgIndex<0>>, ReadOnly<ArgIndex<1>>]>;
+// A concrete, whole-object AS0 copy whose AggType is recursively free of AS1
+// fields.  CJIRVerifier validates the metadata and exact size; Cangjie barrier
+// lowering deterministically restores a non-volatile llvm.memcpy.
+def int_cj_copy_no_ref_struct       : Intrinsic<[],
+                                                [llvm_ptr_ty, llvm_ptr_ty, llvm_anyint_ty],
+                                                [IntrArgMemOnly, NoCapture<ArgIndex<0>>, NoCapture<ArgIndex<1>>,
+                                                 WriteOnly<ArgIndex<0>>, ReadOnly<ArgIndex<1>>]>;
 def int_cj_array_copy_ref           : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_anyint_ty]>;
 def int_cj_array_copy_struct        : Intrinsic<[],

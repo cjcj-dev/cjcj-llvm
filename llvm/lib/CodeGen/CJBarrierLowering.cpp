@@ -1251,10 +1251,36 @@ static bool uncolorMemTransferOperands(Function &F) {
   return Changed;
 }
 
+// llvm.cj.copy.no.ref.struct has already had its concrete AggType and exact
+// size checked by CJIRVerifier.  It carries no reference slots and therefore
+// bypasses CJBarrierSplit and all runtime barrier entry points.  Restore the
+// original byte-copy operation immediately before ordinary CodeGen.
+static bool lowerNoReferenceStructCopies(Function &F) {
+  SmallVector<IntrinsicInst *, 4> Copies;
+  for (BasicBlock &BB : F)
+    for (Instruction &I : BB)
+      if (auto *II = dyn_cast<IntrinsicInst>(&I))
+        if (II->getIntrinsicID() == Intrinsic::cj_copy_no_ref_struct)
+          Copies.push_back(II);
+
+  for (IntrinsicInst *II : Copies) {
+    IRBuilder<> Builder(II);
+    CallInst *Copy = Builder.CreateMemCpy(
+        II->getArgOperand(0), II->getParamAlign(0), II->getArgOperand(1),
+        II->getParamAlign(1), II->getArgOperand(2), /*isVolatile=*/false);
+    Copy->copyMetadata(*II);
+    Copy->setMetadata(LLVMContext::MD_cj_agg, nullptr);
+    Copy->setDebugLoc(II->getDebugLoc());
+    II->eraseFromParent();
+  }
+  return !Copies.empty();
+}
+
 bool CJBarrierLowering::runOnFunction(Function &F) {
+  bool Changed = lowerNoReferenceStructCopies(F);
   // Quick exit for functions that do not use Cangjie GC.
   if (!F.hasCangjieGC())
-    return false;
+    return Changed;
 
   const Triple TT(F.getParent()->getTargetTriple());
   if (TT.isARM()){
@@ -1263,7 +1289,6 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
     EnableGCFastPath = false;
   }
 
-  bool Changed = false;
   SetVector<CallInst *> Barriers;
   SetVector<GCStatepointInst *> News;
   SetVector<GCStatepointInst *> Safepoints;

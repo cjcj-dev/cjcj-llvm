@@ -7,6 +7,7 @@ add_llvm_component_library(LLVMScalarOpts
   CJIRVerifier.cpp
   CJBarrierSplit.cpp
   CJBoxedValueBarrier.cpp
+  CJTypedCallReturnCopy.cpp
   CJDevirtualOpt.cpp
   CJRuntimeLowering.cpp
   CallSiteSplitting.cpp

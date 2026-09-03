@@ -232,6 +232,37 @@ public:
       }
       break;
     }
+    case Intrinsic::cj_copy_no_ref_struct: {
+      const MDNode *Metadata = Call.getMetadata("AggType");
+      Assert(Metadata,
+             "llvm.cj.copy.no.ref.struct has no AggType metadata.", &Call);
+      Assert(Metadata->getNumOperands() == 1,
+             "llvm.cj.copy.no.ref.struct AggType must name one struct.",
+             &Call);
+      auto *TypeName =
+          dyn_cast<MDString>(Metadata->getOperand(0).get());
+      Assert(TypeName,
+             "llvm.cj.copy.no.ref.struct AggType must be a string.", &Call);
+      auto *ST = StructType::getTypeByName(C, TypeName->getString());
+      Assert(ST && ST->isSized(),
+             "llvm.cj.copy.no.ref.struct AggType must resolve to a sized "
+             "concrete struct.",
+             &Call);
+      Assert(!containsGCPtrType(ST),
+             "llvm.cj.copy.no.ref.struct AggType contains an AS1 field.",
+             &Call);
+      auto *SizeArg = dyn_cast<ConstantInt>(Call.getArgOperand(2));
+      Assert(SizeArg && !SizeArg->isZero() &&
+                 SizeArg->getValue().getActiveBits() <= 64,
+             "llvm.cj.copy.no.ref.struct size must be a nonzero constant.",
+             &Call);
+      TypeSize StructSize = DL.getTypeAllocSize(ST);
+      Assert(!StructSize.isScalable() &&
+                 SizeArg->getZExtValue() == StructSize.getFixedSize(),
+             "llvm.cj.copy.no.ref.struct size must equal AggType alloc size.",
+             &Call);
+      break;
+    }
     case Intrinsic::cj_gcwrite_struct:
     case Intrinsic::cj_gcread_struct: {
       // The size should not be 0.

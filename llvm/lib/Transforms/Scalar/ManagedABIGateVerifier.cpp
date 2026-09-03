@@ -279,6 +279,7 @@ static bool isCangjiePrivateIntrinsic(Intrinsic::ID ID) {
   case Intrinsic::cj_gcread_struct:
   case Intrinsic::cj_gcread_static_ref:
   case Intrinsic::cj_gcread_static_struct:
+  case Intrinsic::cj_copy_no_ref_struct:
   case Intrinsic::cj_array_copy_ref:
   case Intrinsic::cj_array_copy_struct:
   case Intrinsic::cj_copy_struct_field:
