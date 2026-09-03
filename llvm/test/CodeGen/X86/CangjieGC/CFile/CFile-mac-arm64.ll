@@ -1,4 +1,5 @@
-; RUN: llc -mtriple=x86_64-apple-macosx --cangjie-pipeline -o - %s | FileCheck %s --check-prefixes=X86
+; REQUIRES: aarch64-registered-target
+; RUN: llc -mtriple=arm64-apple-darwin --cangjie-pipeline -o - %s | FileCheck %s --check-prefixes=ARM
 
 %Unit.Type = type { i8 }
 %record._ZN8std.core6StringE = type { %record._ZN8std.core5ArrayIhE, i64 }
@@ -17,8 +18,10 @@ declare token @llvm.cj.gc.statepoint(...)
 declare void @CJ_MCC_StackCheck()
 declare void @_ZN8std.core7printlnER_ZN8std.core6StringE(%Unit.Type* sret(%Unit.Type), i8*, %record._ZN8std.core6StringE*) local_unnamed_addr gc "cangjie"
 
-; X86: leaq    ".Lmethod_desc.default.__ZN7default6<main>Ev"(%rip), %r10
-; X86: pushq   %r10
+; ARM: adr     x9, Lfunc_begin0
+; ARM: adrp    x10, ".Lmethod_desc.default.__ZN7default6<main>Ev"@PAGE
+; ARM: add     x10, x10, ".Lmethod_desc.default.__ZN7default6<main>Ev"@PAGEOFF
+; ARM: stp     x10, x9, [x29, #-16]
 define i64 @"_ZN7default6<main>Ev"() gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 bb0:
   %token = call token (...) @llvm.cj.gc.statepoint(i64 4, i32 0, void ()* @CJ_MCC_StackCheck, i32 0, i32 0)

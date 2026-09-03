@@ -1,4 +1,5 @@
-; RUN: llc -mtriple=x86_64-apple-macosx --cangjie-pipeline -o - %s | FileCheck %s --check-prefixes=X86
+; REQUIRES: aarch64-registered-target
+; RUN: not not llc -mtriple=arm64-apple-darwin --cangjie-pipeline < %s -o /dev/null 2>&1 | FileCheck %s --check-prefixes=ARM
 
 %Unit.Type = type { i8 }
 %record._ZN8std.core6StringE = type { %record._ZN8std.core5ArrayIhE, i64 }
@@ -15,14 +16,17 @@
 
 declare token @llvm.cj.gc.statepoint(...)
 declare void @CJ_MCC_StackCheck()
+declare cangjiegccc void @MCC_SafepointStub() local_unnamed_addr
 declare void @_ZN8std.core7printlnER_ZN8std.core6StringE(%Unit.Type* sret(%Unit.Type), i8*, %record._ZN8std.core6StringE*) local_unnamed_addr gc "cangjie"
 
-; X86: leaq    ".Lmethod_desc.default.__ZN7default6<main>Ev"(%rip), %r10
-; X86: pushq   %r10
+; ARM: LLVM ERROR: There is not cangjie package id in module!
+; ARM: Aborted
+
 define i64 @"_ZN7default6<main>Ev"() gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 bb0:
   %token = call token (...) @llvm.cj.gc.statepoint(i64 4, i32 0, void ()* @CJ_MCC_StackCheck, i32 0, i32 0)
   %0 = alloca %Unit.Type, align 8
+  %token2 = call cangjiegccc token (...) @llvm.cj.gc.statepoint(i64 3, i32 0, void ()* @MCC_SafepointStub, i32 0, i32 0)
   %token4 = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, void (%Unit.Type*, i8*, %record._ZN8std.core6StringE*)* @_ZN8std.core7printlnER_ZN8std.core6StringE, i32 3, i32 0, %Unit.Type* sret(%Unit.Type) %0, i8* null, %record._ZN8std.core6StringE* bitcast ({ { i8 addrspace(1)*, i64, i64 }, i64 }* @"$const_cjstring.4RCxJdy1D-V" to %record._ZN8std.core6StringE*))
   ret i64 0
 }
@@ -31,6 +35,3 @@ define private i32 @"__cj_personality_v0$"(...) {
 entry:
   ret i32 0
 }
-
-!llvm.module.flags = !{!0}
-!0 = !{i32 2, !"Cangjie_PACKAGE_ID", !"default"}

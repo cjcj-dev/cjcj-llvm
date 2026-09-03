@@ -1,6 +1,4 @@
-; REQUIRES: aarch64-registered-target
 ; RUN: not not llc -mtriple=x86_64-apple-macosx --cangjie-pipeline < %s -o /dev/null 2>&1 | FileCheck %s --check-prefixes=X86
-; RUN: not not llc -mtriple=arm64-apple-darwin --cangjie-pipeline < %s -o /dev/null 2>&1 | FileCheck %s --check-prefixes=ARM
 
 %Unit.Type = type { i8 }
 %record._ZN8std.core6StringE = type { %record._ZN8std.core5ArrayIhE, i64 }
@@ -22,8 +20,6 @@ declare void @_ZN8std.core7printlnER_ZN8std.core6StringE(%Unit.Type* sret(%Unit.
 
 ; X86: LLVM ERROR: There is not cangjie package id in module!
 ; X86: Aborted
-; ARM: LLVM ERROR: There is not cangjie package id in module!
-; ARM: Aborted
 
 define i64 @"_ZN7default6<main>Ev"() gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 bb0:
