@@ -1060,6 +1060,10 @@ private:
   // failing condition was a safepoint-capable call between the store and the
   // reload.  Sticky within one memcpy/memmove evaluation; the memcpy case
   // clears it before classifying.  Used only to sharpen the diagnostic.
+  // After PromotePass runs immediately before this verifier in
+  // --cangjie-pipeline, load/store/dbg-only slots are already SSA Arguments,
+  // so this path is dead for those slots.  It remains for unpromotable
+  // allocas (bitcast/memcpy users) and for `-passes=cj-ir-verifier` alone.
   bool LastHeapRootRejectWasSafepointStale = false;
 
   bool isBarrieredHeapRefResult(Value *Base) {
