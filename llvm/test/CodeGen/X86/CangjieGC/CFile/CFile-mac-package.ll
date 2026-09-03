@@ -1,3 +1,4 @@
+; REQUIRES: aarch64-registered-target
 ; RUN: not not llc -mtriple=x86_64-apple-macosx --cangjie-pipeline < %s -o /dev/null 2>&1 | FileCheck %s --check-prefixes=X86
 ; RUN: not not llc -mtriple=arm64-apple-darwin --cangjie-pipeline < %s -o /dev/null 2>&1 | FileCheck %s --check-prefixes=ARM
 
