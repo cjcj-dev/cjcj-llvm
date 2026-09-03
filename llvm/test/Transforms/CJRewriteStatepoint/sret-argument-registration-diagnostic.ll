@@ -13,7 +13,20 @@ entry:
   ret void
 }
 
+define void @fill_pointer(i8 addrspace(1)** noalias sret(i8 addrspace(1)*) %result,
+                          i8 addrspace(1)* %input) gc "cangjie" {
+entry:
+  store i8 addrspace(1)* %input, i8 addrspace(1)** %result
+  ret void
+}
+
 ; DEFAULT: sret-arg-unregistered caller_array fill
+; DEFAULT-NOT: sret-arg-unregistered caller_registered
+; DEFAULT-NOT: sret-arg-unregistered caller_abi_source
+; DEFAULT-NOT: sret-arg-unregistered caller_sret_forward
+; DEFAULT-NOT: sret-arg-unregistered caller_pointer_alloca
+; DEFAULT-NOT: sret-arg-unregistered caller_pointer_abi_source
+; DEFAULT-NOT: sret-arg-unregistered caller_pointer_sret_forward
 ; DEFAULT-LABEL: define i8 addrspace(1)* @caller_array
 ; DEFAULT: call token (...) @llvm.cj.gc.statepoint{{.*}}@fill
 ; DEFAULT-NOT: "struct-live"
@@ -32,7 +45,6 @@ entry:
 }
 
 ; A whole entry-block struct alloca is registered by computeStructTypeLayouts.
-; DEFAULT-NOT: sret-arg-unregistered caller_registered
 ; DEFAULT-LABEL: define i8 addrspace(1)* @caller_registered
 ; DEFAULT: call token (...) @llvm.cj.gc.statepoint{{.*}}@fill{{.*}}[ "struct-live"(%S* %slot) ]
 define i8 addrspace(1)* @caller_registered(i8 addrspace(1)* %input) gc "cangjie" {
@@ -45,7 +57,6 @@ entry:
 }
 
 ; A noalias aggregate ABI source remains owned by its originating caller.
-; DEFAULT-NOT: sret-arg-unregistered caller_abi_source
 define void @caller_abi_source(%S* noalias %slot,
                                i8 addrspace(1)* %input) gc "cangjie" {
 entry:
@@ -54,10 +65,39 @@ entry:
 }
 
 ; An sret Argument can forward the caller-owned result slot.
-; DEFAULT-NOT: sret-arg-unregistered caller_sret_forward
 define void @caller_sret_forward(%S* noalias sret(%S) %slot,
                                  i8 addrspace(1)* %input) gc "cangjie" {
 entry:
   call void @fill(%S* sret(%S) %slot, i8 addrspace(1)* %input)
+  ret void
+}
+
+; A whole entry-block slot for a GC pointer participates in pointer liveness.
+define i8 addrspace(1)* @caller_pointer_alloca(
+    i8 addrspace(1)* %input) gc "cangjie" {
+entry:
+  %slot = alloca i8 addrspace(1)*, align 8
+  call void @fill_pointer(i8 addrspace(1)** sret(i8 addrspace(1)*) %slot,
+                          i8 addrspace(1)* %input)
+  %value = load i8 addrspace(1)*, i8 addrspace(1)** %slot
+  ret i8 addrspace(1)* %value
+}
+
+; A noalias ABI source can own a GC-pointer result slot.
+define void @caller_pointer_abi_source(i8 addrspace(1)** noalias %slot,
+                                       i8 addrspace(1)* %input) gc "cangjie" {
+entry:
+  call void @fill_pointer(i8 addrspace(1)** sret(i8 addrspace(1)*) %slot,
+                          i8 addrspace(1)* %input)
+  ret void
+}
+
+; A pointer-valued sret Argument can forward its caller-owned result slot.
+define void @caller_pointer_sret_forward(
+    i8 addrspace(1)** noalias sret(i8 addrspace(1)*) %slot,
+    i8 addrspace(1)* %input) gc "cangjie" {
+entry:
+  call void @fill_pointer(i8 addrspace(1)** sret(i8 addrspace(1)*) %slot,
+                          i8 addrspace(1)* %input)
   ret void
 }

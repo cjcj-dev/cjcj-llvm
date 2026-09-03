@@ -2983,15 +2983,17 @@ static void stripNonValidDataFromBody(Function &F) {
 /// point of this function is as an extension point for custom logic.
 static bool shouldRewriteStatepointsIn(Function &F) { return F.hasCangjieGC(); }
 
-// Match the owner surface used by computeStructTypeLayouts and the Cangjie
-// aggregate ABI rules in CJIRVerifier.  In particular, a zero-offset element
-// of an array alloca is not a registered root even when its address equals the
-// allocation address.
+// Decide whether the result slot is inside the statepoint registration
+// surface.  Aggregate slots are registered by computeStructTypeLayouts, while
+// a slot whose payload is itself a GC pointer participates in pointer
+// liveness.  In particular, array payloads and zero-offset array elements are
+// not whole registered slots even when their address equals an allocation.
 static bool isRegisteredSRetCallArgument(Value *Ptr, Type *SRetTy,
                                          const DataLayout &DL) {
   auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
   if (!PtrTy || PtrTy->getAddressSpace() != 0 || PtrTy->isOpaque() ||
-      !SRetTy || !isa<StructType>(SRetTy))
+      !SRetTy ||
+      (!isa<StructType>(SRetTy) && !isGCPointerType(SRetTy)))
     return false;
 
   APInt Offset(DL.getIndexSizeInBits(0), 0);
