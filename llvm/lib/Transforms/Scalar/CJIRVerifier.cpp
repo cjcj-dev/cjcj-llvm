@@ -16,8 +16,13 @@
 #include "llvm/Transforms/Scalar/CJIRVerifier.h"
 
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/IR/Dominators.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/CJIntrinsics.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -291,6 +296,7 @@ public:
     }
     case Intrinsic::memcpy:
     case Intrinsic::memmove: {
+      LastHeapRootRejectWasSafepointStale = false;
       Value *Dst = Call.getArgOperand(0);
       Value *Src = Call.getArgOperand(1);
       Value *SizeArg = Call.getArgOperand(2);
@@ -405,10 +411,17 @@ public:
       }
       if (DstPayload == ReferencePayloadKind::Unknown ||
           SrcPayload == ReferencePayloadKind::Unknown) {
-        checkFailed("Bare memcpy/memmove payload provenance is unknown; use "
-                    "cj_array_copy_ref, a typed helper, or supply typed "
-                    "provenance.",
-                    &Call);
+        if (LastHeapRootRejectWasSafepointStale)
+          checkFailed("Bare memcpy/memmove payload root is a spill-slot reload "
+                      "across a possible GC safepoint; the object may have "
+                      "been relocated.  Keep the SSA root or reload it with "
+                      "llvm.cj.gcread.ref.",
+                      &Call);
+        else
+          checkFailed("Bare memcpy/memmove payload provenance is unknown; use "
+                      "cj_array_copy_ref, a typed helper, or supply typed "
+                      "provenance.",
+                      &Call);
       }
       break;
     }
@@ -1043,7 +1056,137 @@ private:
            DstElementTy->isIntegerTy(8);
   }
 
+  // Set when the last heap-root rejection was a spill-slot reload whose only
+  // failing condition was a safepoint-capable call between the store and the
+  // reload.  Sticky within one memcpy/memmove evaluation; the memcpy case
+  // clears it before classifying.  Used only to sharpen the diagnostic.
+  bool LastHeapRootRejectWasSafepointStale = false;
+
+  bool isBarrieredHeapRefResult(Value *Base) {
+    auto *II = dyn_cast<IntrinsicInst>(Base);
+    if (!II || II->getType() != Type::getInt8PtrTy(C, 1))
+      return false;
+    switch (II->getIntrinsicID()) {
+    case Intrinsic::cj_gcread_ref:
+    case Intrinsic::cj_gcread_static_ref:
+    case Intrinsic::cj_gcread_weakref:
+      return true;
+    default:
+      return false;
+    }
+  }
+
   bool isCanonicalHeapBaseArgument(Value *Base) {
+    SmallPtrSet<Value *, 8> Visited;
+    return isCanonicalHeapBaseArgumentImpl(Base, Visited);
+  }
+
+  bool isCanonicalHeapBaseArgumentImpl(Value *Base,
+                                       SmallPtrSetImpl<Value *> &Visited) {
+    if (!Base || !Visited.insert(Base).second)
+      return false;
+
+    if (isBarrieredHeapRefResult(Base))
+      return true;
+
+    if (auto *LI = dyn_cast<LoadInst>(Base)) {
+      // A non-volatile reload of an AS1 pointer from an AS0 static spill slot
+      // is bit-identical to a canonical root only when the slot's stored value
+      // provably *is* such a root and cannot have gone stale.  A relocating GC
+      // (zBarrier.inline.hpp load barrier) rewrites SSA roots at safepoints,
+      // but not memory slots, so a safepoint-capable call between the store
+      // and the reload would leave the reloaded pointer at its pre-move
+      // address.  Require: the slot holds exactly i8 addrspace(1)*, every user
+      // is a load/store/dbg/lifetime, every store's value is itself a
+      // canonical root, every store dominates this load, and no
+      // safepoint-capable call lies on any store-to-load path.  Bare loads
+      // from heap slots (AS1 pointer operand) stay rejected.
+      if (LI->isVolatile() || LI->getPointerAddressSpace() != 0)
+        return false;
+      Value *Ptr = LI->getPointerOperand()->stripPointerCasts();
+      auto *AI = dyn_cast<AllocaInst>(Ptr);
+      if (!AI || !AI->isStaticAlloca() ||
+          AI->getAllocatedType() != Type::getInt8PtrTy(C, 1))
+        return false;
+      SmallVector<StoreInst *, 4> Stores;
+      for (User *U : AI->users()) {
+        if (isa<LoadInst>(U) || isa<DbgInfoIntrinsic>(U))
+          continue;
+        if (auto *SI = dyn_cast<StoreInst>(U)) {
+          if (SI->isVolatile() ||
+              SI->getPointerOperand()->stripPointerCasts() != AI)
+            return false;
+          if (!isCanonicalHeapBaseArgumentImpl(SI->getValueOperand(), Visited))
+            return false;
+          Stores.push_back(SI);
+          continue;
+        }
+        if (auto *II = dyn_cast<IntrinsicInst>(U)) {
+          switch (II->getIntrinsicID()) {
+          case Intrinsic::lifetime_start:
+          case Intrinsic::lifetime_end:
+          case Intrinsic::dbg_declare:
+          case Intrinsic::dbg_value:
+          case Intrinsic::dbg_addr:
+            continue;
+          default:
+            return false;
+          }
+        }
+        return false;
+      }
+      if (Stores.empty())
+        return false;
+
+      DominatorTree DT(*LI->getFunction());
+      for (StoreInst *SI : Stores)
+        if (!DT.dominates(SI, LI))
+          return false;
+      // Blocks from which the load's block is reachable (the load's own
+      // block included); a call outside this set cannot intervene.
+      SmallPtrSet<BasicBlock *, 32> MayReachLoad;
+      SmallVector<BasicBlock *, 16> Worklist;
+      Worklist.push_back(LI->getParent());
+      while (!Worklist.empty()) {
+        BasicBlock *BB = Worklist.pop_back_val();
+        if (!MayReachLoad.insert(BB).second)
+          continue;
+        for (BasicBlock *Pred : predecessors(BB))
+          Worklist.push_back(Pred);
+      }
+      for (BasicBlock &BB : *LI->getFunction()) {
+        if (!MayReachLoad.contains(&BB))
+          continue;
+        for (Instruction &I : BB) {
+          auto *CB = dyn_cast<CallBase>(&I);
+          if (!CB)
+            continue;
+          if (&BB == LI->getParent() && LI->comesBefore(&I))
+            continue;
+          // Intrinsics that cannot be GC safepoints (dbg/lifetime are
+          // non-executable; the mem intrinsics expand to plain memory ops)
+          // cannot relocate the stored root.
+          if (auto *II = dyn_cast<IntrinsicInst>(CB)) {
+            if (isa<DbgInfoIntrinsic>(II) || isa<MemIntrinsic>(II))
+              continue;
+            switch (II->getIntrinsicID()) {
+            case Intrinsic::lifetime_start:
+            case Intrinsic::lifetime_end:
+              continue;
+            default:
+              break;
+            }
+          }
+          if (llvm::any_of(Stores,
+                           [&](StoreInst *SI) { return DT.dominates(SI, CB); })) {
+            LastHeapRootRejectWasSafepointStale = true;
+            return false;
+          }
+        }
+      }
+      return true;
+    }
+
     auto *BaseArg = dyn_cast<Argument>(Base);
     if (!BaseArg || BaseArg->getType() != Type::getInt8PtrTy(C, 1))
       return false;
