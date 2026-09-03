@@ -95,6 +95,11 @@ static cl::opt<unsigned>
 static cl::opt<bool> RematDerivedAtUses("remat-derived-at-uses", cl::Hidden,
                                         cl::init(true));
 
+static cl::opt<bool> RejectUnregisteredSRetArgument(
+    "cj-spp-reject-unregistered-sret-arg", cl::Hidden, cl::init(false),
+    cl::desc("Reject Cangjie calls whose reference-bearing sret argument is "
+             "not a registered root"));
+
 static cl::opt<unsigned> StructContainGCFieldThreshold(
     "large-struct-size-threshold", cl::Hidden, cl::init(1024),
     cl::desc("In the struct live analysis, if the gcfield of the struct "
@@ -2978,6 +2983,75 @@ static void stripNonValidDataFromBody(Function &F) {
 /// point of this function is as an extension point for custom logic.
 static bool shouldRewriteStatepointsIn(Function &F) { return F.hasCangjieGC(); }
 
+// Match the owner surface used by computeStructTypeLayouts and the Cangjie
+// aggregate ABI rules in CJIRVerifier.  In particular, a zero-offset element
+// of an array alloca is not a registered root even when its address equals the
+// allocation address.
+static bool isRegisteredSRetCallArgument(Value *Ptr, Type *SRetTy,
+                                         const DataLayout &DL) {
+  auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
+  if (!PtrTy || PtrTy->getAddressSpace() != 0 || PtrTy->isOpaque() ||
+      !SRetTy || !isa<StructType>(SRetTy))
+    return false;
+
+  APInt Offset(DL.getIndexSizeInBits(0), 0);
+  Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
+  if (!Offset.isZero())
+    return false;
+
+  if (auto *AI = dyn_cast<AllocaInst>(Base))
+    return AI->getParent() == &AI->getFunction()->getEntryBlock() &&
+           AI->isStaticAlloca() && !AI->isArrayAllocation() &&
+           AI->getAllocatedType() == SRetTy;
+
+  auto *Arg = dyn_cast<Argument>(Base);
+  if (!Arg || !Arg->hasNoAliasAttr() || Arg->hasByValAttr())
+    return false;
+
+  const Function *F = Arg->getParent();
+  if (!F || !F->hasCangjieGC() || F->hasFnAttribute("cfunc") ||
+      F->hasFnAttribute("c2cj") || F->hasFnAttribute("cj2c") ||
+      F->hasFnAttribute("pkg_c_wrapper") || F->hasFnAttribute("cjstub"))
+    return false;
+
+  auto *ArgPtrTy = dyn_cast<PointerType>(Arg->getType());
+  return ArgPtrTy && ArgPtrTy->getAddressSpace() == 0 &&
+         !ArgPtrTy->isOpaque() &&
+         ArgPtrTy->getNonOpaquePointerElementType() == SRetTy;
+}
+
+static bool calleeHasNoAliasSRet(const CallBase &Call, unsigned ArgNo) {
+  if (!Call.paramHasAttr(ArgNo, Attribute::StructRet))
+    return false;
+  if (Call.paramHasAttr(ArgNo, Attribute::NoAlias))
+    return true;
+  const Function *Callee = Call.getCalledFunction();
+  return Callee && Callee->hasParamAttribute(ArgNo, Attribute::NoAlias);
+}
+
+static void diagnoseUnregisteredSRetArguments(Function &F) {
+  const DataLayout &DL = F.getParent()->getDataLayout();
+  for (Instruction &I : instructions(F)) {
+    auto *Call = dyn_cast<CallBase>(&I);
+    if (!Call)
+      continue;
+    for (unsigned ArgNo = 0; ArgNo < Call->arg_size(); ++ArgNo) {
+      if (!calleeHasNoAliasSRet(*Call, ArgNo))
+        continue;
+      Type *SRetTy = Call->getParamStructRetType(ArgNo);
+      if (!SRetTy || !containsGCPtrType(SRetTy) ||
+          isRegisteredSRetCallArgument(Call->getArgOperand(ArgNo), SRetTy, DL))
+        continue;
+
+      const Function *Callee = Call->getCalledFunction();
+      errs() << "sret-arg-unregistered " << F.getName() << ' '
+             << (Callee ? Callee->getName() : StringRef("<indirect>")) << '\n';
+      if (RejectUnregisteredSRetArgument)
+        report_fatal_error("Cangjie sret argument is not a registered root");
+    }
+  }
+}
+
 // Rewrite CJ_MCC_ThrowException with empty live set.
 static bool rewriteCJThrowException(Module &M) {
   if (Triple(M.getTargetTriple()).isOSWindows())
@@ -3065,6 +3139,8 @@ bool CJRewriteStatepoint::runOnFunction(Function &F, DominatorTree &DT,
   bool MadeChange = removeUnreachableBlocks(F, &DTU);
   // Flush the Dominator Tree.
   DTU.getDomTree();
+
+  diagnoseUnregisteredSRetArguments(F);
 
   // record whether the func has actual callsite.
   bool HasCallSite = false;
