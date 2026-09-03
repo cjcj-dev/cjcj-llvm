@@ -468,6 +468,76 @@ public:
     }
   }
 
+  bool isDebugOnlySlotUse(const Value *Slot, const AllocaInst *AI,
+                          SmallPtrSetImpl<const Value *> &Visited) {
+    if (!Visited.insert(Slot).second)
+      return true;
+
+    for (const User *U : Slot->users()) {
+      if (isa<DbgInfoIntrinsic>(U))
+        continue;
+
+      if (auto *II = dyn_cast<IntrinsicInst>(U)) {
+        if (II->getIntrinsicID() == Intrinsic::lifetime_start ||
+            II->getIntrinsicID() == Intrinsic::lifetime_end)
+          continue;
+      }
+
+      if (auto *BC = dyn_cast<BitCastInst>(U)) {
+        if (BC->stripPointerCasts() == AI &&
+            isDebugOnlySlotUse(BC, AI, Visited))
+          continue;
+        return false;
+      }
+
+      if (auto *SI = dyn_cast<StoreInst>(U)) {
+        if (!SI->isVolatile() &&
+            SI->getPointerOperand()->stripPointerCasts() == AI)
+          continue;
+        return false;
+      }
+
+      if (auto *LI = dyn_cast<LoadInst>(U)) {
+        if (LI->isVolatile() ||
+            LI->getPointerOperand()->stripPointerCasts() != AI)
+          return false;
+        if (llvm::all_of(LI->users(),
+                         [](const User *LoadUser) {
+                           return isa<DbgInfoIntrinsic>(LoadUser);
+                         }))
+          continue;
+        return false;
+      }
+
+      return false;
+    }
+    return true;
+  }
+
+  bool isDebugOnlyAS1ToAS0Cast(const AddrSpaceCastInst &I) {
+    if (I.getSrcAddressSpace() != 1 || I.getDestAddressSpace() != 0)
+      return false;
+
+    for (const User *U : I.users()) {
+      if (isa<DbgInfoIntrinsic>(U))
+        continue;
+
+      auto *SI = dyn_cast<StoreInst>(U);
+      if (!SI || SI->isVolatile() || SI->getValueOperand() != &I)
+        return false;
+
+      auto *AI = dyn_cast<AllocaInst>(
+          SI->getPointerOperand()->stripPointerCasts());
+      if (!AI || !AI->isStaticAlloca())
+        return false;
+
+      SmallPtrSet<const Value *, 8> Visited;
+      if (!isDebugOnlySlotUse(AI, AI, Visited))
+        return false;
+    }
+    return true;
+  }
+
   void visitAddrSpaceCastInst(AddrSpaceCastInst &I) {
     // The cj2c and c2cj function does not need to be verified, because
     // Frontend checking ensures that the functions does not transfer gcptr.
@@ -486,6 +556,12 @@ public:
     if (auto *II = dyn_cast<IntrinsicInst>(I.getOperand(0)))
       if (II->getIntrinsicID() == Intrinsic::cj_blackhole)
         return;
+
+    // Debug information is not part of the GC access path.  An AS1 pointer
+    // may be represented as AS0 only when every use remains in debug
+    // intrinsics, directly or through a non-escaping stack debug slot.
+    if (isDebugOnlyAS1ToAS0Cast(I))
+      return;
 
     for (const User *U : I.users()) {
       Assert(isa<StoreInst>(U) || isa<CallBase>(U),
