@@ -74,6 +74,31 @@ static bool isAllowedElementSource(Value *Source) {
          Alloca->getParent() == &Alloca->getFunction()->getEntryBlock();
 }
 
+// Source addressing may be wrapped in one or more bitcasts and GEPs.  The
+// barrier may only consume a source whose underlying storage is supplied by a
+// function argument or an entry-block alloca; a load or another instruction
+// does not establish that provenance.
+static bool hasAllowedSourceRoot(Value *Source) {
+  while (true) {
+    if (auto *Cast = dyn_cast<BitCastInst>(Source)) {
+      Source = Cast->getOperand(0);
+      continue;
+    }
+    if (auto *GEP = dyn_cast<GetElementPtrInst>(Source)) {
+      Source = GEP->getPointerOperand();
+      continue;
+    }
+    break;
+  }
+
+  if (isa<Argument>(Source))
+    return true;
+
+  auto *Alloca = dyn_cast<AllocaInst>(Source);
+  return Alloca &&
+         Alloca->getParent() == &Alloca->getFunction()->getEntryBlock();
+}
+
 static Optional<BoxedPayloadCopy> matchBoxedPayloadCopy(Instruction &I) {
   auto *Copy = dyn_cast<MemCpyInst>(&I);
   if (!Copy || Copy->isVolatile() || Copy->getDestAddressSpace() != 1 ||
@@ -84,6 +109,8 @@ static Optional<BoxedPayloadCopy> matchBoxedPayloadCopy(Instruction &I) {
 
   Value *Source = Copy->getRawSource();
   if (isa<GetElementPtrInst>(Source) && !isAllowedElementSource(Source))
+    return None;
+  if (!hasAllowedSourceRoot(Source))
     return None;
 
   auto *PayloadCast = dyn_cast<BitCastInst>(Copy->getRawDest());
