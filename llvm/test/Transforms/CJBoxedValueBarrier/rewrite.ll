@@ -41,16 +41,15 @@ entry:
   ret i8 addrspace(1)* %object
 }
 
-; alloca.generic is not excluded because it is assumed to be a stack object;
-; it is excluded because this pass only repairs the malloc.object frontend
-; shape.  Existing verifier acceptance relies on statically reference-free
-; payload layout.
-; CHECK-LABEL: define i8 addrspace(1)* @keep_alloca_generic(
+; The same closed payload sequence produced by alloca.generic is rewritten.
+; Runtime lowering sends dynamically sized or escaped alloca.generic objects
+; to CJ_MCC_NewObject, so the intrinsic name does not prove stack storage.
+; CHECK-LABEL: define i8 addrspace(1)* @rewrite_alloca_generic(
 ; CHECK: %object = call i8 addrspace(1)* @llvm.cj.alloca.generic
-; CHECK: call void @llvm.memcpy.p1i8.p0i8.i32
-; CHECK-NOT: call void @llvm.cj.gcwrite.generic.payload
-define i8 addrspace(1)* @keep_alloca_generic(i8* %type.info, i8* %source,
-                                              i32 %size) gc "cangjie" {
+; CHECK: call void @llvm.cj.gcwrite.generic.payload(i8 addrspace(1)* %object, i8* %source, i32 %size)
+; CHECK-NOT: llvm.memcpy
+define i8 addrspace(1)* @rewrite_alloca_generic(i8* %type.info, i8* %source,
+                                                 i32 %size) gc "cangjie" {
 entry:
   %object = call i8 addrspace(1)* @llvm.cj.alloca.generic(i8* %type.info,
                                                           i32 %size)

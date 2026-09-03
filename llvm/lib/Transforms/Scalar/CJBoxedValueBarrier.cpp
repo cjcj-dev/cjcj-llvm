@@ -12,6 +12,7 @@
 // The frontend boxes it using this exact, local sequence:
 //
 //   %object = call @llvm.cj.malloc.object(%typeInfo, %size)
+//          or call @llvm.cj.alloca.generic(%typeInfo, %size)
 //   %object.fields = bitcast %object to i8* addrspace(1)*
 //   %payload.slot = getelementptr i8*, i8* addrspace(1)* %object.fields, i32 1
 //   %payload = bitcast i8* addrspace(1)* %payload.slot to i8 addrspace(1)*
@@ -64,8 +65,11 @@ static Optional<BoxedPayloadCopy> matchBoxedPayloadCopy(Instruction &I) {
   auto *Allocation = ObjectCast
                          ? dyn_cast<CallInst>(ObjectCast->getOperand(0))
                          : nullptr;
-  if (!PayloadCast || !PayloadGEP || !ObjectCast || !Allocation ||
-      Allocation->getIntrinsicID() != Intrinsic::cj_malloc_object)
+  if (!PayloadCast || !PayloadGEP || !ObjectCast || !Allocation)
+    return None;
+  Intrinsic::ID AllocationID = Allocation->getIntrinsicID();
+  if (AllocationID != Intrinsic::cj_malloc_object &&
+      AllocationID != Intrinsic::cj_alloca_generic)
     return None;
 
   // The frontend's boxed payload is field 1 of an i8* field array.  This is an
