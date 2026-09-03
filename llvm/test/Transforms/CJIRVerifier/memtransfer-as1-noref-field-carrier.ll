@@ -1,13 +1,17 @@
 ; RUN: split-file %s %t
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-gcread-position.ll -S | FileCheck %s --check-prefix=ALLOW
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-as1-field.ll -disable-output 2>&1 | FileCheck %s --check-prefix=HASREF
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-i8-payload.ll -disable-output 2>&1 | FileCheck %s --check-prefix=I8PAY
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-size-mismatch.ll -disable-output 2>&1 | FileCheck %s --check-prefix=SIZE
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-non-entry-alloca.ll -disable-output 2>&1 | FileCheck %s --check-prefix=DST
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-as1-field.ll -disable-output 2>&1 | FileCheck %s --check-prefix=HASREF
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-i8-payload.ll -disable-output 2>&1 | FileCheck %s --check-prefix=I8PAY
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-array-i8.ll -disable-output 2>&1 | FileCheck %s --check-prefix=ARRI8
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-nested-array-i8.ll -disable-output 2>&1 | FileCheck %s --check-prefix=NESTI8
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-size-mismatch.ll -disable-output 2>&1 | FileCheck %s --check-prefix=SIZE
+; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-non-entry-alloca.ll -disable-output 2>&1 | FileCheck %s --check-prefix=DST
 
 ; ALLOW: call void @llvm.memcpy.p0i8.p1i8.i64
 ; HASREF: Bare memcpy/memmove of reference payload
 ; I8PAY: Bare memcpy/memmove payload provenance is unknown
+; ARRI8: Bare memcpy/memmove payload provenance is unknown
+; NESTI8: Bare memcpy/memmove payload provenance is unknown
 ; SIZE: Bare memcpy/memmove payload provenance is unknown
 ; DST: Bare memcpy/memmove payload provenance is unknown
 
@@ -60,6 +64,38 @@ entry:
   ret void
 }
 
+declare void @llvm.memcpy.p0i8.p1i8.i64(i8*, i8 addrspace(1)*, i64, i1)
+
+;--- reject-array-i8.ll
+define void @reject_array_i8_payload() gc "cangjie" {
+entry:
+  %obj = call i8 addrspace(1)* @llvm_cj_gcread_ref_sim()
+  %typed = bitcast i8 addrspace(1)* %obj to [8 x i8] addrspace(1)*
+  %src = bitcast [8 x i8] addrspace(1)* %typed to i8 addrspace(1)*
+  %dst = alloca [8 x i8], align 1
+  %dst.b = bitcast [8 x i8]* %dst to i8*
+  call void @llvm.memcpy.p0i8.p1i8.i64(i8* %dst.b, i8 addrspace(1)* %src, i64 8, i1 false)
+  ret void
+}
+
+declare i8 addrspace(1)* @llvm_cj_gcread_ref_sim()
+declare void @llvm.memcpy.p0i8.p1i8.i64(i8*, i8 addrspace(1)*, i64, i1)
+
+;--- reject-nested-array-i8.ll
+%WrapI8Arr = type { i64, [4 x i8] }
+
+define void @reject_nested_array_i8() gc "cangjie" {
+entry:
+  %obj = call i8 addrspace(1)* @llvm_cj_gcread_ref_sim()
+  %typed = bitcast i8 addrspace(1)* %obj to %WrapI8Arr addrspace(1)*
+  %src = bitcast %WrapI8Arr addrspace(1)* %typed to i8 addrspace(1)*
+  %dst = alloca %WrapI8Arr, align 8
+  %dst.b = bitcast %WrapI8Arr* %dst to i8*
+  call void @llvm.memcpy.p0i8.p1i8.i64(i8* %dst.b, i8 addrspace(1)* %src, i64 16, i1 false)
+  ret void
+}
+
+declare i8 addrspace(1)* @llvm_cj_gcread_ref_sim()
 declare void @llvm.memcpy.p0i8.p1i8.i64(i8*, i8 addrspace(1)*, i64, i1)
 
 ;--- reject-size-mismatch.ll

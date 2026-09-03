@@ -1257,13 +1257,38 @@ private:
            BaseTy->getNonOpaquePointerElementType()->isIntegerTy(8);
   }
 
+  // Byte arrays have no static field types; they may be erased managed
+  // payload and cannot be admitted from layout alone.  A lone i8 field in
+  // a multi-field record is a typed UInt8 slot, not this case.
+  bool containsErasedI8Array(Type *T) {
+    if (!T)
+      return false;
+    if (auto *AT = dyn_cast<ArrayType>(T)) {
+      Type *Elt = AT->getElementType();
+      if (Elt->isIntegerTy(8))
+        return true;
+      return containsErasedI8Array(Elt);
+    }
+    if (auto *ST = dyn_cast<StructType>(T)) {
+      if (ST->isOpaque())
+        return false;
+      for (Type *Elt : ST->elements()) {
+        if (containsErasedI8Array(Elt))
+          return true;
+      }
+    }
+    if (auto *VT = dyn_cast<VectorType>(T))
+      return containsErasedI8Array(VT->getElementType());
+    return false;
+  }
+
   // Field-carrier admission for AS1→AS0 memcpy of a complete LLVM layout
   // that recursively contains no addrspace(1) pointer.  Managed-reference
   // slots are always i8 addrspace(1)* in CodeGen, so a typed pointee with
   // !containsGCPtrType has no heap-ref slots to heal.  Independent of
   // isNoReferenceMemTransfer: that rule needs a declaration root; this one
   // anchors on the memcpy source bitcast pointee.  Erased i8 / {i8} /
-  // opaque / bare i8 addrspace(1)* carriers are rejected.
+  // opaque / [N x i8] / { [N x i8] } carriers are rejected.
   bool isNoAS1FieldCarrierMemTransfer(const MemTransferInst &Copy) {
     if (Copy.isVolatile())
       return false;
@@ -1314,6 +1339,8 @@ private:
       if (ST->getNumElements() == 1 && ST->getElementType(0)->isIntegerTy(8))
         return false;
     }
+    if (containsErasedI8Array(TY))
+      return false;
     if (TY != AllocTy)
       return false;
     TypeSize TYSize = DL.getTypeAllocSize(TY);
