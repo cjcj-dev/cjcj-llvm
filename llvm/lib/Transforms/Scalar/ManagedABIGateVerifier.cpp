@@ -344,6 +344,7 @@ static bool isCangjiePrivateIntrinsic(Intrinsic::ID ID) {
   case Intrinsic::cj_malloc_array_generic:
   case Intrinsic::cj_array_copy_generic:
   case Intrinsic::cj_gcwrite_generic_payload:
+  case Intrinsic::cj_gcread_generic_payload:
   case Intrinsic::cj_gc_statepoint:
   case Intrinsic::cj_gc_result:
   case Intrinsic::cj_gc_relocate:

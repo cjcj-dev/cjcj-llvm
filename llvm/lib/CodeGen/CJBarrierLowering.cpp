@@ -77,7 +77,8 @@ const static StdMap<unsigned, StringRef> IntrinsicMap{
     {Intrinsic::cj_gcwrite_generic, "CJ_MCC_WriteGeneric"},
     {Intrinsic::cj_gcread_generic, "CJ_MCC_ReadGeneric"},
     {Intrinsic::cj_array_copy_generic, "CJ_MCC_ArrayCopyGeneric"},
-    {Intrinsic::cj_gcwrite_generic_payload, "CJ_MCC_WriteGenericPayload"}};
+    {Intrinsic::cj_gcwrite_generic_payload, "CJ_MCC_WriteGenericPayload"},
+    {Intrinsic::cj_gcread_generic_payload, "CJ_MCC_ReadGenericPayload"}};
 
 struct BBInfo {
   // BB last used barrier after safepoint
@@ -1075,6 +1076,7 @@ bool CJBarrierLowering::isCJBarrier(Instruction *I) {
   case Intrinsic::cj_gcwrite_generic:
   case Intrinsic::cj_gcread_generic:
   case Intrinsic::cj_gcwrite_generic_payload:
+  case Intrinsic::cj_gcread_generic_payload:
     return true;
   }
 }

@@ -274,6 +274,21 @@ public:
       }
       break;
     }
+    case Intrinsic::cj_gcread_generic_payload: {
+      Assert(Call.arg_size() == 3,
+             "llvm.cj.gcread.generic.payload expects dst, obj, size.", &Call);
+      auto *DstTy = dyn_cast<PointerType>(Call.getArgOperand(0)->getType());
+      auto *ObjTy = dyn_cast<PointerType>(Call.getArgOperand(1)->getType());
+      Assert(DstTy && DstTy->getAddressSpace() == 0,
+             "llvm.cj.gcread.generic.payload dst must be a native pointer.",
+             &Call);
+      Assert(ObjTy && isGCPointerType(ObjTy),
+             "llvm.cj.gcread.generic.payload obj must be a managed pointer.",
+             &Call);
+      Assert(Call.getArgOperand(2)->getType()->isIntegerTy(),
+             "llvm.cj.gcread.generic.payload size must be an integer.", &Call);
+      break;
+    }
     case Intrinsic::memcpy:
     case Intrinsic::memmove: {
       Value *Dst = Call.getArgOperand(0);

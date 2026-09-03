@@ -643,6 +643,11 @@ def int_cj_array_copy_generic       : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptr_ty, llvm_anyint_ty]>;
 def int_cj_gcwrite_generic_payload  : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_ptr_ty, llvm_i32_ty]>;
+def int_cj_gcread_generic_payload   : Intrinsic<[],
+                                                [llvm_ptr_ty, llvm_gcptr_ty, llvm_i32_ty],
+                                                [IntrArgMemOnly, IntrWillReturn,
+                                                 NoCapture<ArgIndex<0>>, NoAlias<ArgIndex<0>>,
+                                                 NoCapture<ArgIndex<1>>, ReadOnly<ArgIndex<1>>]>;
 
 //===------------------- ObjC ARC runtime Intrinsics --------------------===//
 //
