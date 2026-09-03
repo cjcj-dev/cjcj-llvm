@@ -295,6 +295,9 @@ public:
           break;
       if (isNoReferenceMemTransfer(Dst, Src, SizeArg))
         break;
+      if (auto *Copy = dyn_cast<MemTransferInst>(&Call))
+        if (isNoAS1FieldCarrierMemTransfer(*Copy))
+          break;
       Type *DstCompleteTy = getCompleteTypedNonHeapObjectType(Dst, SizeArg);
       Type *SrcCompleteTy = getCompleteTypedNonHeapObjectType(Src, SizeArg);
       // Both sides independently prove a complete typed non-heap object copy.
@@ -1252,6 +1255,78 @@ private:
     auto *BaseTy = dyn_cast<PointerType>(Arg->getType());
     return BaseTy && BaseTy->getAddressSpace() == 0 && !BaseTy->isOpaque() &&
            BaseTy->getNonOpaquePointerElementType()->isIntegerTy(8);
+  }
+
+  // Field-carrier admission for AS1→AS0 memcpy of a complete LLVM layout
+  // that recursively contains no addrspace(1) pointer.  Managed-reference
+  // slots are always i8 addrspace(1)* in CodeGen, so a typed pointee with
+  // !containsGCPtrType has no heap-ref slots to heal.  Independent of
+  // isNoReferenceMemTransfer: that rule needs a declaration root; this one
+  // anchors on the memcpy source bitcast pointee.  Erased i8 / {i8} /
+  // opaque / bare i8 addrspace(1)* carriers are rejected.
+  bool isNoAS1FieldCarrierMemTransfer(const MemTransferInst &Copy) {
+    if (Copy.isVolatile())
+      return false;
+    Value *Dst = Copy.getRawDest();
+    Value *Src = Copy.getRawSource();
+    auto *CopySize = dyn_cast<ConstantInt>(Copy.getLength());
+    if (!CopySize || CopySize->isZero() ||
+        CopySize->getValue().getActiveBits() > 64)
+      return false;
+    auto *DstPtrTy = dyn_cast<PointerType>(Dst->getType());
+    auto *SrcPtrTy = dyn_cast<PointerType>(Src->getType());
+    if (!DstPtrTy || !SrcPtrTy || DstPtrTy->getAddressSpace() != 0 ||
+        SrcPtrTy->getAddressSpace() != 1)
+      return false;
+
+    APInt Offset(DL.getIndexSizeInBits(0), 0);
+    Value *DstBase = Dst->stripAndAccumulateConstantOffsets(DL, Offset, true);
+    if (!Offset.isZero())
+      return false;
+    auto *AI = dyn_cast<AllocaInst>(DstBase);
+    if (!AI || !AI->isStaticAlloca())
+      return false;
+    Type *AllocTy = AI->getAllocatedType();
+    if (!AllocTy->isSized() || !AllocTy->isFirstClassType())
+      return false;
+    TypeSize AllocSize = DL.getTypeAllocSize(AllocTy);
+    if (AllocSize.isScalable() ||
+        AllocSize.getFixedSize() != CopySize->getZExtValue())
+      return false;
+
+    auto *SrcCast = dyn_cast<BitCastOperator>(Src);
+    if (!SrcCast)
+      return false;
+    auto *CastSrcPtr = dyn_cast<PointerType>(SrcCast->getSrcTy());
+    auto *CastDstPtr = dyn_cast<PointerType>(SrcCast->getDestTy());
+    if (!CastSrcPtr || !CastDstPtr || CastSrcPtr->isOpaque() ||
+        CastDstPtr->isOpaque() || CastSrcPtr->getAddressSpace() != 1 ||
+        CastDstPtr->getAddressSpace() != 1)
+      return false;
+    if (!CastDstPtr->getNonOpaquePointerElementType()->isIntegerTy(8))
+      return false;
+    Type *TY = CastSrcPtr->getNonOpaquePointerElementType();
+    if (!TY || !TY->isFirstClassType() || !TY->isSized() || TY->isIntegerTy(8))
+      return false;
+    if (auto *ST = dyn_cast<StructType>(TY)) {
+      if (ST->isOpaque())
+        return false;
+      if (ST->getNumElements() == 1 && ST->getElementType(0)->isIntegerTy(8))
+        return false;
+    }
+    if (TY != AllocTy)
+      return false;
+    TypeSize TYSize = DL.getTypeAllocSize(TY);
+    if (TYSize.isScalable() ||
+        TYSize.getFixedSize() != CopySize->getZExtValue())
+      return false;
+    if (containsGCPtrType(TY) || containsGCPtrType(AllocTy))
+      return false;
+    Value *TypedPtr = SrcCast->getOperand(0);
+    if (isa<PHINode>(TypedPtr) || isa<SelectInst>(TypedPtr) ||
+        isa<IntToPtrInst>(TypedPtr))
+      return false;
+    return true;
   }
 
   bool isNoReferenceMemTransfer(Value *Dst, Value *Src, Value *SizeValue) {
