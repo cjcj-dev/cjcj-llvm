@@ -10,6 +10,7 @@ add_llvm_component_library(LLVMScalarOpts
   CJTypedCallReturnCopy.cpp
   CJDevirtualOpt.cpp
   CJRuntimeLowering.cpp
+  CJTypedReadHelper.cpp
   CallSiteSplitting.cpp
   ConstantHoisting.cpp
   ConstraintElimination.cpp
