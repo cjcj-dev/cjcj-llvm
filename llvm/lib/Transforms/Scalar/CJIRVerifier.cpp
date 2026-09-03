@@ -32,6 +32,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/CJFillMetadata.h"
+#include "llvm/Transforms/Scalar/CJTypedReadHelper.h"
 #include "llvm/Transforms/Scalar/ReflectionInfo.h"
 
 #include <algorithm>
@@ -289,8 +290,9 @@ public:
       // The typed-read helper runs immediately after this verifier.  Admit
       // only its exact hand-off shape here; every other reference-bearing
       // transfer remains rejected below.
-      if (isTypedReadHelperCandidate(Dst, Src, SizeArg))
-        break;
+      if (auto *Copy = dyn_cast<MemTransferInst>(&Call))
+        if (isCJTypedReadHelperCandidate(*Copy, DL))
+          break;
       if (isNoReferenceMemTransfer(Dst, Src, SizeArg))
         break;
       Type *DstCompleteTy = getCompleteTypedNonHeapObjectType(Dst, SizeArg);
@@ -826,62 +828,6 @@ private:
   }
 
   enum class ReferencePayloadKind { ContainsReference, NoReference, Unknown };
-
-  bool isTypedReadHelperCandidate(Value *Dst, Value *Src, Value *SizeValue) {
-    auto *Size = dyn_cast<ConstantInt>(SizeValue);
-    auto *DstTy = dyn_cast<PointerType>(Dst->getType());
-    auto *SrcTy = dyn_cast<PointerType>(Src->getType());
-    if (!Size || Size->isZero() || !DstTy || !SrcTy ||
-        DstTy->getAddressSpace() != 0 || SrcTy->getAddressSpace() != 1)
-      return false;
-    APInt Offset(DL.getIndexSizeInBits(0), 0);
-    Value *Base = Dst->stripAndAccumulateConstantOffsets(DL, Offset, true);
-    auto *AI = dyn_cast<AllocaInst>(Base);
-    if (!AI || !Offset.isZero() ||
-        AI->getParent() != &AI->getFunction()->getEntryBlock())
-      return false;
-    auto *Root = dyn_cast<StructType>(AI->getAllocatedType());
-    if (!Root || !Root->isSized() || !containsGCPtrType(Root))
-      return false;
-    TypeSize RootSize = DL.getTypeAllocSize(Root);
-    if (RootSize.isScalable() || RootSize.getFixedSize() != Size->getZExtValue())
-      return false;
-
-    APInt SrcOffset(DL.getIndexSizeInBits(1), 0);
-    Value *SrcRoot = Src->stripAndAccumulateConstantOffsets(DL, SrcOffset, true);
-    auto *RootCall = dyn_cast<CallBase>(SrcRoot);
-    if (!RootCall)
-      return false;
-    Intrinsic::ID RootIID = RootCall->getIntrinsicID();
-    bool KnownRoot = RootIID == Intrinsic::cj_malloc_object ||
-                     RootIID == Intrinsic::cj_malloc_array ||
-                     RootIID == Intrinsic::cj_alloca_generic;
-    bool ManagedRoot = RootIID == Intrinsic::not_intrinsic &&
-                       RootCall->getCalledFunction() &&
-                       RootCall->getCalledFunction()->hasCangjieGC();
-    if (!KnownRoot && !ManagedRoot)
-      return false;
-
-    ReferencePayloadKind SrcPayload = classifyCompleteGenericPayload(Src, Size);
-    if (SrcPayload == ReferencePayloadKind::Unknown)
-      SrcPayload = classifyCompleteArrayPayload(Src, Size);
-    if (SrcPayload == ReferencePayloadKind::Unknown)
-      SrcPayload = classifyTypedHeapPayload(Src, Size);
-    if (SrcPayload == ReferencePayloadKind::Unknown && ManagedRoot) {
-      if (auto *BC = dyn_cast<BitCastOperator>(Src)) {
-        if (auto *SrcPT = dyn_cast<PointerType>(BC->getSrcTy())) {
-          Type *PayloadTy = SrcPT->isOpaque()
-                                ? nullptr
-                                : SrcPT->getNonOpaquePointerElementType();
-          if (PayloadTy && PayloadTy->isSized() &&
-              DL.getTypeAllocSize(PayloadTy).getFixedSize() ==
-                  Size->getZExtValue() && containsGCPtrType(PayloadTy))
-            SrcPayload = ReferencePayloadKind::ContainsReference;
-        }
-      }
-    }
-    return SrcPayload == ReferencePayloadKind::ContainsReference;
-  }
 
   // Recover the complete payload layout of the canonical
   //   alloca.generic -> bitcast -> GEP(one TypeInfo pointer) -> bitcast

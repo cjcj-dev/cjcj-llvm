@@ -7,7 +7,16 @@
 
 namespace llvm {
 
+class DataLayout;
+class MemTransferInst;
 class Module;
+
+/// Return true exactly when CJTypedReadHelper will rewrite \p Copy.
+///
+/// CJIRVerifier uses this same predicate for its verifier-to-helper hand-off;
+/// keep every admission rule in the implementation of this function.
+bool isCJTypedReadHelperCandidate(MemTransferInst &Copy,
+                                  const DataLayout &DL);
 
 /// Rewrite a proven AS1 aggregate read into llvm.cj.gcread.struct.
 ///

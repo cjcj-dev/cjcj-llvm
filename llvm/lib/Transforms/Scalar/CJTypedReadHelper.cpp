@@ -123,18 +123,20 @@ static Optional<TypedReadMatch> matchTypedRead(MemTransferInst &MI,
       !containsGCPtrType(PayloadTy))
     return None;
 
-  // Object/generic allocation results point at the header; a read helper
-  // must name exactly the complete payload, never an interior or partial span.
+  // Every accepted root names a managed object base.  A read helper must start
+  // exactly after its one-word header and cover the complete typed payload;
+  // an uncontracted interior span is never a helper candidate.
   Intrinsic::ID IID = dyn_cast<CallBase>(Base)->getIntrinsicID();
-  if (IID == Intrinsic::cj_malloc_object || IID == Intrinsic::cj_alloca_generic) {
-    uint64_t Header = DL.getTypeAllocSize(Type::getInt8PtrTy(MI.getContext()))
-                          .getFixedSize();
-    if (Offset != Header)
+  uint64_t Header = DL.getTypeAllocSize(Type::getInt8PtrTy(MI.getContext()))
+                        .getFixedSize();
+  if (Offset != Header)
+    return None;
+  if (IID == Intrinsic::cj_malloc_object ||
+      IID == Intrinsic::cj_alloca_generic) {
+    auto *AllocSize =
+        dyn_cast<ConstantInt>(dyn_cast<CallBase>(Base)->getArgOperand(1));
+    if (!AllocSize || AllocSize->getZExtValue() != Size)
       return None;
-    if (auto *AllocSize = dyn_cast<ConstantInt>(
-            dyn_cast<CallBase>(Base)->getArgOperand(1)))
-      if (AllocSize->getZExtValue() != Size)
-        return None;
   } else if (IID == Intrinsic::cj_malloc_array) {
     // Array payloads require a typed element carrier; an erased array span is
     // intentionally left for the dedicated array barrier path.
@@ -173,6 +175,11 @@ static bool rewriteModule(Module &M) {
 }
 
 } // namespace
+
+bool llvm::isCJTypedReadHelperCandidate(MemTransferInst &Copy,
+                                        const DataLayout &DL) {
+  return matchTypedRead(Copy, DL).hasValue();
+}
 
 PreservedAnalyses
 CJTypedReadHelper::run(Module &M, ModuleAnalysisManager &) const {
