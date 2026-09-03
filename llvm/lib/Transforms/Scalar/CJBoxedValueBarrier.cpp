@@ -47,12 +47,43 @@ struct BoxedPayloadCopy {
   CallInst *Allocation;
 };
 
+// An erased payload may be copied from an element inside an AS0 buffer.  The
+// helper only needs a readable source range; unlike an AS1 heap slot, this
+// source has no managed-reference provenance that would require read-side
+// healing.  Keep the root deliberately narrow so a loaded, computed, or
+// otherwise interior pointer cannot accidentally be treated as a native
+// buffer supplied by the frontend.
+static bool isAllowedElementSource(Value *Source) {
+  auto *GEP = dyn_cast<GetElementPtrInst>(Source);
+  if (!GEP || !GEP->isInBounds() || GEP->getNumIndices() != 1 ||
+      GEP->getSourceElementType() !=
+          Type::getInt8Ty(Source->getContext()) ||
+      !GEP->idx_begin()->get()->getType()->isIntegerTy(64))
+    return false;
+
+  auto *BaseTy = dyn_cast<PointerType>(GEP->getPointerOperand()->getType());
+  if (!BaseTy || BaseTy->getAddressSpace() != 0)
+    return false;
+
+  Value *Base = GEP->getPointerOperand();
+  if (isa<Argument>(Base))
+    return true;
+
+  auto *Alloca = dyn_cast<AllocaInst>(Base);
+  return Alloca &&
+         Alloca->getParent() == &Alloca->getFunction()->getEntryBlock();
+}
+
 static Optional<BoxedPayloadCopy> matchBoxedPayloadCopy(Instruction &I) {
   auto *Copy = dyn_cast<MemCpyInst>(&I);
   if (!Copy || Copy->isVolatile() || Copy->getDestAddressSpace() != 1 ||
       Copy->getSourceAddressSpace() != 0 ||
       !Copy->getLength()->getType()->isIntegerTy(32) ||
       isa<ConstantInt>(Copy->getLength()))
+    return None;
+
+  Value *Source = Copy->getRawSource();
+  if (isa<GetElementPtrInst>(Source) && !isAllowedElementSource(Source))
     return None;
 
   auto *PayloadCast = dyn_cast<BitCastInst>(Copy->getRawDest());
@@ -83,11 +114,12 @@ static Optional<BoxedPayloadCopy> matchBoxedPayloadCopy(Instruction &I) {
   if (!PayloadIndex || !PayloadIndex->isOne())
     return None;
 
-  // The allocation and the destination derivation must be the immediately
-  // preceding non-debug instructions.  Any intervening instruction could
-  // publish the object or indicate a different frontend shape.
+  // Allocation and the header GEP/bitcast remain an adjacent destination
+  // chain.  The frontend may compute an AS0 element address between the
+  // header GEP and the final payload bitcast (for example zext/mul/GEP), so
+  // that one source-side gap is intentionally not required to be adjacent.
+  // The payload bitcast itself must still immediately precede the copy.
   if (Copy->getPrevNonDebugInstruction() != PayloadCast ||
-      PayloadCast->getPrevNonDebugInstruction() != PayloadGEP ||
       PayloadGEP->getPrevNonDebugInstruction() != ObjectCast ||
       ObjectCast->getPrevNonDebugInstruction() != Allocation)
     return None;
