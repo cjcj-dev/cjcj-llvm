@@ -581,7 +581,6 @@ public:
                "dbg.declare",
                &I);
       }
-      return;
     }
 
     Type *SrcTy = I.getOperand(0)->getType();
