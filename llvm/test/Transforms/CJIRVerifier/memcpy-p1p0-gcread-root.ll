@@ -50,6 +50,9 @@ declare void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)*, i8*, i64, i1)
 define void @allow_this_debug_reload_option_field(i8 addrspace(1)* %this) gc "cangjie" {
 entry:
   %this.debug = alloca i8 addrspace(1)*, align 8
+  %snapshot = alloca %"ObjLayout.std.random:Random", align 8
+  %snapshot.bytes = bitcast %"ObjLayout.std.random:Random"* %snapshot to i8*
+  %this.heap.bytes = bitcast i8 addrspace(1)* %this to i8 addrspace(1)*
   store i8 addrspace(1)* %this, i8 addrspace(1)** %this.debug, align 8
   %loaded = load i8 addrspace(1)*, i8 addrspace(1)** %this.debug, align 8
   %hdr = bitcast i8 addrspace(1)* %loaded to i8* addrspace(1)*
@@ -59,9 +62,11 @@ entry:
   %dst = bitcast %"enum.std.core:Option<Float64>" addrspace(1)* %field to i8 addrspace(1)*
   %src.a = alloca %"enum.std.core:Option<Float64>", align 8
   %src = bitcast %"enum.std.core:Option<Float64>"* %src.a to i8*
-  ; Mirror gaussian: a mem intrinsic between the store and the reload cannot
-  ; be a GC safepoint, so it does not invalidate the spill slot.
+  ; Leaf memory and gcread intrinsics between the store and reload cannot be
+  ; GC safepoints, so they do not invalidate the spill slot.
   call void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)* align 8 %dst, i8* align 8 %src, i64 16, i1 false)
+  call void @llvm.cj.memset.p0i8(i8* %snapshot.bytes, i8 0, i64 32, i1 false)
+  call void @llvm.cj.gcread.struct.i64(i8* %snapshot.bytes, i8 addrspace(1)* %this, i8 addrspace(1)* %this.heap.bytes, i64 32), !AggType !0
   %reloaded = load i8 addrspace(1)*, i8 addrspace(1)** %this.debug, align 8
   %hdr2 = bitcast i8 addrspace(1)* %reloaded to i8* addrspace(1)*
   %payload2 = getelementptr i8*, i8* addrspace(1)* %hdr2, i32 1
@@ -73,6 +78,9 @@ entry:
 }
 
 declare void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)*, i8*, i64, i1)
+declare void @llvm.cj.memset.p0i8(i8*, i8, i64, i1)
+declare void @llvm.cj.gcread.struct.i64(i8*, i8 addrspace(1)*, i8 addrspace(1)*, i64)
+!0 = !{!"ObjLayout.std.random:Random"}
 
 ;--- reject-src-has-ref.ll
 %OptionRef = type { i1, i8 addrspace(1)* }

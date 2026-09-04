@@ -19,6 +19,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/CJIntrinsics.h"
@@ -39,6 +40,7 @@
 #include "llvm/Transforms/Scalar/CJFillMetadata.h"
 #include "llvm/Transforms/Scalar/CJTypedReadHelper.h"
 #include "llvm/Transforms/Scalar/ReflectionInfo.h"
+#include "llvm/Transforms/Utils/Local.h"
 
 #include <algorithm>
 #include <cassert>
@@ -65,8 +67,9 @@ public:
     EnableReflection = ReflectInfo::enable(M);
   }
 
-  bool verify(Function &F) {
+  bool verify(Function &F, const TargetLibraryInfo &FunctionTLI) {
     Broken = false;
+    TLI = &FunctionTLI;
     visit(F);
     if (Broken) {
       errs() << "in function " << F.getName() << '\n';
@@ -1175,6 +1178,7 @@ private:
   bool hasSafepointCapableCallBeforeLoad(
       ArrayRef<Instruction *> FreshnessAnchors, LoadInst &Load,
       DominatorTree &DT) {
+    assert(TLI && "function verification requires TargetLibraryInfo");
     SmallPtrSet<BasicBlock *, 32> MayReachLoad;
     SmallVector<BasicBlock *, 16> Worklist;
     Worklist.push_back(Load.getParent());
@@ -1200,19 +1204,10 @@ private:
               return MayReachLoad.contains(Succ);
             }))
           continue;
-        // Intrinsics that lower to no safepoint-capable call cannot relocate
-        // the stored reference.
-        if (auto *II = dyn_cast<IntrinsicInst>(CB)) {
-          if (isa<DbgInfoIntrinsic>(II) || isa<MemIntrinsic>(II))
-            continue;
-          switch (II->getIntrinsicID()) {
-          case Intrinsic::lifetime_start:
-          case Intrinsic::lifetime_end:
-            continue;
-          default:
-            break;
-          }
-        }
+        // Keep freshness aligned with the exact leaf policy used by
+        // CJRewriteStatepoint, rather than maintaining an intrinsic subset.
+        if (callsGCLeafFunction(CB, *TLI))
+          continue;
         if (llvm::any_of(FreshnessAnchors, [&](Instruction *Anchor) {
               return DT.dominates(Anchor, CB);
             }))
@@ -2590,16 +2585,19 @@ private:
     *OS << '\n';
     Broken = true;
   }
+
+  const TargetLibraryInfo *TLI = nullptr;
 };
 
 } // namespace
 
-static bool doCJIRVerify(Module &M) {
+static bool doCJIRVerify(Module &M, ModuleAnalysisManager &AM) {
   Triple T(M.getTargetTriple());
   if (T.isARM())
     return false;
   bool Broken = false;
   CJVerifier CV(M, &dbgs());
+  auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
 
   for (GlobalVariable &GV : M.globals()) {
     if (!GV.hasInitializer())
@@ -2614,18 +2612,19 @@ static bool doCJIRVerify(Module &M) {
     if (!F.hasCangjieGC())
       continue;
 
-    Broken |= CV.verify(F);
+    Broken |= CV.verify(F, FAM.getResult<TargetLibraryAnalysis>(F));
     if (Broken)
       report_fatal_error("Broken function found, compilation aborted!");
   }
   return Broken;
 }
 
-PreservedAnalyses CJIRVerifier::run(Module &M, ModuleAnalysisManager &) const {
+PreservedAnalyses CJIRVerifier::run(Module &M,
+                                    ModuleAnalysisManager &AM) const {
   if (hasRunCangjieOpt(M)) {
     return PreservedAnalyses::all();
   }
-  if (doCJIRVerify(M)) {
+  if (doCJIRVerify(M, AM)) {
     return PreservedAnalyses::none();
   }
   return PreservedAnalyses::all();
