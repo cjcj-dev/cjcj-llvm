@@ -311,6 +311,9 @@ public:
       if (auto *Copy = dyn_cast<MemTransferInst>(&Call))
         if (isPrimitiveArrayElementToStackTransfer(*Copy))
           break;
+      if (auto *Copy = dyn_cast<MemTransferInst>(&Call))
+        if (isPrimitiveStackToArrayElementTransfer(*Copy))
+          break;
       // The typed-read helper runs immediately after this verifier.  Admit
       // only its exact hand-off shape here; every other reference-bearing
       // transfer remains rejected below.
@@ -474,7 +477,7 @@ public:
   bool isDebugOnlySlotUse(const Value *Slot, const AllocaInst *AI,
                           SmallPtrSetImpl<const Value *> &Visited) {
     if (!Visited.insert(Slot).second)
-      return true;
+      return false;
 
     for (const User *U : Slot->users()) {
       if (isa<DbgInfoIntrinsic>(U))
@@ -1161,6 +1164,200 @@ private:
         AllocSize.getFixedSize() != CopySize->getZExtValue())
       return false;
     return true;
+  }
+
+  // Recognize the trusted Array<T> stack aggregate produced by a complete
+  // gcread.struct, followed by a load of its AS1 data field.  The read is a
+  // barriered snapshot of the array reference; the subsequent dynamic FAM
+  // element access may therefore use the raw primitive copy path.
+  bool isGcreadStructArrayDataRoot(Value *LayoutPtr, StructType *LayoutTy) {
+    auto *TypedCast = dyn_cast<BitCastOperator>(LayoutPtr);
+    if (!TypedCast || TypedCast->getType() !=
+                          PointerType::get(LayoutTy, 1))
+      return false;
+    auto *HeaderGEP = dyn_cast<GEPOperator>(TypedCast->getOperand(0));
+    if (!HeaderGEP || HeaderGEP->getNumIndices() != 1 ||
+        HeaderGEP->getSourceElementType() != Type::getInt8PtrTy(C) ||
+        HeaderGEP->getPointerAddressSpace() != 1)
+      return false;
+    auto *HeaderIndex = dyn_cast<ConstantInt>(HeaderGEP->idx_begin()->get());
+    if (!HeaderIndex || !HeaderIndex->isOne())
+      return false;
+    auto *BaseCast = dyn_cast<BitCastOperator>(HeaderGEP->getPointerOperand());
+    if (!BaseCast || BaseCast->getSrcTy() != Type::getInt8PtrTy(C, 1) ||
+        BaseCast->getDestTy() != PointerType::get(Type::getInt8PtrTy(C), 1))
+      return false;
+    auto *DataLoad = dyn_cast<LoadInst>(BaseCast->getOperand(0));
+    if (!DataLoad || DataLoad->isVolatile() ||
+        DataLoad->getType() != Type::getInt8PtrTy(C, 1))
+      return false;
+
+    auto *DataGEP = dyn_cast<GEPOperator>(DataLoad->getPointerOperand());
+    if (!DataGEP || DataGEP->getNumIndices() != 2 ||
+        DataGEP->getSourceElementType() == nullptr ||
+        DataGEP->getPointerAddressSpace() != 0)
+      return false;
+    auto Index = DataGEP->idx_begin();
+    auto *Zero = dyn_cast<ConstantInt>(Index->get());
+    auto *Field = Zero ? dyn_cast<ConstantInt>((++Index)->get()) : nullptr;
+    if (!Zero || !Zero->isZero() || !Field || !Field->isZero())
+      return false;
+    auto *ArrayTy = dyn_cast<StructType>(DataGEP->getSourceElementType());
+    auto *ArrayAlloca = dyn_cast<AllocaInst>(DataGEP->getPointerOperand());
+    if (!ArrayTy || !ArrayAlloca || !ArrayAlloca->isStaticAlloca() ||
+        ArrayAlloca->getAllocatedType() != ArrayTy ||
+        ArrayTy->getNumElements() == 0 ||
+        !isGCPointerType(ArrayTy->getElementType(0)))
+      return false;
+
+    TypeSize ArraySize = DL.getTypeAllocSize(ArrayTy);
+    if (ArraySize.isScalable())
+      return false;
+    DominatorTree DT(*DataLoad->getFunction());
+    for (BasicBlock &BB : *DataLoad->getFunction())
+      for (Instruction &I : BB) {
+        auto *II = dyn_cast<IntrinsicInst>(&I);
+        if (!II || II->getIntrinsicID() != Intrinsic::cj_gcread_struct)
+          continue;
+        auto *Size = dyn_cast<ConstantInt>(II->getArgOperand(3));
+        if (!Size || Size->getZExtValue() != ArraySize.getFixedSize() ||
+            !DT.dominates(II, DataLoad))
+          continue;
+        Value *Dst = II->getArgOperand(0)->stripPointerCasts();
+        if (Dst != ArrayAlloca)
+          continue;
+        const MDNode *Agg = II->getMetadata("AggType");
+        if (!Agg || Agg->getNumOperands() != 1)
+          continue;
+        auto *Name = dyn_cast<MDString>(Agg->getOperand(0).get());
+        if (!Name || StructType::getTypeByName(C, Name->getString()) != ArrayTy)
+          continue;
+        bool Stale = false;
+        for (BasicBlock &BB2 : *DataLoad->getFunction())
+          for (Instruction &J : BB2) {
+            if (&J == II || !DT.dominates(II, &J) ||
+                !DT.dominates(&J, DataLoad))
+              continue;
+            auto *CB = dyn_cast<CallBase>(&J);
+            if (!CB || isa<DbgInfoIntrinsic>(CB) || isa<MemIntrinsic>(CB))
+              continue;
+            if (Function *Callee = CB->getCalledFunction())
+              if (Callee->getName() == "llvm.cj.set.location" ||
+                  Callee->getName() == "llvm.cj.memset.p0i8")
+                continue;
+            if (auto *JII = dyn_cast<IntrinsicInst>(CB)) {
+              if (JII->getIntrinsicID() == Intrinsic::lifetime_start ||
+                  JII->getIntrinsicID() == Intrinsic::lifetime_end ||
+                  JII->getIntrinsicID() == Intrinsic::cj_gcread_struct)
+                continue;
+            }
+            Stale = true;
+            break;
+          }
+        if (!Stale)
+          return true;
+      }
+    return false;
+  }
+
+  bool isPrimitiveStackToArrayElementTransfer(const MemTransferInst &Copy) {
+    if (Copy.isVolatile())
+      return false;
+    Value *Dst = Copy.getRawDest();
+    Value *Src = Copy.getRawSource();
+    auto *CopySize = dyn_cast<ConstantInt>(Copy.getLength());
+    auto *DstPtrTy = dyn_cast<PointerType>(Dst->getType());
+    auto *SrcPtrTy = dyn_cast<PointerType>(Src->getType());
+    if (!CopySize || CopySize->isZero() ||
+        CopySize->getValue().getActiveBits() > 64 || !DstPtrTy || !SrcPtrTy ||
+        DstPtrTy->getAddressSpace() != 1 || SrcPtrTy->getAddressSpace() != 0)
+      return false;
+
+    Type *DstElementTy = getUniqueArrayLayoutElementType(Dst, true);
+    if (!DstElementTy || !DstElementTy->isSized() ||
+        containsGCPtrType(DstElementTy))
+      return false;
+    TypeSize EltSize = DL.getTypeAllocSize(DstElementTy);
+    if (EltSize.isScalable() ||
+        EltSize.getFixedSize() != CopySize->getZExtValue())
+      return false;
+
+    // The source must retain the complete typed pointee through the i8
+    // intrinsic carrier; erased byte arrays and partial subobjects are not a
+    // provenance proof.
+    auto *SrcCast = dyn_cast<BitCastOperator>(Src);
+    if (!SrcCast)
+      return false;
+    auto *CastSrcTy = dyn_cast<PointerType>(SrcCast->getSrcTy());
+    auto *CastDstTy = dyn_cast<PointerType>(SrcCast->getDestTy());
+    if (!CastSrcTy || !CastDstTy || CastSrcTy->isOpaque() ||
+        CastDstTy->isOpaque() || CastSrcTy->getAddressSpace() != 0 ||
+        CastDstTy->getAddressSpace() != 0 ||
+        !CastDstTy->getNonOpaquePointerElementType()->isIntegerTy(8))
+      return false;
+    Type *SrcElementTy = CastSrcTy->getNonOpaquePointerElementType();
+    if (SrcElementTy != DstElementTy || !SrcElementTy->isSized() ||
+        containsGCPtrType(SrcElementTy))
+      return false;
+    APInt Offset(DL.getIndexSizeInBits(0), 0);
+    Value *SrcBase = SrcCast->getOperand(0)->stripAndAccumulateConstantOffsets(
+        DL, Offset, true);
+    auto *AI = dyn_cast<AllocaInst>(SrcBase);
+    if (!AI || !AI->isStaticAlloca() || !Offset.isZero() ||
+        AI->getAllocatedType() != SrcElementTy)
+      return false;
+    TypeSize SrcSize = DL.getTypeAllocSize(SrcElementTy);
+    if (SrcSize.isScalable() || SrcSize.getFixedSize() != CopySize->getZExtValue())
+      return false;
+
+    // Locate the ArrayLayout selector and validate its root.  Canonical
+    // argument/malloc roots are already covered by the existing helper;
+    // gcread.struct Array<T>.data loads use the dedicated fresh-snapshot path.
+    Value *Current = Dst;
+    StructType *LayoutTy = nullptr;
+    bool FoundSelector = false;
+    while (true) {
+      if (auto *Cast = dyn_cast<BitCastOperator>(Current)) {
+        Current = Cast->getOperand(0);
+        continue;
+      }
+      if (auto *Cast = dyn_cast<AddrSpaceCastOperator>(Current)) {
+        Current = Cast->getOperand(0);
+        continue;
+      }
+      auto *GEP = dyn_cast<GEPOperator>(Current);
+      if (!GEP)
+        break;
+      auto *ST = dyn_cast<StructType>(GEP->getSourceElementType());
+      if (ST && ST->hasName() && ST->getName().startswith("ArrayLayout.") &&
+          GEP->getNumIndices() == 3) {
+        auto I = GEP->idx_begin();
+        auto *Z = dyn_cast<ConstantInt>(I->get());
+        auto *O = Z ? dyn_cast<ConstantInt>((++I)->get()) : nullptr;
+        auto *AT = ST->getNumElements() == 2
+                       ? dyn_cast<ArrayType>(ST->getElementType(1))
+                       : nullptr;
+        auto *AB = ST->getNumElements() == 2
+                       ? dyn_cast<StructType>(ST->getElementType(0))
+                       : nullptr;
+        if (Z && O && Z->isZero() && O->isOne() && AT &&
+            AT->getNumElements() == 0 && AB && AB->hasName() &&
+            AB->getName() == "ArrayBase") {
+          if (FoundSelector)
+            return false;
+          FoundSelector = true;
+          LayoutTy = ST;
+          Value *Root = GEP->getPointerOperand();
+          Type *Canonical = getCanonicalTypedHeapRootType(Root);
+          if (Canonical != LayoutTy &&
+              !isGcreadStructArrayDataRoot(Root, LayoutTy))
+            return false;
+        }
+      }
+      Current = GEP->getPointerOperand();
+    }
+    return FoundSelector && LayoutTy &&
+           getUniqueArrayLayoutElementType(Dst, true) == DstElementTy;
   }
 
   bool isAggregateRegionAnchor(Type *Ty) {
