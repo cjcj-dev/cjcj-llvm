@@ -1166,6 +1166,62 @@ private:
     return true;
   }
 
+  // Return true when a safepoint-capable call can execute after one of the
+  // freshness anchors and before Load.  MayReachLoad is deliberately built
+  // backwards: dominance alone misses calls on only one arm of a diamond.
+  // A call after Load in the same block is relevant only when a successor can
+  // reach the block again, in which case it precedes Load on the next loop
+  // iteration.
+  bool hasSafepointCapableCallBeforeLoad(
+      ArrayRef<Instruction *> FreshnessAnchors, LoadInst &Load,
+      DominatorTree &DT) {
+    SmallPtrSet<BasicBlock *, 32> MayReachLoad;
+    SmallVector<BasicBlock *, 16> Worklist;
+    Worklist.push_back(Load.getParent());
+    while (!Worklist.empty()) {
+      BasicBlock *BB = Worklist.pop_back_val();
+      if (!MayReachLoad.insert(BB).second)
+        continue;
+      for (BasicBlock *Pred : predecessors(BB))
+        Worklist.push_back(Pred);
+    }
+
+    for (BasicBlock &BB : *Load.getFunction()) {
+      if (!MayReachLoad.contains(&BB))
+        continue;
+      for (Instruction &I : BB) {
+        auto *CB = dyn_cast<CallBase>(&I);
+        if (!CB || llvm::is_contained(FreshnessAnchors, &I))
+          continue;
+        // Calls later in the load block cannot intervene unless the CFG can
+        // return to that block for another execution of Load.
+        if (&BB == Load.getParent() && Load.comesBefore(&I) &&
+            llvm::none_of(successors(&BB), [&](BasicBlock *Succ) {
+              return MayReachLoad.contains(Succ);
+            }))
+          continue;
+        // Intrinsics that lower to no safepoint-capable call cannot relocate
+        // the stored reference.
+        if (auto *II = dyn_cast<IntrinsicInst>(CB)) {
+          if (isa<DbgInfoIntrinsic>(II) || isa<MemIntrinsic>(II))
+            continue;
+          switch (II->getIntrinsicID()) {
+          case Intrinsic::lifetime_start:
+          case Intrinsic::lifetime_end:
+            continue;
+          default:
+            break;
+          }
+        }
+        if (llvm::any_of(FreshnessAnchors, [&](Instruction *Anchor) {
+              return DT.dominates(Anchor, CB);
+            }))
+          return true;
+      }
+    }
+    return false;
+  }
+
   // Recognize the trusted Array<T> stack aggregate produced by a complete
   // gcread.struct, followed by a load of its AS1 data field.  The read is a
   // barriered snapshot of the array reference; the subsequent dynamic FAM
@@ -1232,29 +1288,9 @@ private:
         auto *Name = dyn_cast<MDString>(Agg->getOperand(0).get());
         if (!Name || StructType::getTypeByName(C, Name->getString()) != ArrayTy)
           continue;
-        bool Stale = false;
-        for (BasicBlock &BB2 : *DataLoad->getFunction())
-          for (Instruction &J : BB2) {
-            if (&J == II || !DT.dominates(II, &J) ||
-                !DT.dominates(&J, DataLoad))
-              continue;
-            auto *CB = dyn_cast<CallBase>(&J);
-            if (!CB || isa<DbgInfoIntrinsic>(CB) || isa<MemIntrinsic>(CB))
-              continue;
-            if (Function *Callee = CB->getCalledFunction())
-              if (Callee->getName() == "llvm.cj.set.location" ||
-                  Callee->getName() == "llvm.cj.memset.p0i8")
-                continue;
-            if (auto *JII = dyn_cast<IntrinsicInst>(CB)) {
-              if (JII->getIntrinsicID() == Intrinsic::lifetime_start ||
-                  JII->getIntrinsicID() == Intrinsic::lifetime_end ||
-                  JII->getIntrinsicID() == Intrinsic::cj_gcread_struct)
-                continue;
-            }
-            Stale = true;
-            break;
-          }
-        if (!Stale)
+        SmallVector<Instruction *, 1> FreshnessAnchors{II};
+        if (!hasSafepointCapableCallBeforeLoad(FreshnessAnchors, *DataLoad,
+                                               DT))
           return true;
       }
     return false;
@@ -1466,47 +1502,11 @@ private:
       for (StoreInst *SI : Stores)
         if (!DT.dominates(SI, LI))
           return false;
-      // Blocks from which the load's block is reachable (the load's own
-      // block included); a call outside this set cannot intervene.
-      SmallPtrSet<BasicBlock *, 32> MayReachLoad;
-      SmallVector<BasicBlock *, 16> Worklist;
-      Worklist.push_back(LI->getParent());
-      while (!Worklist.empty()) {
-        BasicBlock *BB = Worklist.pop_back_val();
-        if (!MayReachLoad.insert(BB).second)
-          continue;
-        for (BasicBlock *Pred : predecessors(BB))
-          Worklist.push_back(Pred);
-      }
-      for (BasicBlock &BB : *LI->getFunction()) {
-        if (!MayReachLoad.contains(&BB))
-          continue;
-        for (Instruction &I : BB) {
-          auto *CB = dyn_cast<CallBase>(&I);
-          if (!CB)
-            continue;
-          if (&BB == LI->getParent() && LI->comesBefore(&I))
-            continue;
-          // Intrinsics that cannot be GC safepoints (dbg/lifetime are
-          // non-executable; the mem intrinsics expand to plain memory ops)
-          // cannot relocate the stored root.
-          if (auto *II = dyn_cast<IntrinsicInst>(CB)) {
-            if (isa<DbgInfoIntrinsic>(II) || isa<MemIntrinsic>(II))
-              continue;
-            switch (II->getIntrinsicID()) {
-            case Intrinsic::lifetime_start:
-            case Intrinsic::lifetime_end:
-              continue;
-            default:
-              break;
-            }
-          }
-          if (llvm::any_of(Stores,
-                           [&](StoreInst *SI) { return DT.dominates(SI, CB); })) {
-            LastHeapRootRejectWasSafepointStale = true;
-            return false;
-          }
-        }
+      SmallVector<Instruction *, 4> FreshnessAnchors;
+      llvm::append_range(FreshnessAnchors, Stores);
+      if (hasSafepointCapableCallBeforeLoad(FreshnessAnchors, *LI, DT)) {
+        LastHeapRootRejectWasSafepointStale = true;
+        return false;
       }
       return true;
     }
