@@ -308,6 +308,9 @@ public:
       // intentionally independent of allocation provenance and copy size.
       if (isPrimitiveArrayPayloadTransfer(Dst, Src))
         break;
+      if (auto *Copy = dyn_cast<MemTransferInst>(&Call))
+        if (isPrimitiveArrayElementToStackTransfer(*Copy))
+          break;
       // The typed-read helper runs immediately after this verifier.  Admit
       // only its exact hand-off shape here; every other reference-bearing
       // transfer remains rejected below.
@@ -1050,7 +1053,8 @@ private:
   // changes whether E contains a managed-reference slot.  GEPs before the
   // selector are deliberately unconstrained because allocation provenance is
   // not part of this type-only rule.
-  Type *getUniqueArrayLayoutElementType(Value *Ptr) {
+  Type *getUniqueArrayLayoutElementType(Value *Ptr,
+                                        bool RequireIndexedElement = false) {
     Type *ElementTy = nullptr;
     SmallVector<const GEPOperator *, 4> DescendantGEPs;
 
@@ -1076,10 +1080,11 @@ private:
           LayoutTy->getNumElements() == 2) {
         auto *ArrayBaseTy = dyn_cast<StructType>(LayoutTy->getElementType(0));
         FlexibleArrayTy = dyn_cast<ArrayType>(LayoutTy->getElementType(1));
+        unsigned NumIdx = GEP->getNumIndices();
+        unsigned Wanted = RequireIndexedElement ? 3u : 2u;
         auto Index = GEP->idx_begin();
-        auto *Zero = GEP->getNumIndices() == 2
-                         ? dyn_cast<ConstantInt>(Index->get())
-                         : nullptr;
+        auto *Zero = NumIdx == Wanted ? dyn_cast<ConstantInt>(Index->get())
+                                      : nullptr;
         auto *One = Zero ? dyn_cast<ConstantInt>((++Index)->get()) : nullptr;
         IsPayloadSelector =
             ArrayBaseTy && ArrayBaseTy->hasName() &&
@@ -1113,6 +1118,49 @@ private:
       return false;
     return !containsGCPtrType(DstElementTy) &&
            !containsGCPtrType(SrcElementTy);
+  }
+
+  // Heap ArrayLayout element -> AS0 static alloca.  Canonical E comes from
+  // a (0,1,idx) GEP on a named ArrayLayout; [N x i8] carriers are admitted
+  // only through that named type.  Dual of zBarrierSet.inline.hpp:451-460
+  // Raw::value_copy_in_heap when the oop map is empty.
+  bool isPrimitiveArrayElementToStackTransfer(const MemTransferInst &Copy) {
+    if (Copy.isVolatile())
+      return false;
+    Value *Dst = Copy.getRawDest();
+    Value *Src = Copy.getRawSource();
+    auto *CopySize = dyn_cast<ConstantInt>(Copy.getLength());
+    if (!CopySize || CopySize->isZero() ||
+        CopySize->getValue().getActiveBits() > 64)
+      return false;
+    auto *DstPtrTy = dyn_cast<PointerType>(Dst->getType());
+    auto *SrcPtrTy = dyn_cast<PointerType>(Src->getType());
+    if (!DstPtrTy || !SrcPtrTy || DstPtrTy->getAddressSpace() != 0 ||
+        SrcPtrTy->getAddressSpace() != 1)
+      return false;
+    Type *SrcElementTy = getUniqueArrayLayoutElementType(Src, true);
+    if (!SrcElementTy || !SrcElementTy->isSized() ||
+        containsGCPtrType(SrcElementTy))
+      return false;
+    TypeSize EltSize = DL.getTypeAllocSize(SrcElementTy);
+    if (EltSize.isScalable() ||
+        EltSize.getFixedSize() != CopySize->getZExtValue())
+      return false;
+    APInt Offset(DL.getIndexSizeInBits(0), 0);
+    Value *DstBase = Dst->stripAndAccumulateConstantOffsets(DL, Offset, true);
+    if (!Offset.isZero())
+      return false;
+    auto *AI = dyn_cast<AllocaInst>(DstBase);
+    if (!AI || !AI->isStaticAlloca())
+      return false;
+    Type *AllocTy = AI->getAllocatedType();
+    if (!AllocTy->isSized() || containsGCPtrType(AllocTy))
+      return false;
+    TypeSize AllocSize = DL.getTypeAllocSize(AllocTy);
+    if (AllocSize.isScalable() ||
+        AllocSize.getFixedSize() != CopySize->getZExtValue())
+      return false;
+    return true;
   }
 
   bool isAggregateRegionAnchor(Type *Ty) {
