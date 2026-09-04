@@ -36,6 +36,10 @@
 #include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Process.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/CJFillMetadata.h"
 #include "llvm/Transforms/Scalar/CJRuntimeLowering.h"
@@ -45,6 +49,8 @@
 
 #include <algorithm>
 #include <cassert>
+#include <memory>
+#include <string>
 
 using namespace llvm;
 using namespace cangjie;
@@ -58,21 +64,262 @@ using namespace cangjie;
   } while (false)
 
 namespace {
+
+enum class VerifierMode { Strict, Report };
+
+static cl::opt<VerifierMode> CJIRVerifierMode(
+    "cj-ir-verifier-mode", cl::Hidden, cl::init(VerifierMode::Strict),
+    cl::desc("Choose whether CJIRVerifier aborts or only reports rejects"),
+    cl::values(clEnumValN(VerifierMode::Strict, "strict",
+                          "Abort on a rejected function (default)"),
+               clEnumValN(VerifierMode::Report, "report",
+                          "Record rejects and continue verification")));
+
+static bool isReportMode() {
+  Optional<std::string> Env =
+      sys::Process::GetEnv("CJ_IR_VERIFIER_MODE");
+  return CJIRVerifierMode == VerifierMode::Report ||
+         (Env && *Env == "report");
+}
+
+[[noreturn]] static void verifierFatal(const Twine &Message) {
+  report_fatal_error(Message);
+}
+
+static void printReportField(raw_ostream &OS, StringRef Field) {
+  for (char C : Field) {
+    switch (C) {
+    case '\\':
+      OS << "\\\\";
+      break;
+    case '\t':
+      OS << "\\t";
+      break;
+    case '\n':
+      OS << "\\n";
+      break;
+    case '\r':
+      OS << "\\r";
+      break;
+    default:
+      OS << C;
+      break;
+    }
+  }
+}
+
+static std::string printReportValue(const Value *V, const Module &M) {
+  if (!V)
+    return "-";
+  std::string Text;
+  raw_string_ostream OS(Text);
+  V->printAsOperand(OS, false, &M);
+  return OS.str();
+}
+
+static std::string printReportSourceType(const Value *V) {
+  if (!V)
+    return "-";
+
+  // Mem intrinsics usually erase the useful pointee type to i8.  Retain the
+  // nearest typed source spelling so report consumers can group rejects by
+  // payload family without re-reading the input bitcode.
+  while (auto *Cast = dyn_cast<BitCastOperator>(V)) {
+    auto *DstTy = dyn_cast<PointerType>(Cast->getType());
+    auto *SrcTy = dyn_cast<PointerType>(Cast->getOperand(0)->getType());
+    if (!DstTy || !SrcTy || DstTy->isOpaque() || SrcTy->isOpaque() ||
+        !DstTy->getNonOpaquePointerElementType()->isIntegerTy(8))
+      break;
+    V = Cast->getOperand(0);
+  }
+  std::string Text;
+  raw_string_ostream OS(Text);
+  V->getType()->print(OS);
+  return OS.str();
+}
+
+static StringRef classifyReportRoot(const Value *V) {
+  if (!V)
+    return "-";
+
+  while (true) {
+    if (auto *GEP = dyn_cast<GEPOperator>(V)) {
+      V = GEP->getPointerOperand();
+      continue;
+    }
+    if (auto *Cast = dyn_cast<BitCastOperator>(V)) {
+      V = Cast->getOperand(0);
+      continue;
+    }
+    if (auto *Cast = dyn_cast<AddrSpaceCastOperator>(V)) {
+      V = Cast->getOperand(0);
+      continue;
+    }
+    break;
+  }
+
+  if (isa<AllocaInst>(V))
+    return "alloca";
+  if (isa<Argument>(V))
+    return "argument";
+  if (isa<GlobalVariable>(V))
+    return "global";
+  if (isa<LoadInst>(V))
+    return "load";
+  if (isa<CallBase>(V))
+    return "call";
+  if (isa<PHINode>(V))
+    return "phi";
+  if (isa<SelectInst>(V))
+    return "select";
+  if (isa<ConstantPointerNull>(V))
+    return "null";
+  if (isa<UndefValue>(V))
+    return "undef";
+  if (isa<Constant>(V))
+    return "constant";
+  if (isa<Instruction>(V))
+    return "instruction";
+  return "value";
+}
+
+class VerifierReportWriter {
+  std::unique_ptr<raw_fd_ostream> File;
+  Optional<sys::fs::FileLocker> Lock;
+  raw_ostream *OS = nullptr;
+
+public:
+  VerifierReportWriter() {
+    Optional<std::string> Path =
+        sys::Process::GetEnv("CJ_IR_VERIFIER_REPORT");
+    if (!Path || Path->empty()) {
+      OS = &errs();
+      writeHeader();
+      return;
+    }
+
+    std::error_code EC;
+    File = std::make_unique<raw_fd_ostream>(
+        *Path, EC, sys::fs::CD_OpenAlways, sys::fs::FA_Write,
+        sys::fs::OF_Append);
+    if (EC)
+      verifierFatal(Twine("Cannot open CJIRVerifier report: ") +
+                    EC.message());
+
+    Expected<sys::fs::FileLocker> FileLock = File->lock();
+    if (!FileLock)
+      verifierFatal(Twine("Cannot lock CJIRVerifier report: ") +
+                    toString(FileLock.takeError()));
+    Lock.emplace(std::move(*FileLock));
+    OS = File.get();
+
+    uint64_t Size = 0;
+    EC = sys::fs::file_size(*Path, Size);
+    if (EC)
+      verifierFatal(Twine("Cannot inspect CJIRVerifier report: ") +
+                    EC.message());
+    if (Size == 0)
+      writeHeader();
+  }
+
+  void writeHeader() {
+    *OS << "module\tfunction\trule\tinstruction\tdest_as\tsrc_as\tlength"
+           "\tdest_root\tsrc_root\tsource_type\n";
+    OS->flush();
+  }
+
+  void emit(const Module &M, const Function *CurrentFunction,
+            const GlobalVariable *CurrentGlobal, const Twine &Message,
+            const Value *V) {
+    const Value *Dst = nullptr;
+    const Value *Src = nullptr;
+    const Value *Length = nullptr;
+    StringRef InstructionKind = "-";
+
+    if (auto *Copy = dyn_cast_or_null<MemTransferInst>(V)) {
+      Dst = Copy->getRawDest();
+      Src = Copy->getRawSource();
+      Length = Copy->getLength();
+      InstructionKind = Copy->getIntrinsicID() == Intrinsic::memmove
+                            ? "memmove"
+                            : "memcpy";
+    } else if (auto *Cast = dyn_cast_or_null<AddrSpaceCastInst>(V)) {
+      Dst = Cast;
+      Src = Cast->getOperand(0);
+      InstructionKind = "addrspacecast";
+    } else if (auto *Store = dyn_cast_or_null<StoreInst>(V)) {
+      Dst = Store->getPointerOperand();
+      Src = Store->getValueOperand();
+      InstructionKind = "store";
+    } else if (auto *Load = dyn_cast_or_null<LoadInst>(V)) {
+      Dst = Load;
+      Src = Load->getPointerOperand();
+      InstructionKind = "load";
+    } else if (auto *I = dyn_cast_or_null<Instruction>(V)) {
+      InstructionKind = I->getOpcodeName();
+    } else if (V) {
+      InstructionKind = "value";
+    } else {
+      InstructionKind = "metadata";
+    }
+
+    auto AddressSpace = [](const Value *Pointer) -> std::string {
+      auto *PointerTy = Pointer ? dyn_cast<PointerType>(Pointer->getType())
+                                : nullptr;
+      return PointerTy ? std::to_string(PointerTy->getAddressSpace()) : "-";
+    };
+
+    std::string Line;
+    raw_string_ostream LineOS(Line);
+    StringRef ModuleName = M.getSourceFileName().empty()
+                               ? StringRef(M.getModuleIdentifier())
+                               : StringRef(M.getSourceFileName());
+    printReportField(LineOS, ModuleName.empty() ? "<anonymous>" : ModuleName);
+    LineOS << '\t';
+    if (CurrentFunction)
+      printReportField(LineOS, CurrentFunction->getName());
+    else if (CurrentGlobal) {
+      LineOS << "<global:";
+      printReportField(LineOS, CurrentGlobal->getName());
+      LineOS << '>';
+    } else
+      LineOS << '-';
+    LineOS << '\t';
+    printReportField(LineOS, Message.str());
+    LineOS << '\t' << InstructionKind << '\t' << AddressSpace(Dst) << '\t'
+           << AddressSpace(Src) << '\t';
+    printReportField(LineOS, printReportValue(Length, M));
+    LineOS << '\t' << classifyReportRoot(Dst) << '\t'
+           << classifyReportRoot(Src) << '\t';
+    printReportField(LineOS, printReportSourceType(Src));
+    LineOS << '\n';
+    LineOS.flush();
+    OS->write(Line.data(), Line.size());
+    OS->flush();
+  }
+};
+
+enum class RejectKind { Detail, Immediate, Summary };
+
 class CJVerifier : public InstVisitor<CJVerifier> {
   // Befriend the base class so it can delegate to private visit methods.
   friend class InstVisitor<CJVerifier>;
 
 public:
-  CJVerifier(Module &M, raw_ostream *OS)
-      : OS(OS), M(M), MST(&M), C(M.getContext()), DL(M.getDataLayout()) {
+  CJVerifier(Module &M, raw_ostream *OS, bool ReportMode,
+             VerifierReportWriter *Report)
+      : OS(OS), M(M), MST(&M), C(M.getContext()), DL(M.getDataLayout()),
+        ReportMode(ReportMode), Report(Report) {
     EnableReflection = ReflectInfo::enable(M);
   }
 
   bool verify(Function &F, const TargetLibraryInfo &FunctionTLI) {
     Broken = false;
     TLI = &FunctionTLI;
+    CurrentFunction = &F;
+    CurrentGlobal = nullptr;
     visit(F);
-    if (Broken) {
+    if (Broken && !ReportMode) {
       errs() << "in function " << F.getName() << '\n';
     }
     return Broken;
@@ -80,8 +327,10 @@ public:
 
   bool verify(GlobalVariable &GV) {
     Broken = false;
+    CurrentFunction = nullptr;
+    CurrentGlobal = &GV;
     visitGlobalVariable(GV);
-    if (Broken) {
+    if (Broken && !ReportMode) {
       errs() << "in global value " << GV.getName() << '\n';
     }
     return Broken;
@@ -655,6 +904,42 @@ public:
     }
   }
 
+  void reject(const Twine &Message, const Value *V, RejectKind Kind) {
+    if (ReportMode) {
+      if (Kind != RejectKind::Summary) {
+        Report->emit(M, CurrentFunction, CurrentGlobal, Message, V);
+        Broken = true;
+      }
+      return;
+    }
+
+    if (Kind != RejectKind::Detail)
+      verifierFatal(Message);
+
+    *OS << Message << '\n';
+    V->print(*OS, MST);
+    *OS << '\n';
+    Broken = true;
+  }
+
+  void reject(const Twine &Message, const Metadata *MD, RejectKind Kind) {
+    if (ReportMode) {
+      if (Kind != RejectKind::Summary) {
+        Report->emit(M, CurrentFunction, CurrentGlobal, Message, nullptr);
+        Broken = true;
+      }
+      return;
+    }
+
+    if (Kind != RejectKind::Detail)
+      verifierFatal(Message);
+
+    *OS << Message << '\n';
+    MD->print(*OS, MST, &M);
+    *OS << '\n';
+    Broken = true;
+  }
+
 private:
   raw_ostream *OS;
   const Module &M;
@@ -662,6 +947,10 @@ private:
   LLVMContext &C;
   const DataLayout &DL;
   bool EnableReflection = true;
+  bool ReportMode = false;
+  VerifierReportWriter *Report = nullptr;
+  const Function *CurrentFunction = nullptr;
+  const GlobalVariable *CurrentGlobal = nullptr;
   // Trace Check for Errors
   bool Broken = false;
 
@@ -2521,7 +2810,8 @@ private:
     APInt Offset(DL.getIndexSizeInBits(0), 0);
     Value *PtrBase = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
     if (isGCPointerType(PtrBase->getType())) {
-      report_fatal_error("The dst of memcpy base is gc pointer!");
+      reject("The dst of memcpy base is gc pointer!", Ptr,
+             RejectKind::Immediate);
       return true;
     }
     StructType *ST = dyn_cast<StructType>(
@@ -2532,7 +2822,8 @@ private:
     unsigned AllocSize =
         static_cast<unsigned>(DL.getTypeAllocSize(ST).getFixedSize());
     if (AllocSize < Size) {
-      report_fatal_error("The memcpy size exceeds allocation size!");
+      reject("The memcpy size exceeds allocation size!", Ptr,
+             RejectKind::Immediate);
       return false;
     }
     uint64_t BeginPos = Offset.getZExtValue();
@@ -2589,17 +2880,11 @@ private:
   }
 
   void checkFailed(const Twine &Message, const Value *V) {
-    *OS << Message << '\n';
-    V->print(*OS, MST);
-    *OS << '\n';
-    Broken = true;
+    reject(Message, V, RejectKind::Detail);
   }
 
   void checkFailed(const Twine &Message, const Metadata *MD) {
-    *OS << Message << '\n';
-    MD->print(*OS, MST, &M);
-    *OS << '\n';
-    Broken = true;
+    reject(Message, MD, RejectKind::Detail);
   }
 
   const TargetLibraryInfo *TLI = nullptr;
@@ -2607,12 +2892,13 @@ private:
 
 } // namespace
 
-static bool doCJIRVerify(Module &M, ModuleAnalysisManager &AM) {
+static bool doCJIRVerify(Module &M, ModuleAnalysisManager &AM, bool ReportMode,
+                         VerifierReportWriter *Report) {
   Triple T(M.getTargetTriple());
   if (T.isARM())
     return false;
   bool Broken = false;
-  CJVerifier CV(M, &dbgs());
+  CJVerifier CV(M, &dbgs(), ReportMode, Report);
   auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
 
   for (GlobalVariable &GV : M.globals()) {
@@ -2621,7 +2907,8 @@ static bool doCJIRVerify(Module &M, ModuleAnalysisManager &AM) {
 
     Broken |= CV.verify(GV);
     if (Broken)
-      report_fatal_error("Broken global value found, compilation aborted!");
+      CV.reject("Broken global value found, compilation aborted!",
+                static_cast<const Value *>(nullptr), RejectKind::Summary);
   }
 
   for (Function &F : M) {
@@ -2630,7 +2917,8 @@ static bool doCJIRVerify(Module &M, ModuleAnalysisManager &AM) {
 
     Broken |= CV.verify(F, FAM.getResult<TargetLibraryAnalysis>(F));
     if (Broken)
-      report_fatal_error("Broken function found, compilation aborted!");
+      CV.reject("Broken function found, compilation aborted!",
+                static_cast<const Value *>(nullptr), RejectKind::Summary);
   }
   return Broken;
 }
@@ -2640,8 +2928,17 @@ PreservedAnalyses CJIRVerifier::run(Module &M,
   if (hasRunCangjieOpt(M)) {
     return PreservedAnalyses::all();
   }
-  if (doCJIRVerify(M, AM)) {
+  bool ReportMode = isReportMode();
+  std::unique_ptr<VerifierReportWriter> Report;
+  if (ReportMode) {
+    NamedMDNode *Mode = M.getOrInsertNamedMetadata("cj.verifier.mode");
+    Mode->clearOperands();
+    Mode->addOperand(MDNode::get(M.getContext(),
+                                MDString::get(M.getContext(), "report")));
+    Report = std::make_unique<VerifierReportWriter>();
+  }
+  if (doCJIRVerify(M, AM, ReportMode, Report.get())) {
     return PreservedAnalyses::none();
   }
-  return PreservedAnalyses::all();
+  return ReportMode ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
