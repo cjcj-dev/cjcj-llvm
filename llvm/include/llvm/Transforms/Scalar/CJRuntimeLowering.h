@@ -18,10 +18,17 @@
 #ifndef LLVM_TRANSFORMS_SCALAR_CJ_RUNTIME_LOWERING_H
 #define LLVM_TRANSFORMS_SCALAR_CJ_RUNTIME_LOWERING_H
 
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/PassManager.h"
 
 namespace llvm {
 class Module;
+
+/// Return whether a Cangjie intrinsic is lowered to a call which can reach a
+/// safepoint.  The answer is derived from the RuntimeLowering and
+/// BarrierLowering mapping tables, so passes which run before lowering can
+/// apply the same policy as the post-lowering statepoint pass.
+bool cjIntrinsicLowersToSafepointCapableCall(Intrinsic::ID ID);
 
 struct CJRuntimeLowering : public PassInfoMixin<CJRuntimeLowering> {
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) const;

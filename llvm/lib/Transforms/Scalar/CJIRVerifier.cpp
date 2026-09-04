@@ -38,6 +38,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/CJFillMetadata.h"
+#include "llvm/Transforms/Scalar/CJRuntimeLowering.h"
 #include "llvm/Transforms/Scalar/CJTypedReadHelper.h"
 #include "llvm/Transforms/Scalar/ReflectionInfo.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -1204,10 +1205,25 @@ private:
               return MayReachLoad.contains(Succ);
             }))
           continue;
-        // Keep freshness aligned with the exact leaf policy used by
-        // CJRewriteStatepoint, rather than maintaining an intrinsic subset.
-        if (callsGCLeafFunction(CB, *TLI))
+        // Keep freshness aligned with the post-lowering GC-point policy.  At
+        // this pass' program point CJ intrinsics have not become their
+        // runtime calls yet, so callsGCLeafFunction would classify every
+        // intrinsic as leaf and miss calls such as malloc.object and
+        // invoke.gc.  The lowering query is derived from RuntimeLowering's
+        // map; ordinary CallBase values retain the shared leaf predicate used
+        // by statepoint insertion.
+        if (auto *II = dyn_cast<IntrinsicInst>(CB)) {
+          // The lowering query is a positive override.  Intrinsics it does
+          // not classify still need the shared predicate: that preserves
+          // non-leaf LLVM/Cangjie statepoint intrinsics while keeping ordinary
+          // and barrier intrinsics leaf at this program point.
+          if (!cjIntrinsicLowersToSafepointCapableCall(
+                  II->getIntrinsicID()) &&
+              callsGCLeafFunction(CB, *TLI))
+            continue;
+        } else if (callsGCLeafFunction(CB, *TLI)) {
           continue;
+        }
         if (llvm::any_of(FreshnessAnchors, [&](Instruction *Anchor) {
               return DT.dominates(Anchor, CB);
             }))

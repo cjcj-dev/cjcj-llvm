@@ -10,6 +10,9 @@
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-call-loop.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=ABORT,STALE
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-cj-statepoint.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=ABORT,STALE
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-no-call-diamond.ll -disable-output
+; RUN: not not opt -passes=cj-ir-verifier < %t/reject-cj-malloc.ll -disable-output 2>&1 | FileCheck %s --check-prefix=MALLOC
+; RUN: not not opt -passes=cj-ir-verifier < %t/reject-cj-invoke-gc.ll -disable-output 2>&1 | FileCheck %s --check-prefix=INVOKE
+; RUN: opt -passes=cj-ir-verifier < %t/allow-cj-gcread-generic.ll -disable-output
 
 ;--- allow-gcread-struct.ll
 %ArrayBase = type { i8 addrspace(1)*, i64 }
@@ -31,6 +34,7 @@ entry:
   %other.bytes = bitcast %Array* %other to i8*
   call void @llvm.cj.memset.p0i8(i8* %other.bytes, i8 0, i64 24, i1 false)
   call void @llvm.cj.gcread.struct.i64(i8* %other.bytes, i8 addrspace(1)* %base, i8 addrspace(1)* %arr.heap.bytes, i64 24), !AggType !0
+  %leaf.ref = call i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* null)
   %data.gep = getelementptr inbounds %Array, %Array* %arr, i32 0, i32 0
   %data = load i8 addrspace(1)*, i8 addrspace(1)** %data.gep
   %carrier = bitcast i8 addrspace(1)* %data to i8* addrspace(1)*
@@ -45,6 +49,7 @@ entry:
 
 declare void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)*, i8*, i64, i1)
 declare void @llvm.cj.gcread.struct.i64(i8*, i8 addrspace(1)*, i8 addrspace(1)*, i64)
+declare i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*)
 declare void @llvm.cj.memset.p0i8(i8*, i8, i64, i1)
 !0 = !{!"Array"}
 
@@ -310,3 +315,104 @@ declare void @llvm.cj.memset.p0i8(i8*, i8, i64, i1)
 ; STALE: Bare memcpy/memmove payload provenance is unknown
 
 ; ABORT: LLVM ERROR: Broken function found, compilation aborted
+; MALLOC: LLVM ERROR: Broken function found, compilation aborted
+; INVOKE: LLVM ERROR: Broken function found, compilation aborted
+
+;--- reject-cj-malloc.ll
+%ArrayBase = type { i8 addrspace(1)*, i64 }
+%Entry = type { i64, i64, i32, %Unit }
+%Unit = type { i8 }
+%Array = type { i8 addrspace(1)*, i64, i64 }
+%"ArrayLayout.Entry" = type { %ArrayBase, [0 x %Entry] }
+define void @reject_cj_malloc(i8 addrspace(1)* %base, i64 %idx, i8* %ti) gc "cangjie" {
+entry:
+  %src = alloca %Entry, align 8
+  %arr = alloca %Array, align 8
+  %arr.bytes = bitcast %Array* %arr to i8*
+  %base.array = bitcast i8 addrspace(1)* %base to %Array addrspace(1)*
+  %arr.heap.bytes = bitcast %Array addrspace(1)* %base.array to i8 addrspace(1)*
+  call void @llvm.cj.memset.p0i8(i8* %arr.bytes, i8 0, i64 24, i1 false)
+  call void @llvm.cj.gcread.struct.i64(i8* %arr.bytes, i8 addrspace(1)* %base, i8 addrspace(1)* %arr.heap.bytes, i64 24), !AggType !0
+  %new = call i8 addrspace(1)* @llvm.cj.malloc.object(i8* %ti, i32 16)
+  %data.gep = getelementptr inbounds %Array, %Array* %arr, i32 0, i32 0
+  %data = load i8 addrspace(1)*, i8 addrspace(1)** %data.gep
+  %carrier = bitcast i8 addrspace(1)* %data to i8* addrspace(1)*
+  %payload = getelementptr i8*, i8* addrspace(1)* %carrier, i32 1
+  %layout = bitcast i8* addrspace(1)* %payload to %"ArrayLayout.Entry" addrspace(1)*
+  %elt = getelementptr inbounds %"ArrayLayout.Entry", %"ArrayLayout.Entry" addrspace(1)* %layout, i32 0, i32 1, i64 %idx
+  %dst = bitcast %Entry addrspace(1)* %elt to i8 addrspace(1)*
+  %src.bytes = bitcast %Entry* %src to i8*
+  call void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)* %dst, i8* %src.bytes, i64 24, i1 false)
+  ret void
+}
+declare void @llvm.cj.gcread.struct.i64(i8*, i8 addrspace(1)*, i8 addrspace(1)*, i64)
+declare i8 addrspace(1)* @llvm.cj.malloc.object(i8*, i32)
+declare void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)*, i8*, i64, i1)
+declare void @llvm.cj.memset.p0i8(i8*, i8, i64, i1)
+!0 = !{!"Array"}
+
+;--- reject-cj-invoke-gc.ll
+%ArrayBase = type { i8 addrspace(1)*, i64 }
+%Entry = type { i64, i64, i32, %Unit }
+%Unit = type { i8 }
+%Array = type { i8 addrspace(1)*, i64, i64 }
+%"ArrayLayout.Entry" = type { %ArrayBase, [0 x %Entry] }
+define void @reject_cj_invoke_gc(i8 addrspace(1)* %base, i64 %idx) gc "cangjie" {
+entry:
+  %src = alloca %Entry, align 8
+  %arr = alloca %Array, align 8
+  %arr.bytes = bitcast %Array* %arr to i8*
+  %base.array = bitcast i8 addrspace(1)* %base to %Array addrspace(1)*
+  %arr.heap.bytes = bitcast %Array addrspace(1)* %base.array to i8 addrspace(1)*
+  call void @llvm.cj.memset.p0i8(i8* %arr.bytes, i8 0, i64 24, i1 false)
+  call void @llvm.cj.gcread.struct.i64(i8* %arr.bytes, i8 addrspace(1)* %base, i8 addrspace(1)* %arr.heap.bytes, i64 24), !AggType !0
+  call void @llvm.cj.invoke.gc(i1 false)
+  %data.gep = getelementptr inbounds %Array, %Array* %arr, i32 0, i32 0
+  %data = load i8 addrspace(1)*, i8 addrspace(1)** %data.gep
+  %carrier = bitcast i8 addrspace(1)* %data to i8* addrspace(1)*
+  %payload = getelementptr i8*, i8* addrspace(1)* %carrier, i32 1
+  %layout = bitcast i8* addrspace(1)* %payload to %"ArrayLayout.Entry" addrspace(1)*
+  %elt = getelementptr inbounds %"ArrayLayout.Entry", %"ArrayLayout.Entry" addrspace(1)* %layout, i32 0, i32 1, i64 %idx
+  %dst = bitcast %Entry addrspace(1)* %elt to i8 addrspace(1)*
+  %src.bytes = bitcast %Entry* %src to i8*
+  call void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)* %dst, i8* %src.bytes, i64 24, i1 false)
+  ret void
+}
+declare void @llvm.cj.gcread.struct.i64(i8*, i8 addrspace(1)*, i8 addrspace(1)*, i64)
+declare void @llvm.cj.invoke.gc(i1)
+declare void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)*, i8*, i64, i1)
+declare void @llvm.cj.memset.p0i8(i8*, i8, i64, i1)
+!0 = !{!"Array"}
+
+;--- allow-cj-gcread-generic.ll
+%ArrayBase = type { i8 addrspace(1)*, i64 }
+%Entry = type { i64, i64, i32, %Unit }
+%Unit = type { i8 }
+%Array = type { i8 addrspace(1)*, i64, i64 }
+%"ArrayLayout.Entry" = type { %ArrayBase, [0 x %Entry] }
+define void @allow_cj_gcread_generic(i8 addrspace(1)* %base, i64 %idx) gc "cangjie" {
+entry:
+  %src = alloca %Entry, align 8
+  %arr = alloca %Array, align 8
+  %arr.bytes = bitcast %Array* %arr to i8*
+  %base.array = bitcast i8 addrspace(1)* %base to %Array addrspace(1)*
+  %arr.heap.bytes = bitcast %Array addrspace(1)* %base.array to i8 addrspace(1)*
+  call void @llvm.cj.memset.p0i8(i8* %arr.bytes, i8 0, i64 24, i1 false)
+  call void @llvm.cj.gcread.struct.i64(i8* %arr.bytes, i8 addrspace(1)* %base, i8 addrspace(1)* %arr.heap.bytes, i64 24), !AggType !0
+  call void @llvm.cj.gcread.generic(i8 addrspace(1)* %base, i8 addrspace(1)* %base, i8 addrspace(1)* %base, i32 8)
+  %data.gep = getelementptr inbounds %Array, %Array* %arr, i32 0, i32 0
+  %data = load i8 addrspace(1)*, i8 addrspace(1)** %data.gep
+  %carrier = bitcast i8 addrspace(1)* %data to i8* addrspace(1)*
+  %payload = getelementptr i8*, i8* addrspace(1)* %carrier, i32 1
+  %layout = bitcast i8* addrspace(1)* %payload to %"ArrayLayout.Entry" addrspace(1)*
+  %elt = getelementptr inbounds %"ArrayLayout.Entry", %"ArrayLayout.Entry" addrspace(1)* %layout, i32 0, i32 1, i64 %idx
+  %dst = bitcast %Entry addrspace(1)* %elt to i8 addrspace(1)*
+  %src.bytes = bitcast %Entry* %src to i8*
+  call void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)* %dst, i8* %src.bytes, i64 24, i1 false)
+  ret void
+}
+declare void @llvm.cj.gcread.struct.i64(i8*, i8 addrspace(1)*, i8 addrspace(1)*, i64)
+declare void @llvm.cj.gcread.generic(i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)*, i32)
+declare void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)*, i8*, i64, i1)
+declare void @llvm.cj.memset.p0i8(i8*, i8, i64, i1)
+!0 = !{!"Array"}

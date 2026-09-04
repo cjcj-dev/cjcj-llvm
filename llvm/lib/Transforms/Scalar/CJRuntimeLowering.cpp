@@ -61,52 +61,74 @@ const static StringRef C2NStubStr = "CJ_MCC_C2NStub";
 const static StringRef N2CStubStr = "CJ_MCC_N2CStub";
 const static StringRef FinalizerStr = "CJ_MCC_OnFinalizerCreated";
 
+struct RuntimeLoweringInfo {
+  StringRef Name;
+  bool SafepointCapable;
+};
+
 template <typename KeyT, typename ValT>
 using StdMap = std::unordered_map<KeyT, ValT>;
-const static StdMap<unsigned, StringRef> RuntimeMap {
-    {Intrinsic::cj_invoke_gc, "CJ_MCC_InvokeGC"},
-    {Intrinsic::cj_get_obj_klass, "CJ_MCC_GetObjClass"},
-    {Intrinsic::cj_malloc_object, "CJ_MCC_NewObject"},
-    {Intrinsic::cj_alloca_generic, "CJ_MCC_NewObject"},
-    {Intrinsic::cj_malloc_array_generic, "CJ_MCC_NewArrayGeneric"},
-    {Intrinsic::cj_get_vtable_func, "CJ_MCC_UpdateVMT"},
-    {Intrinsic::cj_get_mtable_func, "CJ_MCC_GetMTable"},
-    {Intrinsic::cj_get_method_outertype, "CJ_MCC_GetMethodOuterTI"},
-    {Intrinsic::cj_acquire_rawdata, "CJ_MCC_AcquireRawData"},
-    {Intrinsic::cj_release_rawdata, "CJ_MCC_ReleaseRawData"},
-    {Intrinsic::cj_post_throw_exception, "CJ_MCC_PostThrowException"},
-    {Intrinsic::cj_throw_exception, "CJ_MCC_ThrowException"},
-    {Intrinsic::cj_fill_in_stack_trace, "CJ_MCC_FillInStackTrace"},
-    {Intrinsic::cj_pre_initialize_package, "CJ_MRT_PreInitializePackage"},
-    {Intrinsic::cj_get_exception_wrapper, "CJ_MCC_GetExceptionWrapper"},
-    {Intrinsic::cj_get_exception_typeid, "CJ_MC_CGetExceptionTypeID"},
-    {Intrinsic::cj_set_gc_threshold, "CJ_MCC_SetGCThreshold"},
-    {Intrinsic::cj_get_real_heap_size, "CJ_MCC_GetRealHeapSize"},
-    {Intrinsic::cj_get_allocated_heap_size, "CJ_MCC_GetAllocatedHeapSize"},
-    {Intrinsic::cj_get_max_heap_size, "CJ_MCC_GetMaxHeapSize"},
-    {Intrinsic::cj_dump_heap_data, "CJ_MCC_DumpCJHeapData"},
-    {Intrinsic::cj_get_thread_number, "CJ_MCC_GetCJThreadNumber"},
+const static StdMap<unsigned, RuntimeLoweringInfo> RuntimeMap {
+    {Intrinsic::cj_invoke_gc, {"CJ_MCC_InvokeGC", true}},
+    {Intrinsic::cj_get_obj_klass, {"CJ_MCC_GetObjClass", false}},
+    {Intrinsic::cj_malloc_object, {"CJ_MCC_NewObject", true}},
+    // malloc.array selects one of the CJ_MCC_NewArray* entry points in
+    // getMallocArrayFuncName; keep its safepoint classification in this same
+    // table even though its callee name is shape-dependent.
+    {Intrinsic::cj_malloc_array, {"", true}},
+    {Intrinsic::cj_alloca_generic, {"CJ_MCC_NewObject", true}},
+    {Intrinsic::cj_malloc_array_generic, {"CJ_MCC_NewArrayGeneric", true}},
+    {Intrinsic::cj_division_check_sdiv,
+     {"CJ_MCC_ThrowArithmeticException", true}},
+    {Intrinsic::cj_division_check_udiv,
+     {"CJ_MCC_ThrowArithmeticException", true}},
+    {Intrinsic::cj_division_check_srem,
+     {"CJ_MCC_ThrowArithmeticException", true}},
+    {Intrinsic::cj_division_check_urem,
+     {"CJ_MCC_ThrowArithmeticException", true}},
+    {Intrinsic::cj_get_vtable_func, {"CJ_MCC_UpdateVMT", false}},
+    {Intrinsic::cj_get_mtable_func, {"CJ_MCC_GetMTable", false}},
+    {Intrinsic::cj_get_method_outertype, {"CJ_MCC_GetMethodOuterTI", false}},
+    {Intrinsic::cj_acquire_rawdata, {"CJ_MCC_AcquireRawData", false}},
+    {Intrinsic::cj_release_rawdata, {"CJ_MCC_ReleaseRawData", false}},
+    {Intrinsic::cj_post_throw_exception, {"CJ_MCC_PostThrowException", false}},
+    {Intrinsic::cj_throw_exception, {"CJ_MCC_ThrowException", true}},
+    {Intrinsic::cj_fill_in_stack_trace, {"CJ_MCC_FillInStackTrace", true}},
+    {Intrinsic::cj_pre_initialize_package,
+     {"CJ_MRT_PreInitializePackage", false}},
+    {Intrinsic::cj_get_exception_wrapper, {"CJ_MCC_GetExceptionWrapper", false}},
+    {Intrinsic::cj_get_exception_typeid, {"CJ_MC_CGetExceptionTypeID", false}},
+    {Intrinsic::cj_set_gc_threshold, {"CJ_MCC_SetGCThreshold", false}},
+    {Intrinsic::cj_get_real_heap_size, {"CJ_MCC_GetRealHeapSize", false}},
+    {Intrinsic::cj_get_allocated_heap_size,
+     {"CJ_MCC_GetAllocatedHeapSize", false}},
+    {Intrinsic::cj_get_max_heap_size, {"CJ_MCC_GetMaxHeapSize", false}},
+    {Intrinsic::cj_dump_heap_data, {"CJ_MCC_DumpCJHeapData", false}},
+    {Intrinsic::cj_get_thread_number, {"CJ_MCC_GetCJThreadNumber", false}},
     {Intrinsic::cj_get_blocking_thread_number,
-     "CJ_MCC_GetBlockingCJThreadNumber"},
-    {Intrinsic::cj_get_native_thread_number, "CJ_MCC_GetNativeThreadNumber"},
-    {Intrinsic::cj_get_gc_count, "CJ_MCC_GetGCCount"},
-    {Intrinsic::cj_get_gc_time_us, "CJ_MCC_GetGCTimeUs"},
-    {Intrinsic::cj_get_gc_freed_size, "CJ_MCC_GetGCFreedSize"},
-    {Intrinsic::cj_start_cpu_profiling, "CJ_MCC_StartCpuProfiling"},
-    {Intrinsic::cj_stop_cpu_profiling, "CJ_MCC_StopCpuProfiling"},
+     {"CJ_MCC_GetBlockingCJThreadNumber", false}},
+    {Intrinsic::cj_get_native_thread_number,
+     {"CJ_MCC_GetNativeThreadNumber", false}},
+    {Intrinsic::cj_get_gc_count, {"CJ_MCC_GetGCCount", false}},
+    {Intrinsic::cj_get_gc_time_us, {"CJ_MCC_GetGCTimeUs", false}},
+    {Intrinsic::cj_get_gc_freed_size, {"CJ_MCC_GetGCFreedSize", false}},
+    {Intrinsic::cj_start_cpu_profiling,
+     {"CJ_MCC_StartCpuProfiling", false}},
+    {Intrinsic::cj_stop_cpu_profiling,
+     {"CJ_MCC_StopCpuProfiling", false}},
     {Intrinsic::cj_register_implicit_exception_raisers,
-     "CJ_MCC_RegisterImplicitExceptionRaisers"},
-    {Intrinsic::cj_get_type_info, "CJ_MCC_GetOrCreateTypeInfo"},
-    {Intrinsic::cj_is_subtype, "CJ_MCC_IsSubType"},
-    {Intrinsic::cj_is_tupletype_of, "CJ_MCC_IsTupleTypeOf"},
-    {Intrinsic::cj_is_typeinfo_equal, "CJ_MCC_IsTypeInfoEqual"},
-    {Intrinsic::cj_set_location, "SetDebugLocation"},
-    {Intrinsic::cj_cross_access_barrier, "CJ_MCC_CrossAccessBarrier"},
-    {Intrinsic::cj_get_exported_ref, "CJ_MCC_GetExportedRef"},
-    {Intrinsic::cj_remove_exported_ref, "CJ_MCC_RemoveExportedRef"},
-    {Intrinsic::cj_create_export_handle, "CJ_MCC_CreateExportHandle"},
-    {Intrinsic::cj_blackhole, "CJ_LLVM_BlackHole"},
-    {Intrinsic::cj_get_lambda_addr, "CJ_MCC_GetJSLambdaAddr"}};
+     {"CJ_MCC_RegisterImplicitExceptionRaisers", false}},
+    {Intrinsic::cj_get_type_info, {"CJ_MCC_GetOrCreateTypeInfo", false}},
+    {Intrinsic::cj_is_subtype, {"CJ_MCC_IsSubType", false}},
+    {Intrinsic::cj_is_tupletype_of, {"CJ_MCC_IsTupleTypeOf", false}},
+    {Intrinsic::cj_is_typeinfo_equal, {"CJ_MCC_IsTypeInfoEqual", false}},
+    {Intrinsic::cj_set_location, {"SetDebugLocation", false}},
+    {Intrinsic::cj_cross_access_barrier, {"CJ_MCC_CrossAccessBarrier", true}},
+    {Intrinsic::cj_get_exported_ref, {"CJ_MCC_GetExportedRef", true}},
+    {Intrinsic::cj_remove_exported_ref, {"CJ_MCC_RemoveExportedRef", true}},
+    {Intrinsic::cj_create_export_handle, {"CJ_MCC_CreateExportHandle", true}},
+    {Intrinsic::cj_blackhole, {"CJ_LLVM_BlackHole", false}},
+    {Intrinsic::cj_get_lambda_addr, {"CJ_MCC_GetJSLambdaAddr", false}}};
 
 struct LowerGetFieldOffset {
   CallBase *CI;
@@ -766,7 +788,7 @@ private:
     } else {
       auto Itr = RuntimeMap.find(IID);
       assert(Itr != RuntimeMap.end() && "Runtime function don`t exist.");
-      return Itr->second;
+      return Itr->second.Name;
     }
   }
 
@@ -924,6 +946,17 @@ private:
   }
 };
 } // namespace
+
+bool llvm::cjIntrinsicLowersToSafepointCapableCall(Intrinsic::ID ID) {
+  auto Runtime = RuntimeMap.find(ID);
+  if (Runtime != RuntimeMap.end())
+    return Runtime->second.SafepointCapable;
+  // Barrier intrinsics are lowered by CJBarrierLowering after
+  // PlaceSafepoints/CJRewriteStatepoint.  Their eventual CJ_MCC_* calls are
+  // therefore not calls on which RSP inserts a statepoint at this verifier
+  // program point; they retain the intrinsic (leaf) policy here.
+  return false;
+}
 
 static bool isCJBlockingFunc(Function &F) {
   if (CJPipeline && F.getName().equals("system")) {
