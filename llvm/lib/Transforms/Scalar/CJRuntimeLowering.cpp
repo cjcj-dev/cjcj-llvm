@@ -920,6 +920,7 @@ private:
     // Set terminator for invoke instruction.
     if (auto *II = dyn_cast<InvokeInst>(CI)) {
       IRB.CreateBr(II->getNormalDest());
+      II->getUnwindDest()->removePredecessor(II->getParent());
     }
     CI->eraseFromParent();
     return true;
