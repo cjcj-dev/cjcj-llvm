@@ -911,6 +911,16 @@ void CJBarrierLowering::getAnalysisUsage(AnalysisUsage &AU) const {
 
 /// doInitialization - If this module uses the GC intrinsics, find them now.
 bool CJBarrierLowering::doInitialization(Module &M) {
+  bool HasCangjieFunction = false;
+  for (const Function &F : M) {
+    if (F.hasCangjieGC()) {
+      HasCangjieFunction = true;
+      break;
+    }
+  }
+  if (!HasCangjieFunction)
+    return false;
+
   Function *GCStateCheckFunc = M.getFunction("GetGCPhase");
   if (GCStateCheckFunc != nullptr) { // have GetGCPhase in module
     return false;

@@ -1133,11 +1133,16 @@ bool TargetPassConfig::addISelPasses() {
       addPass(createPlaceSafepointsLegacyPass());
       addPass(createCJRewriteStatepointLegacyPass(0));
     }
-    addPass(createCJBarrierLoweringPass(getOptLevel()));
     if (CangjieThreadSanitizer) {
       addPass(createThreadSanitizerPass());
     }
   }
+
+  // A function's GC strategy is sufficient to identify Cangjie barrier IR.
+  // Frontends can feed such IR directly to llc without selecting the wider
+  // optimization pipeline, but the barriers must still be consumed before
+  // instruction selection.
+  addPass(createCJBarrierLoweringPass(getOptLevel()));
 
   addIRPasses();
   addCodeGenPrepare();
