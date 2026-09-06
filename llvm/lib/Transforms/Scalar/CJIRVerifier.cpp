@@ -1832,9 +1832,54 @@ private:
            isa<GlobalVariable>(Base);
   }
 
+  // Cangjie uncolour ABI: colour lives in bits 48+ of an AS1 pointer
+  // (IRBuilder.cj UncolorIfGCPtr, mask 0x0000FFFFFFFFFFFF).  Dual of
+  // SafepointIRVerifier.cpp:1004-1005 AddressBits=48.  ZGC's
+  // ZAddressOffsetMask (zAddress.hpp:39) is the offset field of an
+  // *uncoloured* zaddress; ZGC colour is in the low metadata bits of a
+  // zpointer (zAddress.hpp:48-73), so the numeric mask is not copied from
+  // HotSpot.  A ptrmask is identity-preserving for provenance iff it is
+  // this exact constant (keep bits [0,47], clear [48,63]).
+  static constexpr unsigned UncolourAddressBits = 48;
+  static constexpr uint64_t UncolourAddressMask =
+      (uint64_t(1) << UncolourAddressBits) - 1;
+
+  bool isUncolourPtrmask(const IntrinsicInst *II) {
+    if (!II || II->getIntrinsicID() != Intrinsic::ptrmask)
+      return false;
+    auto *Mask = dyn_cast<ConstantInt>(II->getArgOperand(1));
+    return Mask && Mask->getValue().getActiveBits() <= 64 &&
+           Mask->getZExtValue() == UncolourAddressMask;
+  }
+
+  Value *peelUncolourPtrmasks(Value *V) {
+    SmallPtrSet<Value *, 4> Seen;
+    while (auto *II = dyn_cast<IntrinsicInst>(V)) {
+      if (!Seen.insert(V).second)
+        break;
+      if (!isUncolourPtrmask(II))
+        break;
+      V = II->getArgOperand(0);
+    }
+    return V;
+  }
+
+  Value *stripConstantOffsetsThroughUncolourPtrmask(Value *Ptr, APInt &Offset) {
+    SmallPtrSet<Value *, 8> Seen;
+    while (Seen.insert(Ptr).second) {
+      Value *Stripped =
+          Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
+      if (!isUncolourPtrmask(dyn_cast<IntrinsicInst>(Stripped)))
+        return Stripped;
+      Ptr = cast<IntrinsicInst>(Stripped)->getArgOperand(0);
+    }
+    return Ptr;
+  }
+
   IntrinsicInst *getKnownHeapAllocation(Value *Base,
                                         StructType *&LayoutTy) {
     LayoutTy = nullptr;
+    Base = peelUncolourPtrmasks(Base);
     auto *Allocation = dyn_cast<IntrinsicInst>(Base);
     if (!Allocation)
       return nullptr;
@@ -2172,7 +2217,7 @@ private:
       return ReferencePayloadKind::Unknown;
 
     APInt Offset(DL.getIndexSizeInBits(PtrTy->getAddressSpace()), 0);
-    Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
+    Value *Base = stripConstantOffsetsThroughUncolourPtrmask(Ptr, Offset);
     StructType *LayoutTy = nullptr;
     auto *Allocation = getKnownHeapAllocation(Base, LayoutTy);
     if (!Allocation ||
