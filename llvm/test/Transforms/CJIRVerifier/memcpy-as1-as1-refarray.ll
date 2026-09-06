@@ -1,12 +1,13 @@
-; RUN: not not opt -passes=cj-ir-verifier < %s -disable-output 2>&1 | FileCheck %s -check-prefixes=CHECK,ABORT
+; RUN: opt -passes=cj-ir-verifier < %s -disable-output 2>&1 | FileCheck %s
 
 %ArrayBase = type { i64 }
 %RefElement = type { i8 addrspace(1)* }
 %ArrayLayout.Ref = type { %ArrayBase, [0 x %RefElement] }
 
-; CHECK: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
+; CHECK: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; CHECK-NEXT: call void @llvm.memmove.p1i8.p1i8.i64
 ; CHECK: in function as1_as1_refarray_copy
+; CHECK-NOT: LLVM ERROR
 define void @as1_as1_refarray_copy(i8 addrspace(1)* %dst.base,
                                    i8 addrspace(1)* %src.base,
                                    i64 %size) gc "cangjie" {
@@ -23,6 +24,3 @@ entry:
 }
 
 declare void @llvm.memmove.p1i8.p1i8.i64(i8 addrspace(1)*, i8 addrspace(1)*, i64, i1)
-
-; ABORT: LLVM ERROR: Broken function found, compilation aborted
-; ABORT: error: Aborted

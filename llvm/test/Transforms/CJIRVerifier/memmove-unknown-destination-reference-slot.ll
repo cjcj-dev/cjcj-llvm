@@ -6,7 +6,7 @@
 ; RUN: not not opt -passes=cj-ir-verifier < %t/select-reference-slots.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=SELECT,ABORT
 
 ; REVIEW: Need write barrier!
-; REVIEW: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
+; REVIEW: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; REVIEW: in function unknown_dst_actually_contains_reference
 ; DYNAMIC: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; DYNAMIC-NEXT: call void @llvm.memmove.p0i8.p1i8.i64

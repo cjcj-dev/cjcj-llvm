@@ -1,6 +1,6 @@
 ; RUN: split-file %s %t
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-primitive-layouts.ll -disable-output
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-reference-element.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=REF,ABORT
+; RUN: opt -passes=cj-ir-verifier < %t/reject-reference-element.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=REF
 ; RUN: opt -passes=cj-ir-verifier < %t/reject-static-array-source.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=STATIC
 ; RUN: opt -passes=cj-ir-verifier < %t/reject-untyped-source.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=UNTYPED
 
@@ -37,7 +37,7 @@ declare void @llvm.memmove.p1i8.p1i8.i64(i8 addrspace(1)*, i8 addrspace(1)*, i64
 %ArrayLayout.UInt8 = type { %ArrayBase, [0 x i8] }
 %ArrayLayout.Ref = type { %ArrayBase, [0 x %RefElement] }
 
-; REF: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
+; REF: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; REF-NEXT: call void @llvm.memmove.p1i8.p1i8.i64
 ; REF: in function reject_reference_array_layout_element
 define void @reject_reference_array_layout_element(

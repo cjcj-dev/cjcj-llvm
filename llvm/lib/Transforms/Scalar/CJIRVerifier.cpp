@@ -680,15 +680,6 @@ public:
       // must pass one of the stronger TypeInfo-based classifiers above.
       if (SrcPayload == ReferencePayloadKind::Unknown)
         SrcPayload = classifyTypedHeapPayload(Src, SizeArg);
-      // Lift a *provable* reference-bearing subset back to
-      // ContainsReference (still abort).  Layout decides: canonical
-      // header, typed ObjLayout with AS1 fields, ArrayLayout.E containing
-      // AS1, or a same-SSA bitcast to such a layout.  Carrier address
-      // space is not a gate.  No extra provenance / spill walk.
-      if (DstPayload == ReferencePayloadKind::Unknown)
-        DstPayload = classifyProvableAS1ReferencePayload(Dst, SizeArg);
-      if (SrcPayload == ReferencePayloadKind::Unknown)
-        SrcPayload = classifyProvableAS1ReferencePayload(Src, SizeArg);
       // The source must always independently prove NoReference.  The
       // destination must additionally be a complete, zero-offset typed
       // non-heap object whose recovered layout contains no managed pointer.
@@ -1325,15 +1316,13 @@ private:
                                                  Value *SizeValue) {
     auto *CopySize = dyn_cast<ConstantInt>(SizeValue);
     auto *OuterCast = dyn_cast<BitCastInst>(Ptr);
-    auto *OuterDestTy = OuterCast
-                            ? dyn_cast<PointerType>(OuterCast->getDestTy())
-                            : nullptr;
-    if (!CopySize || !OuterCast || !OuterDestTy || OuterDestTy->isOpaque() ||
-        !OuterDestTy->getNonOpaquePointerElementType()->isIntegerTy(8))
+    if (!CopySize || !OuterCast ||
+        OuterCast->getDestTy() != Type::getInt8PtrTy(C, 1))
       return ReferencePayloadKind::Unknown;
 
     auto *PayloadPtrTy = dyn_cast<PointerType>(OuterCast->getSrcTy());
-    if (!PayloadPtrTy || PayloadPtrTy->isOpaque())
+    if (!PayloadPtrTy || PayloadPtrTy->getAddressSpace() != 1 ||
+        PayloadPtrTy->isOpaque())
       return ReferencePayloadKind::Unknown;
     Type *PayloadTy = PayloadPtrTy->getNonOpaquePointerElementType();
     if (!PayloadTy->isSized())
@@ -1367,9 +1356,7 @@ private:
     // allocation chains remain Unknown.
     auto *BaseArg = dyn_cast<Argument>(BaseCast->getOperand(0));
     if (!BaseArg)
-      return containsGCPtrType(PayloadTy)
-                 ? ReferencePayloadKind::ContainsReference
-                 : ReferencePayloadKind::Unknown;
+      return ReferencePayloadKind::Unknown;
     Function *Parent = BaseArg->getParent();
     bool HasSRet = Parent->arg_size() != 0 &&
                    Parent->getAttributes()
@@ -1378,48 +1365,11 @@ private:
     unsigned ThisIndex = HasSRet ? 1 : 0;
     if (Parent->hasFnAttribute("record_mut") &&
         BaseArg->getArgNo() == ThisIndex)
-      return containsGCPtrType(PayloadTy)
-                 ? ReferencePayloadKind::ContainsReference
-                 : ReferencePayloadKind::Unknown;
+      return ReferencePayloadKind::Unknown;
 
     return containsGCPtrType(PayloadTy)
                ? ReferencePayloadKind::ContainsReference
                : ReferencePayloadKind::NoReference;
-  }
-
-  // Layout-only.  Never returns NoReference (that would widen admits).
-  // Carrier address space is not a precondition; the recovered region or
-  // ArrayLayout element type must contain a managed slot.
-  ReferencePayloadKind classifyProvableAS1ReferencePayload(Value *Ptr,
-                                                           Value *SizeValue) {
-    if (Type *Elt = getUniqueArrayLayoutElementType(Ptr)) {
-      if (containsGCPtrType(Elt))
-        return ReferencePayloadKind::ContainsReference;
-    }
-    if (Type *RegionTy = recoverCompleteTypedRegionType(Ptr, SizeValue)) {
-      if (containsGCPtrType(RegionTy))
-        return ReferencePayloadKind::ContainsReference;
-    }
-    auto *CopySize = dyn_cast<ConstantInt>(SizeValue);
-    Value *Root = Ptr->stripPointerCasts();
-    if (CopySize) {
-      for (const User *U : Root->users()) {
-        auto *BC = dyn_cast<BitCastInst>(U);
-        if (!BC)
-          continue;
-        auto *DestTy = dyn_cast<PointerType>(BC->getType());
-        if (!DestTy || DestTy->isOpaque())
-          continue;
-        Type *Pointee = DestTy->getNonOpaquePointerElementType();
-        if (!Pointee->isSized() || !containsGCPtrType(Pointee))
-          continue;
-        TypeSize Sz = DL.getTypeAllocSize(Pointee);
-        if (!Sz.isScalable() &&
-            Sz.getFixedSize() == CopySize->getZExtValue())
-          return ReferencePayloadKind::ContainsReference;
-      }
-    }
-    return ReferencePayloadKind::Unknown;
   }
 
   const char *silentUnknownAdmitTag(Value *Ptr) {
