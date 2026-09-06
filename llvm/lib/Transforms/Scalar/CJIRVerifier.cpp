@@ -315,13 +315,15 @@ public:
 
   bool verify(Function &F, const TargetLibraryInfo &FunctionTLI) {
     Broken = false;
+    PrintedFunctionLocator = false;
     TLI = &FunctionTLI;
     CurrentFunction = &F;
     CurrentGlobal = nullptr;
     visit(F);
-    if (Broken && !ReportMode) {
+    if (Broken && !ReportMode && !PrintedFunctionLocator) {
       errs() << "in function " << F.getName() << '\n';
     }
+    PrintedFunctionLocator = false;
     return Broken;
   }
 
@@ -678,22 +680,15 @@ public:
       // must pass one of the stronger TypeInfo-based classifiers above.
       if (SrcPayload == ReferencePayloadKind::Unknown)
         SrcPayload = classifyTypedHeapPayload(Src, SizeArg);
-      // AS1→AS1 whole-object / ref-array copies: lift a *provable*
-      // reference-bearing subset back to ContainsReference (still abort).
-      // Uses only existing helpers (canonical header + typed ObjLayout
-      // with AS1 fields, ArrayLayout.E containing AS1, or a same-SSA
-      // bitcast to such a layout).  No extra provenance / spill walk.
-      // Producer side never emits bare memcpy for ref payload
-      // (CJNativeIRBuilder.cpp:1330-1350; cjcj IRBuilder.cj CreateCopyTo).
-      auto *DstPtrTy = dyn_cast<PointerType>(Dst->getType());
-      auto *SrcPtrTy = dyn_cast<PointerType>(Src->getType());
-      if (DstPtrTy && SrcPtrTy && DstPtrTy->getAddressSpace() == 1 &&
-          SrcPtrTy->getAddressSpace() == 1) {
-        if (DstPayload == ReferencePayloadKind::Unknown)
-          DstPayload = classifyProvableAS1ReferencePayload(Dst, SizeArg);
-        if (SrcPayload == ReferencePayloadKind::Unknown)
-          SrcPayload = classifyProvableAS1ReferencePayload(Src, SizeArg);
-      }
+      // Lift a *provable* reference-bearing subset back to
+      // ContainsReference (still abort).  Layout decides: canonical
+      // header, typed ObjLayout with AS1 fields, ArrayLayout.E containing
+      // AS1, or a same-SSA bitcast to such a layout.  Carrier address
+      // space is not a gate.  No extra provenance / spill walk.
+      if (DstPayload == ReferencePayloadKind::Unknown)
+        DstPayload = classifyProvableAS1ReferencePayload(Dst, SizeArg);
+      if (SrcPayload == ReferencePayloadKind::Unknown)
+        SrcPayload = classifyProvableAS1ReferencePayload(Src, SizeArg);
       // The source must always independently prove NoReference.  The
       // destination must additionally be a complete, zero-offset typed
       // non-heap object whose recovered layout contains no managed pointer.
@@ -996,6 +991,7 @@ private:
   const GlobalVariable *CurrentGlobal = nullptr;
   // Trace Check for Errors
   bool Broken = false;
+  bool PrintedFunctionLocator = false;
 
   void verifyTypeInfo(GlobalVariable &GV) {
     TypeInfo Klass(&GV);
@@ -1329,13 +1325,15 @@ private:
                                                  Value *SizeValue) {
     auto *CopySize = dyn_cast<ConstantInt>(SizeValue);
     auto *OuterCast = dyn_cast<BitCastInst>(Ptr);
-    if (!CopySize || !OuterCast ||
-        OuterCast->getDestTy() != Type::getInt8PtrTy(C, 1))
+    auto *OuterDestTy = OuterCast
+                            ? dyn_cast<PointerType>(OuterCast->getDestTy())
+                            : nullptr;
+    if (!CopySize || !OuterCast || !OuterDestTy || OuterDestTy->isOpaque() ||
+        !OuterDestTy->getNonOpaquePointerElementType()->isIntegerTy(8))
       return ReferencePayloadKind::Unknown;
 
     auto *PayloadPtrTy = dyn_cast<PointerType>(OuterCast->getSrcTy());
-    if (!PayloadPtrTy || PayloadPtrTy->getAddressSpace() != 1 ||
-        PayloadPtrTy->isOpaque())
+    if (!PayloadPtrTy || PayloadPtrTy->isOpaque())
       return ReferencePayloadKind::Unknown;
     Type *PayloadTy = PayloadPtrTy->getNonOpaquePointerElementType();
     if (!PayloadTy->isSized())
@@ -1389,12 +1387,11 @@ private:
                : ReferencePayloadKind::NoReference;
   }
 
-  // Heap-to-heap only.  Never returns NoReference (that would widen admits).
+  // Layout-only.  Never returns NoReference (that would widen admits).
+  // Carrier address space is not a precondition; the recovered region or
+  // ArrayLayout element type must contain a managed slot.
   ReferencePayloadKind classifyProvableAS1ReferencePayload(Value *Ptr,
                                                            Value *SizeValue) {
-    auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
-    if (!PtrTy || PtrTy->getAddressSpace() != 1)
-      return ReferencePayloadKind::Unknown;
     if (Type *Elt = getUniqueArrayLayoutElementType(Ptr)) {
       if (containsGCPtrType(Elt))
         return ReferencePayloadKind::ContainsReference;
@@ -1411,7 +1408,7 @@ private:
         if (!BC)
           continue;
         auto *DestTy = dyn_cast<PointerType>(BC->getType());
-        if (!DestTy || DestTy->getAddressSpace() != 1 || DestTy->isOpaque())
+        if (!DestTy || DestTy->isOpaque())
           continue;
         Type *Pointee = DestTy->getNonOpaquePointerElementType();
         if (!Pointee->isSized() || !containsGCPtrType(Pointee))
@@ -1431,12 +1428,11 @@ private:
       if (isa<SelectInst>(Cur) || isa<PHINode>(Cur))
         return "selected-base";
       if (auto *GEP = dyn_cast<GetElementPtrInst>(Cur)) {
-        if (GEP->getNumIndices() > 1) {
-          if (auto *AT = dyn_cast<ArrayType>(GEP->getSourceElementType())) {
-            if (AT->getElementType()->isPointerTy())
-              return "multi-index";
-          }
-        }
+        // Invariant: an early-exit that recovered its region through a
+        // multi-index GEP has not proven a unique object base (interior
+        // field/element).  Do not enumerate GEP source syntax.
+        if (GEP->getNumIndices() > 1)
+          return "multi-index";
         Cur = GEP->getPointerOperand();
         continue;
       }
@@ -3043,11 +3039,15 @@ private:
         *OS << '\n';
       }
       // Intentionally do not set Broken: report is diagnostic-only.
-      // Print the same locator reject() relies on via verify().
-      if (CurrentFunction)
-        *OS << "in function " << CurrentFunction->getName() << '\n';
-      else if (CurrentGlobal)
-        *OS << "in global value " << CurrentGlobal->getName() << '\n';
+      // Skip the locator when verify() will reprint it on Broken.
+      if (!Broken) {
+        if (CurrentFunction) {
+          *OS << "in function " << CurrentFunction->getName() << '\n';
+          PrintedFunctionLocator = true;
+        } else if (CurrentGlobal) {
+          *OS << "in global value " << CurrentGlobal->getName() << '\n';
+        }
+      }
     }
   }
 
