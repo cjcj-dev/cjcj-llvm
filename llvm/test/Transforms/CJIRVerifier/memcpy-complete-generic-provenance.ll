@@ -9,8 +9,10 @@
 ; REF: in function reject_same_size_reference_payload
 ; PARTIAL: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; PARTIAL-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
+; PARTIAL: in function reject_partial_generic_payload
 ; OPAQUE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; OPAQUE-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
+; OPAQUE: in function reject_opaque_source
 ; ABORT: LLVM ERROR: Broken function found, compilation aborted
 ; ABORT: error: Aborted
 

@@ -573,11 +573,36 @@ public:
       if (auto *Copy = dyn_cast<MemTransferInst>(&Call))
         if (isCJTypedReadHelperCandidate(*Copy, DL))
           break;
-      if (isNoReferenceMemTransfer(Dst, Src, SizeArg))
+      if (isNoReferenceMemTransfer(Dst, Src, SizeArg)) {
+        // MULTI-index GEP / select-or-phi base can still recover a Plain
+        // region and used to leave with rc=0 and empty stderr.  Fold that
+        // fourth exit into the unknown report ledger.
+        const char *Silent = silentUnknownAdmitTag(Src);
+        if (!Silent)
+          Silent = silentUnknownAdmitTag(Dst);
+        if (Silent)
+          reportUnknownPayload(
+              Twine("Bare memcpy/memmove payload provenance is unknown; use "
+                    "cj_array_copy_ref, a typed helper, or supply typed "
+                    "provenance. [silent-exit:") +
+                  Silent + "]",
+              &Call);
         break;
+      }
       if (auto *Copy = dyn_cast<MemTransferInst>(&Call))
-        if (isNoAS1FieldCarrierMemTransfer(*Copy))
+        if (isNoAS1FieldCarrierMemTransfer(*Copy)) {
+          const char *Silent = silentUnknownAdmitTag(Src);
+          if (!Silent)
+            Silent = silentUnknownAdmitTag(Dst);
+          if (Silent)
+            reportUnknownPayload(
+                Twine("Bare memcpy/memmove payload provenance is unknown; use "
+                      "cj_array_copy_ref, a typed helper, or supply typed "
+                      "provenance. [silent-exit:") +
+                    Silent + "]",
+                &Call);
           break;
+        }
       Type *DstCompleteTy = getCompleteTypedNonHeapObjectType(Dst, SizeArg);
       Type *SrcCompleteTy = getCompleteTypedNonHeapObjectType(Src, SizeArg);
       // Both sides independently prove a complete typed non-heap object copy.
@@ -653,6 +678,22 @@ public:
       // must pass one of the stronger TypeInfo-based classifiers above.
       if (SrcPayload == ReferencePayloadKind::Unknown)
         SrcPayload = classifyTypedHeapPayload(Src, SizeArg);
+      // AS1→AS1 whole-object / ref-array copies: lift a *provable*
+      // reference-bearing subset back to ContainsReference (still abort).
+      // Uses only existing helpers (canonical header + typed ObjLayout
+      // with AS1 fields, ArrayLayout.E containing AS1, or a same-SSA
+      // bitcast to such a layout).  No extra provenance / spill walk.
+      // Producer side never emits bare memcpy for ref payload
+      // (CJNativeIRBuilder.cpp:1330-1350; cjcj IRBuilder.cj CreateCopyTo).
+      auto *DstPtrTy = dyn_cast<PointerType>(Dst->getType());
+      auto *SrcPtrTy = dyn_cast<PointerType>(Src->getType());
+      if (DstPtrTy && SrcPtrTy && DstPtrTy->getAddressSpace() == 1 &&
+          SrcPtrTy->getAddressSpace() == 1) {
+        if (DstPayload == ReferencePayloadKind::Unknown)
+          DstPayload = classifyProvableAS1ReferencePayload(Dst, SizeArg);
+        if (SrcPayload == ReferencePayloadKind::Unknown)
+          SrcPayload = classifyProvableAS1ReferencePayload(Src, SizeArg);
+      }
       // The source must always independently prove NoReference.  The
       // destination must additionally be a complete, zero-offset typed
       // non-heap object whose recovered layout contains no managed pointer.
@@ -1328,7 +1369,9 @@ private:
     // allocation chains remain Unknown.
     auto *BaseArg = dyn_cast<Argument>(BaseCast->getOperand(0));
     if (!BaseArg)
-      return ReferencePayloadKind::Unknown;
+      return containsGCPtrType(PayloadTy)
+                 ? ReferencePayloadKind::ContainsReference
+                 : ReferencePayloadKind::Unknown;
     Function *Parent = BaseArg->getParent();
     bool HasSRet = Parent->arg_size() != 0 &&
                    Parent->getAttributes()
@@ -1337,11 +1380,73 @@ private:
     unsigned ThisIndex = HasSRet ? 1 : 0;
     if (Parent->hasFnAttribute("record_mut") &&
         BaseArg->getArgNo() == ThisIndex)
-      return ReferencePayloadKind::Unknown;
+      return containsGCPtrType(PayloadTy)
+                 ? ReferencePayloadKind::ContainsReference
+                 : ReferencePayloadKind::Unknown;
 
     return containsGCPtrType(PayloadTy)
                ? ReferencePayloadKind::ContainsReference
                : ReferencePayloadKind::NoReference;
+  }
+
+  // Heap-to-heap only.  Never returns NoReference (that would widen admits).
+  ReferencePayloadKind classifyProvableAS1ReferencePayload(Value *Ptr,
+                                                           Value *SizeValue) {
+    auto *PtrTy = dyn_cast<PointerType>(Ptr->getType());
+    if (!PtrTy || PtrTy->getAddressSpace() != 1)
+      return ReferencePayloadKind::Unknown;
+    if (Type *Elt = getUniqueArrayLayoutElementType(Ptr)) {
+      if (containsGCPtrType(Elt))
+        return ReferencePayloadKind::ContainsReference;
+    }
+    if (Type *RegionTy = recoverCompleteTypedRegionType(Ptr, SizeValue)) {
+      if (containsGCPtrType(RegionTy))
+        return ReferencePayloadKind::ContainsReference;
+    }
+    auto *CopySize = dyn_cast<ConstantInt>(SizeValue);
+    Value *Root = Ptr->stripPointerCasts();
+    if (CopySize) {
+      for (const User *U : Root->users()) {
+        auto *BC = dyn_cast<BitCastInst>(U);
+        if (!BC)
+          continue;
+        auto *DestTy = dyn_cast<PointerType>(BC->getType());
+        if (!DestTy || DestTy->getAddressSpace() != 1 || DestTy->isOpaque())
+          continue;
+        Type *Pointee = DestTy->getNonOpaquePointerElementType();
+        if (!Pointee->isSized() || !containsGCPtrType(Pointee))
+          continue;
+        TypeSize Sz = DL.getTypeAllocSize(Pointee);
+        if (!Sz.isScalable() &&
+            Sz.getFixedSize() == CopySize->getZExtValue())
+          return ReferencePayloadKind::ContainsReference;
+      }
+    }
+    return ReferencePayloadKind::Unknown;
+  }
+
+  const char *silentUnknownAdmitTag(Value *Ptr) {
+    Value *Cur = Ptr;
+    for (;;) {
+      if (isa<SelectInst>(Cur) || isa<PHINode>(Cur))
+        return "selected-base";
+      if (auto *GEP = dyn_cast<GetElementPtrInst>(Cur)) {
+        if (GEP->getNumIndices() > 1) {
+          if (auto *AT = dyn_cast<ArrayType>(GEP->getSourceElementType())) {
+            if (AT->getElementType()->isPointerTy())
+              return "multi-index";
+          }
+        }
+        Cur = GEP->getPointerOperand();
+        continue;
+      }
+      if (auto *CI = dyn_cast<CastInst>(Cur)) {
+        Cur = CI->getOperand(0);
+        continue;
+      }
+      break;
+    }
+    return nullptr;
   }
 
   // Recover E from one unique
@@ -2937,6 +3042,12 @@ private:
         V->print(*OS, MST);
         *OS << '\n';
       }
+      // Intentionally do not set Broken: report is diagnostic-only.
+      // Print the same locator reject() relies on via verify().
+      if (CurrentFunction)
+        *OS << "in function " << CurrentFunction->getName() << '\n';
+      else if (CurrentGlobal)
+        *OS << "in global value " << CurrentGlobal->getName() << '\n';
     }
   }
 

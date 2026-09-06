@@ -55,6 +55,7 @@ declare void @llvm.memcpy.p0i8.p1i8.i64(i8*, i8 addrspace(1)*, i64, i1)
 
 ; SIZE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; SIZE-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
+; SIZE: in function reject_element_size_mismatch
 define void @reject_element_size_mismatch(
     i8 addrspace(1)* %src.base, i64 %idx) gc "cangjie" {
 entry:
@@ -72,6 +73,7 @@ declare void @llvm.memcpy.p0i8.p1i8.i64(i8*, i8 addrspace(1)*, i64, i1)
 ;--- reject-unnamed-i8-array.ll
 ; BARE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; BARE-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
+; BARE: in function reject_unnamed_i8_array
 define void @reject_unnamed_i8_array(
     i8 addrspace(1)* %src.base, i64 %idx) gc "cangjie" {
 entry:
@@ -92,6 +94,7 @@ declare void @llvm.memcpy.p0i8.p1i8.i64(i8*, i8 addrspace(1)*, i64, i1)
 
 ; HEAP: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; HEAP-NEXT: call void @llvm.memcpy.p1i8.p1i8.i64
+; HEAP: in function reject_heap_dest
 define void @reject_heap_dest(
     i8 addrspace(1)* %src.base, i8 addrspace(1)* %dst.base, i64 %idx) gc "cangjie" {
 entry:

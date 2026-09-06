@@ -6,10 +6,13 @@
 ; RUN: opt -passes=cj-ir-verifier -disable-output < %t/allow-this-debug-across-call.ll 2>&1 | FileCheck %s --check-prefix=NOPROMOTE
 
 ; UNPROMOTE: Bare memcpy/memmove payload provenance is unknown
+; UNPROMOTE: in function reject_unpromotable_across_call
 ; REFSRC: Bare memcpy/memmove of reference payload
 ; REFSRC: in function reject_src_has_ref
 ; REFSLOT: Bare memcpy/memmove payload provenance is unknown
+; REFSLOT: in function reject_dest_ref_slot
 ; NOPROMOTE: spill-slot reload across a possible GC safepoint
+; NOPROMOTE: in function allow_this_debug_across_call
 
 ;--- allow-this-debug-across-call.ll
 %"enum.std.core:Option<Float64>" = type { i1, double }

@@ -23,20 +23,31 @@
 ; REF: Bare memcpy/memmove of reference payload
 ; REF: in function reject_one_endpoint_contains_reference
 ; BARE: Bare memcpy/memmove payload provenance is unknown
+; BARE: in function reject_untyped_as1_destination
 ; DYNAMIC: Bare memcpy/memmove payload provenance is unknown
+; DYNAMIC: in function reject_dynamic_typeinfo_heap_write
 ; FIELD: Bare memcpy/memmove payload provenance is unknown
+; FIELD: in function reject_dynamic_field_offset
 ; PARTIAL: Bare memcpy/memmove payload provenance is unknown
+; PARTIAL: in function reject_partial_plain_object
 ; PHI: Bare memcpy/memmove payload provenance is unknown
+; PHI: in function reject_selected_or_phi_base
 ; ASCAST: Bare memcpy/memmove payload provenance is unknown
+; ASCAST: in function attack_ascast_heap_to_as0_arg
 ; PUN: Bare memcpy/memmove of reference payload
 ; PUN: in function attack_bitcast_then_gep
 ; I8GEP: Bare memcpy/memmove payload provenance is unknown
+; I8GEP: in function attack_i8_gep_as1_one_byte
 ; LOAD: Bare memcpy/memmove payload provenance is unknown
+; LOAD: in function attack_loaded_pointer
 ; CALL: Bare memcpy/memmove payload provenance is unknown
+; CALL: in function attack_called_pointer
 ; PARTIALREF: Bare memcpy/memmove of reference payload
 ; PARTIALREF: in function attack_partial_nested_ref
 ; AS0LOADREF: Bare memcpy/memmove payload provenance is unknown
+; AS0LOADREF: in function attack_as0_two_loaded_ref_objects
 ; AS0CALLREF: Bare memcpy/memmove payload provenance is unknown
+; AS0CALLREF: in function attack_as0_two_called_ref_objects
 
 ;--- allow-as1-parent.ll
 %Parent = type { i8 addrspace(1)*, i32 }

@@ -2,6 +2,7 @@
 
 ; CHECK: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; CHECK-NEXT: call void @llvm.memmove.p0i8.p1i8.i64
+; CHECK: in function reject_as1_source_memmove_with_unknown_provenance
 define void @reject_as1_source_memmove_with_unknown_provenance(
     i8* %dst, i8 addrspace(1)* %src) gc "cangjie" {
 entry:

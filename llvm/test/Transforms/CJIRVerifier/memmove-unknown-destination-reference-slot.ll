@@ -6,16 +6,19 @@
 ; RUN: not not opt -passes=cj-ir-verifier < %t/select-reference-slots.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=SELECT,ABORT
 
 ; REVIEW: Need write barrier!
-; REVIEW: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
+; REVIEW: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
 ; REVIEW: in function unknown_dst_actually_contains_reference
 ; DYNAMIC: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; DYNAMIC-NEXT: call void @llvm.memmove.p0i8.p1i8.i64
+; DYNAMIC: in function dynamic_addrspacecast_stays_unknown
 ; NONZERO: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; NONZERO-NEXT: call void @llvm.memmove.p0i8.p1i8.i64
+; NONZERO: in function constant_cast_nonzero_offset_stays_unknown
 ; REFSRC: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
 ; REFSRC-NEXT: call void @llvm.memmove.p0i8.p1i8.i64
 ; REFSRC: in function constant_cast_reference_source_is_rejected
 ; SELECT: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
+; SELECT: in function select_between_reference_slots
 ; UNKNOWN-NOT: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
 ; ABORT: LLVM ERROR: Broken function found, compilation aborted
 ; ABORT: error: Aborted

@@ -2,6 +2,7 @@
 
 ; CHECK: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; CHECK-NEXT: call void @llvm.memcpy.p0i8.p0i8.i64
+; CHECK: in function unknown_opaque_memcpy
 ; CHECK-NOT: LLVM ERROR
 define void @unknown_opaque_memcpy(i8* %dst, i8* %src) gc "cangjie" {
 entry:

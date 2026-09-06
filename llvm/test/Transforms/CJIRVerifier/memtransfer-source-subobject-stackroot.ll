@@ -33,6 +33,7 @@
 ; PARTIAL: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
 ; PARTIAL: in function reject_partial_source_subobject
 ; DYNSIZE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
+; DYNSIZE: in function reject_dynamic_size
 ; MAPS: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
 ; MAPS: in function reject_unequal_gc_offset_maps
 ; VECTOR: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
