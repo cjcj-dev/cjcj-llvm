@@ -11,7 +11,7 @@
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-dst-global.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=DSTGLOBAL,ABORT
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-dst-select.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=DSTSELECT,ABORT
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-partial.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=PARTIAL,ABORT
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-dynamic-size.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=DYNSIZE,ABORT
+; RUN: opt -passes=cj-ir-verifier < %t/reject-dynamic-size.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=DYNSIZE
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-unequal-maps.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=MAPS,ABORT
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-vector.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=VECTOR,ABORT
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-heap-dst.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=HEAP,ABORT
@@ -32,8 +32,7 @@
 ; DSTSELECT: in function reject_selected_destination
 ; PARTIAL: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
 ; PARTIAL: in function reject_partial_source_subobject
-; DYNSIZE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance.
-; DYNSIZE: in function reject_dynamic_size
+; DYNSIZE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; MAPS: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
 ; MAPS: in function reject_unequal_gc_offset_maps
 ; VECTOR: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.

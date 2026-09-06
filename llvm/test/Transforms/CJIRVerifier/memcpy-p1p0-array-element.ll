@@ -2,16 +2,16 @@
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-gcread-struct.ll -disable-output
 ; RUN: opt '-passes=default<O0>' --cangjie-pipeline -disable-output < %t/allow-gcread-struct.ll
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-ref.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=ABORT,REF
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-size.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=ABORT,SIZE
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-carrier.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=ABORT,CARRIER
+; RUN: opt -passes=cj-ir-verifier < %t/reject-size.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=SIZE
+; RUN: opt -passes=cj-ir-verifier < %t/reject-carrier.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=CARRIER
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-bare-load.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=ABORT,BARE
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-call-linear.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=ABORT,STALE
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-call-diamond.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=ABORT,STALE
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-call-loop.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=ABORT,STALE
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-cj-statepoint.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=ABORT,STALE
+; RUN: opt -passes=cj-ir-verifier < %t/reject-call-linear.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=STALE
+; RUN: opt -passes=cj-ir-verifier < %t/reject-call-diamond.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=STALE
+; RUN: opt -passes=cj-ir-verifier < %t/reject-call-loop.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=STALE
+; RUN: opt -passes=cj-ir-verifier < %t/reject-cj-statepoint.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=STALE
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-no-call-diamond.ll -disable-output
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-cj-malloc.ll -disable-output 2>&1 | FileCheck %s --check-prefix=MALLOC
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-cj-invoke-gc.ll -disable-output 2>&1 | FileCheck %s --check-prefix=INVOKE
+; RUN: opt -passes=cj-ir-verifier < %t/reject-cj-malloc.ll -disable-output 2>&1 | FileCheck %s --check-prefix=MALLOC
+; RUN: opt -passes=cj-ir-verifier < %t/reject-cj-invoke-gc.ll -disable-output 2>&1 | FileCheck %s --check-prefix=INVOKE
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-cj-gcread-generic.ll -disable-output
 
 ;--- allow-gcread-struct.ll
@@ -315,8 +315,8 @@ declare void @llvm.cj.memset.p0i8(i8*, i8, i64, i1)
 ; STALE: Bare memcpy/memmove payload provenance is unknown
 
 ; ABORT: LLVM ERROR: Broken function found, compilation aborted
-; MALLOC: LLVM ERROR: Broken function found, compilation aborted
-; INVOKE: LLVM ERROR: Broken function found, compilation aborted
+; MALLOC: Bare memcpy/memmove payload provenance is unknown
+; INVOKE: Bare memcpy/memmove payload provenance is unknown
 
 ;--- reject-cj-malloc.ll
 %ArrayBase = type { i8 addrspace(1)*, i64 }

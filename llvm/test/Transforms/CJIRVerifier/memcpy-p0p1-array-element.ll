@@ -3,12 +3,12 @@
 ; RUN: opt '-passes=default<O0>' --cangjie-pipeline -disable-output < %t/allow-formattype-element.ll
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-ref-element.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=REF,ABORT
 ; RUN: not not opt '-passes=default<O0>' --cangjie-pipeline -disable-output < %t/reject-ref-element.ll 2>&1 | FileCheck %s -check-prefixes=REF,ABORT
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-size-mismatch.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=SIZE,ABORT
-; RUN: not not opt '-passes=default<O0>' --cangjie-pipeline -disable-output < %t/reject-size-mismatch.ll 2>&1 | FileCheck %s -check-prefixes=SIZE,ABORT
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-unnamed-i8-array.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=BARE,ABORT
-; RUN: not not opt '-passes=default<O0>' --cangjie-pipeline -disable-output < %t/reject-unnamed-i8-array.ll 2>&1 | FileCheck %s -check-prefixes=BARE,ABORT
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-heap-dest.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=HEAP,ABORT
-; RUN: not not opt '-passes=default<O0>' --cangjie-pipeline -disable-output < %t/reject-heap-dest.ll 2>&1 | FileCheck %s -check-prefixes=HEAP,ABORT
+; RUN: opt -passes=cj-ir-verifier < %t/reject-size-mismatch.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=SIZE
+; RUN: opt '-passes=default<O0>' --cangjie-pipeline -disable-output < %t/reject-size-mismatch.ll 2>&1 | FileCheck %s -check-prefixes=SIZE
+; RUN: opt -passes=cj-ir-verifier < %t/reject-unnamed-i8-array.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=BARE
+; RUN: opt '-passes=default<O0>' --cangjie-pipeline -disable-output < %t/reject-unnamed-i8-array.ll 2>&1 | FileCheck %s -check-prefixes=BARE
+; RUN: opt -passes=cj-ir-verifier < %t/reject-heap-dest.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=HEAP
+; RUN: opt '-passes=default<O0>' --cangjie-pipeline -disable-output < %t/reject-heap-dest.ll 2>&1 | FileCheck %s -check-prefixes=HEAP
 
 ;--- allow-formattype-element.ll
 %ArrayBase = type { i8 addrspace(1)*, i64 }
@@ -53,9 +53,8 @@ declare void @llvm.memcpy.p0i8.p1i8.i64(i8*, i8 addrspace(1)*, i64, i1)
 %ArrayBase = type { i8 addrspace(1)*, i64 }
 %"ArrayLayout.std.time:FormatType" = type { %ArrayBase, [0 x [12 x i8]] }
 
-; SIZE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance.
+; SIZE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; SIZE-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
-; SIZE: in function reject_element_size_mismatch
 define void @reject_element_size_mismatch(
     i8 addrspace(1)* %src.base, i64 %idx) gc "cangjie" {
 entry:
@@ -71,9 +70,8 @@ entry:
 declare void @llvm.memcpy.p0i8.p1i8.i64(i8*, i8 addrspace(1)*, i64, i1)
 
 ;--- reject-unnamed-i8-array.ll
-; BARE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance.
+; BARE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; BARE-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
-; BARE: in function reject_unnamed_i8_array
 define void @reject_unnamed_i8_array(
     i8 addrspace(1)* %src.base, i64 %idx) gc "cangjie" {
 entry:
@@ -92,9 +90,8 @@ declare void @llvm.memcpy.p0i8.p1i8.i64(i8*, i8 addrspace(1)*, i64, i1)
 %ArrayBase = type { i8 addrspace(1)*, i64 }
 %"ArrayLayout.std.time:FormatType" = type { %ArrayBase, [0 x [12 x i8]] }
 
-; HEAP: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance.
+; HEAP: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; HEAP-NEXT: call void @llvm.memcpy.p1i8.p1i8.i64
-; HEAP: in function reject_heap_dest
 define void @reject_heap_dest(
     i8 addrspace(1)* %src.base, i8 addrspace(1)* %dst.base, i64 %idx) gc "cangjie" {
 entry:

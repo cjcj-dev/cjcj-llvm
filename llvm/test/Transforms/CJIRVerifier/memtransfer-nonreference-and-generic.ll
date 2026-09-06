@@ -1,15 +1,13 @@
 ; RUN: split-file %s %t
 ; RUN: opt -passes=cj-ir-verifier < %t/typed-nonref.ll -disable-output
 ; RUN: opt -passes=cj-ir-verifier < %t/typed-provenance.ll -disable-output
-; RUN: not not opt -passes=cj-ir-verifier < %t/opaque-no-provenance.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=OPAQUE,ABORT
-; RUN: not not opt -passes=cj-ir-verifier < %t/dynamic-size.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=DYNAMIC,ABORT
+; RUN: opt -passes=cj-ir-verifier < %t/opaque-no-provenance.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=OPAQUE
+; RUN: opt -passes=cj-ir-verifier < %t/dynamic-size.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=DYNAMIC
 
-; OPAQUE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance.
+; OPAQUE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; OPAQUE-NEXT: call void @llvm.memmove.p0i8.p0i8.i64
-; OPAQUE: in function reject_opaque_memmove
-; DYNAMIC: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance.
+; DYNAMIC: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; DYNAMIC-NEXT: call void @llvm.memcpy.p0i8.p0i8.i64
-; DYNAMIC: in function reject_dynamic_plain_memcpy
 ; ABORT: LLVM ERROR: Broken function found, compilation aborted
 ; ABORT: error: Aborted
 

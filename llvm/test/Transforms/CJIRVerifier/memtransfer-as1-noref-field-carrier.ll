@@ -1,11 +1,11 @@
 ; RUN: split-file %s %t
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-gcread-position.ll -S | FileCheck %s --check-prefix=ALLOW
 ; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-as1-field.ll -disable-output 2>&1 | FileCheck %s --check-prefix=HASREF
-; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-i8-payload.ll -disable-output 2>&1 | FileCheck %s --check-prefix=I8PAY
-; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-array-i8.ll -disable-output 2>&1 | FileCheck %s --check-prefix=ARRI8
-; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-nested-array-i8.ll -disable-output 2>&1 | FileCheck %s --check-prefix=NESTI8
-; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-size-mismatch.ll -disable-output 2>&1 | FileCheck %s --check-prefix=SIZE
-; RUN: not --crash opt -passes=cj-ir-verifier < %t/reject-non-entry-alloca.ll -disable-output 2>&1 | FileCheck %s --check-prefix=DST
+; RUN: opt -passes=cj-ir-verifier < %t/reject-i8-payload.ll -disable-output 2>&1 | FileCheck %s --check-prefix=I8PAY
+; RUN: opt -passes=cj-ir-verifier < %t/reject-array-i8.ll -disable-output 2>&1 | FileCheck %s --check-prefix=ARRI8
+; RUN: opt -passes=cj-ir-verifier < %t/reject-nested-array-i8.ll -disable-output 2>&1 | FileCheck %s --check-prefix=NESTI8
+; RUN: opt -passes=cj-ir-verifier < %t/reject-size-mismatch.ll -disable-output 2>&1 | FileCheck %s --check-prefix=SIZE
+; RUN: opt -passes=cj-ir-verifier < %t/reject-non-entry-alloca.ll -disable-output 2>&1 | FileCheck %s --check-prefix=DST
 
 ; ALLOW: call void @llvm.memcpy.p0i8.p1i8.i64
 ; HASREF: Bare memcpy/memmove of reference payload

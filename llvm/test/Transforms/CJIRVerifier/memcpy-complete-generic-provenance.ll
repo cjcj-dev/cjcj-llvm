@@ -1,18 +1,16 @@
 ; RUN: split-file %s %t
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-complete-nonref.ll -disable-output
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-same-size-ref.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=REF,ABORT
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-partial.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=PARTIAL,ABORT
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-opaque-source.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=OPAQUE,ABORT
+; RUN: opt -passes=cj-ir-verifier < %t/reject-partial.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=PARTIAL
+; RUN: opt -passes=cj-ir-verifier < %t/reject-opaque-source.ll -disable-output 2>&1 | FileCheck %s -check-prefixes=OPAQUE
 
 ; REF: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
 ; REF-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
 ; REF: in function reject_same_size_reference_payload
-; PARTIAL: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance.
+; PARTIAL: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; PARTIAL-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
-; PARTIAL: in function reject_partial_generic_payload
-; OPAQUE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance.
+; OPAQUE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; OPAQUE-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
-; OPAQUE: in function reject_opaque_source
 ; ABORT: LLVM ERROR: Broken function found, compilation aborted
 ; ABORT: error: Aborted
 

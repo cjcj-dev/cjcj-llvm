@@ -20,7 +20,7 @@
 
 ; REPORT: module{{[[:space:]]}}function{{[[:space:]]}}rule{{[[:space:]]}}instruction{{[[:space:]]}}dest_as{{[[:space:]]}}src_as{{[[:space:]]}}length{{[[:space:]]}}dest_root{{[[:space:]]}}src_root{{[[:space:]]}}source_type
 ; REPORT-NEXT: report-mode.ll{{[[:space:]]}}reject_memcpy{{[[:space:]]}}Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.{{[[:space:]]}}memcpy{{[[:space:]]}}0{{[[:space:]]}}0{{[[:space:]]}}8{{[[:space:]]}}alloca{{[[:space:]]}}alloca{{[[:space:]]}}%Payload*
-; REPORT-NEXT: report-mode.ll{{[[:space:]]}}reject_memmove_and_addrspacecast{{[[:space:]]}}Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance.{{[[:space:]]}}memmove{{[[:space:]]}}0{{[[:space:]]}}1{{[[:space:]]}}8{{[[:space:]]}}alloca{{[[:space:]]}}argument{{[[:space:]]}}i8 addrspace(1)*
+; REPORT-NEXT: report-mode.ll{{[[:space:]]}}reject_memmove_and_addrspacecast{{[[:space:]]}}Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]{{[[:space:]]}}memmove{{[[:space:]]}}0{{[[:space:]]}}1{{[[:space:]]}}8{{[[:space:]]}}alloca{{[[:space:]]}}argument{{[[:space:]]}}i8 addrspace(1)*
 ; REPORT-NEXT: report-mode.ll{{[[:space:]]}}reject_memmove_and_addrspacecast{{[[:space:]]}}AddrSpaceCast source must be addrspace(0){{[[:space:]]}}addrspacecast{{[[:space:]]}}0{{[[:space:]]}}1{{[[:space:]]}}-{{[[:space:]]}}argument{{[[:space:]]}}argument{{[[:space:]]}}%Obj addrspace(1)*
 
 ; IR: !cj.verifier.mode = !{![[MODE:[0-9]+]]}

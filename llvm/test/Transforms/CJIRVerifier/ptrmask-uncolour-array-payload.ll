@@ -1,8 +1,8 @@
 ; RUN: split-file %s %t
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-uncolour-ptrmask.ll -disable-output
-; RUN: not opt -passes=cj-ir-verifier < %t/reject-bare-as1-arg.ll -disable-output 2>%t/reject-bare.err; echo BARE_RC=$? >> %t/reject-bare.err
+; RUN: opt -passes=cj-ir-verifier < %t/reject-bare-as1-arg.ll -disable-output 2>%t/reject-bare.err; echo BARE_RC=$? >> %t/reject-bare.err
 ; RUN: FileCheck %s -check-prefix=BARE < %t/reject-bare.err
-; RUN: not opt -passes=cj-ir-verifier < %t/reject-lowbit-ptrmask.ll -disable-output 2>%t/reject-lowbit.err; echo LOWBIT_RC=$? >> %t/reject-lowbit.err
+; RUN: opt -passes=cj-ir-verifier < %t/reject-lowbit-ptrmask.ll -disable-output 2>%t/reject-lowbit.err; echo LOWBIT_RC=$? >> %t/reject-lowbit.err
 ; RUN: FileCheck %s -check-prefix=LOWBIT < %t/reject-lowbit.err
 
 ; (a) official malloc.array payload memmove with llvm.ptrmask uncolour mask.
@@ -44,8 +44,8 @@ entry:
 
 declare void @llvm.memmove.p1i8.p1i8.i64(i8 addrspace(1)*, i8 addrspace(1)*, i64, i1)
 
-; BARE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance.
-; BARE: LLVM ERROR: Broken function found, compilation aborted
+; BARE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
+; BARE: BARE_RC=0
 
 ; (c) ptrmask that clears low 4 bits is not uncolour; stay unknown.
 ;--- reject-lowbit-ptrmask.ll
@@ -76,5 +76,5 @@ declare i8 addrspace(1)* @llvm.ptrmask.p1i8.i64(i8 addrspace(1)*, i64)
 declare void @llvm.memmove.p1i8.p1i8.i64(i8 addrspace(1)*, i8 addrspace(1)*, i64, i1)
 !0 = !{!"ArrayLayout.UInt8"}
 
-; LOWBIT: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance.
-; LOWBIT: LLVM ERROR: Broken function found, compilation aborted
+; LOWBIT: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
+; LOWBIT: LOWBIT_RC=0

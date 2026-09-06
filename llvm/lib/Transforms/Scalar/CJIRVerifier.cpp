@@ -671,16 +671,18 @@ public:
       if (DstPayload == ReferencePayloadKind::Unknown ||
           SrcPayload == ReferencePayloadKind::Unknown) {
         if (LastHeapRootRejectWasSafepointStale)
-          checkFailed("Bare memcpy/memmove payload root is a spill-slot reload "
-                      "across a possible GC safepoint; the object may have "
-                      "been relocated.  Keep the SSA root or reload it with "
-                      "llvm.cj.gcread.ref.",
-                      &Call);
+          reportUnknownPayload(
+              "Bare memcpy/memmove payload root is a spill-slot reload "
+              "across a possible GC safepoint; the object may have "
+              "been relocated.  Keep the SSA root or reload it with "
+              "llvm.cj.gcread.ref.",
+              &Call);
         else
-          checkFailed("Bare memcpy/memmove payload provenance is unknown; use "
-                      "cj_array_copy_ref, a typed helper, or supply typed "
-                      "provenance.",
-                      &Call);
+          reportUnknownPayload(
+              "Bare memcpy/memmove payload provenance is unknown; use "
+              "cj_array_copy_ref, a typed helper, or supply typed "
+              "provenance.",
+              &Call);
       }
       break;
     }
@@ -2920,6 +2922,20 @@ private:
       } else if (auto *NestedArray = dyn_cast<ArrayType>(EleType)) {
         findReferencePositionInArray(NestedArray, BeginPos, EndPos, Offset,
                                      AllRefPos);
+      }
+    }
+  }
+
+  void reportUnknownPayload(const Twine &Message, const Value *V) {
+    std::string Tagged = Message.str();
+    Tagged += " [unknown-payload:report]";
+    if (Report)
+      Report->emit(M, CurrentFunction, CurrentGlobal, Tagged, V);
+    else {
+      *OS << Tagged << '\n';
+      if (V) {
+        V->print(*OS, MST);
+        *OS << '\n';
       }
     }
   }

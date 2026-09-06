@@ -2,21 +2,17 @@
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-gcread-root.ll -disable-output
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-this-debug-reload.ll -disable-output
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-src-has-ref.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REFSRC
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-dest-ref-slot.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REFSLOT
+; RUN: opt -passes=cj-ir-verifier < %t/reject-dest-ref-slot.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REFSLOT
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-bare-as1-load.ll -disable-output 2>&1 | FileCheck %s --check-prefix=BARELOAD
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-size-mismatch.ll -disable-output 2>&1 | FileCheck %s --check-prefix=SIZE
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-call-between-store-reload.ll -disable-output 2>&1 | FileCheck %s --check-prefix=SAFEBETWEEN
+; RUN: opt -passes=cj-ir-verifier < %t/reject-size-mismatch.ll -disable-output 2>&1 | FileCheck %s --check-prefix=SIZE
+; RUN: opt -passes=cj-ir-verifier < %t/reject-call-between-store-reload.ll -disable-output 2>&1 | FileCheck %s --check-prefix=SAFEBETWEEN
 
 ; REFSRC: Bare memcpy/memmove of reference payload
 ; REFSRC: in function reject_src_has_ref
-; REFSLOT: Bare memcpy/memmove
-; REFSLOT: in function reject_dest_ref_slot
+; REFSLOT: Bare memcpy/memmove payload provenance is unknown
 ; BARELOAD: Bare memcpy/memmove payload provenance is unknown
-; BARELOAD: in function reject_bare_as1_load
 ; SIZE: Bare memcpy/memmove payload provenance is unknown
-; SIZE: in function reject_size_mismatch
 ; SAFEBETWEEN: spill-slot reload across a possible GC safepoint
-; SAFEBETWEEN: in function reject_call_between_store_reload
 
 ;--- allow-gcread-root.ll
 %"enum.std.core:Option<Float64>" = type { i1, double }

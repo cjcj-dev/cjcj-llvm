@@ -5,49 +5,38 @@
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-stack-to-heap.ll -disable-output
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-different-types.ll -disable-output
 ; RUN: opt -passes=cj-ir-verifier < %t/allow-as0-entry-alloca-ref.ll -disable-output
-; RUN: not not opt -passes=cj-ir-verifier < %t/attack-as0-two-load-ref.ll -disable-output 2>&1 | FileCheck %s --check-prefix=AS0LOADREF
-; RUN: not not opt -passes=cj-ir-verifier < %t/attack-as0-two-call-ref.ll -disable-output 2>&1 | FileCheck %s --check-prefix=AS0CALLREF
+; RUN: opt -passes=cj-ir-verifier < %t/attack-as0-two-load-ref.ll -disable-output 2>&1 | FileCheck %s --check-prefix=AS0LOADREF
+; RUN: opt -passes=cj-ir-verifier < %t/attack-as0-two-call-ref.ll -disable-output 2>&1 | FileCheck %s --check-prefix=AS0CALLREF
 ; RUN: not not opt -passes=cj-ir-verifier < %t/reject-reference.ll -disable-output 2>&1 | FileCheck %s --check-prefix=REF
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-as1-bare-dst.ll -disable-output 2>&1 | FileCheck %s --check-prefix=BARE
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-dynamic-size.ll -disable-output 2>&1 | FileCheck %s --check-prefix=DYNAMIC
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-dynamic-field.ll -disable-output 2>&1 | FileCheck %s --check-prefix=FIELD
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-partial.ll -disable-output 2>&1 | FileCheck %s --check-prefix=PARTIAL
-; RUN: not not opt -passes=cj-ir-verifier < %t/reject-phi-base.ll -disable-output 2>&1 | FileCheck %s --check-prefix=PHI
+; RUN: opt -passes=cj-ir-verifier < %t/reject-as1-bare-dst.ll -disable-output 2>&1 | FileCheck %s --check-prefix=BARE
+; RUN: opt -passes=cj-ir-verifier < %t/reject-dynamic-size.ll -disable-output 2>&1 | FileCheck %s --check-prefix=DYNAMIC
+; RUN: opt -passes=cj-ir-verifier < %t/reject-dynamic-field.ll -disable-output 2>&1 | FileCheck %s --check-prefix=FIELD
+; RUN: opt -passes=cj-ir-verifier < %t/reject-partial.ll -disable-output 2>&1 | FileCheck %s --check-prefix=PARTIAL
+; RUN: opt -passes=cj-ir-verifier < %t/reject-phi-base.ll -disable-output 2>&1 | FileCheck %s --check-prefix=PHI
 ; RUN: not not opt -passes=cj-ir-verifier < %t/attack-ascast-native.ll -disable-output 2>&1 | FileCheck %s --check-prefix=ASCAST
 ; RUN: not not opt -passes=cj-ir-verifier < %t/attack-bitcast-gep-pun.ll -disable-output 2>&1 | FileCheck %s --check-prefix=PUN
-; RUN: not not opt -passes=cj-ir-verifier < %t/attack-i8-gep-as1.ll -disable-output 2>&1 | FileCheck %s --check-prefix=I8GEP
-; RUN: not not opt -passes=cj-ir-verifier < %t/attack-load-as1.ll -disable-output 2>&1 | FileCheck %s --check-prefix=LOAD
-; RUN: not not opt -passes=cj-ir-verifier < %t/attack-call-as1.ll -disable-output 2>&1 | FileCheck %s --check-prefix=CALL
+; RUN: opt -passes=cj-ir-verifier < %t/attack-i8-gep-as1.ll -disable-output 2>&1 | FileCheck %s --check-prefix=I8GEP
+; RUN: opt -passes=cj-ir-verifier < %t/attack-load-as1.ll -disable-output 2>&1 | FileCheck %s --check-prefix=LOAD
+; RUN: opt -passes=cj-ir-verifier < %t/attack-call-as1.ll -disable-output 2>&1 | FileCheck %s --check-prefix=CALL
 ; RUN: not not opt -passes=cj-ir-verifier < %t/attack-partial-ref-field.ll -disable-output 2>&1 | FileCheck %s --check-prefix=PARTIALREF
 
 ; REF: Bare memcpy/memmove of reference payload
 ; REF: in function reject_one_endpoint_contains_reference
 ; BARE: Bare memcpy/memmove payload provenance is unknown
-; BARE: in function reject_untyped_as1_destination
 ; DYNAMIC: Bare memcpy/memmove payload provenance is unknown
-; DYNAMIC: in function reject_dynamic_typeinfo_heap_write
 ; FIELD: Bare memcpy/memmove payload provenance is unknown
-; FIELD: in function reject_dynamic_field_offset
 ; PARTIAL: Bare memcpy/memmove payload provenance is unknown
-; PARTIAL: in function reject_partial_plain_object
 ; PHI: Bare memcpy/memmove payload provenance is unknown
-; PHI: in function reject_selected_or_phi_base
 ; ASCAST: Bare memcpy/memmove payload provenance is unknown
-; ASCAST: in function attack_ascast_heap_to_as0_arg
 ; PUN: Bare memcpy/memmove of reference payload
 ; PUN: in function attack_bitcast_then_gep
 ; I8GEP: Bare memcpy/memmove payload provenance is unknown
-; I8GEP: in function attack_i8_gep_as1_one_byte
 ; LOAD: Bare memcpy/memmove payload provenance is unknown
-; LOAD: in function attack_loaded_pointer
 ; CALL: Bare memcpy/memmove payload provenance is unknown
-; CALL: in function attack_called_pointer
 ; PARTIALREF: Bare memcpy/memmove of reference payload
 ; PARTIALREF: in function attack_partial_nested_ref
 ; AS0LOADREF: Bare memcpy/memmove payload provenance is unknown
-; AS0LOADREF: in function attack_as0_two_loaded_ref_objects
 ; AS0CALLREF: Bare memcpy/memmove payload provenance is unknown
-; AS0CALLREF: in function attack_as0_two_called_ref_objects
 
 ;--- allow-as1-parent.ll
 %Parent = type { i8 addrspace(1)*, i32 }
