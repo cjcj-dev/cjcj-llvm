@@ -18,6 +18,7 @@
 ; IR-NOT: store i8 addrspace(1)*
 ; IR: ret void
 ; ASM-LABEL: initialize_root:
+; ASM-NOT: cmpl
 ; ASM: {{callq|jmp}} CJ_MCC_WriteStaticRef
 ; ASM: .Lfunc_end
 define void @initialize_root(i8 addrspace(1)* %value) gc "cangjie" {
@@ -31,6 +32,7 @@ define void @initialize_root(i8 addrspace(1)* %value) gc "cangjie" {
 ; IR-NOT: store i8 addrspace(1)*
 ; IR: ret void
 ; ASM-LABEL: replace_root:
+; ASM-NOT: cmpl
 ; ASM: {{callq|jmp}} CJ_MCC_WriteStaticRef
 ; ASM: .Lfunc_end
 define void @replace_root(i8 addrspace(1)* %value, i8 addrspace(1)** %slot) gc "cangjie" {
@@ -44,6 +46,7 @@ define void @replace_root(i8 addrspace(1)* %value, i8 addrspace(1)** %slot) gc "
 ; IR-NOT: llvm.memcpy
 ; IR: ret void
 ; ASM-LABEL: write_static_struct:
+; ASM-NOT: cmpl
 ; ASM: {{callq|jmp}} CJ_MCC_WriteStaticStruct
 ; ASM: .Lfunc_end
 define void @write_static_struct(i8* %src) gc "cangjie" {
