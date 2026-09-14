@@ -1,0 +1,231 @@
+green
+rebuild.rc 0
+lit.rc 0
+test-wall.txt 1
+rebuild-wall.txt 340
+static-O0-ir-check.rc 0
+static-O2-ir-check.rc 0
+static-O0-asm-check.rc 0
+static-O2-asm-check.rc 0
+Counter({'PASS': 21, 'UNSUPPORTED': 2, 'XFAIL': 1})
+LLVM :: CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll PASS Script:
+--
+: 'RUN: at line 1';   /root/sym_cjcj_llvm_1_implement_r5668195885/green/build/bin/llc --cangjie-pipeline -mtriple=x86_64 -O0 -print-after=cj-barrier-lowering -o /dev/null < /root/sym_cjcj_llvm_1_implement_r5668195885/green/src/llvm/test/CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll 2>&1 | /root/sym_cjcj_llvm_1_implement_r5668195885/green/build/bin/FileCheck /root/sym_cjcj_llvm_1_implement_r5668195885/green/src/llvm/test/CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll --implicit-check-not=gcNoRunning
+: 'RUN: at line 2';   /root/sym_cjcj_llvm_1_implement_r5668195885/green/build/bin/llc --cangjie-pipeline -mtriple=x86_64 -O2 -print-after=cj-barrier-lowering -o /dev/null < /root/sym_cjcj_llvm_1_implement_r5668195885/green/src/llvm/test/CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll 2>&1 | /root/sym_cjcj_llvm_1_implement_r5668195885/green/build/bin/FileCheck /root/sym_cjcj_llvm_1_implement_r5668195885/green/src/llvm/test/CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll --implicit-check-not=gcNoRunning
+--
+Exit Code: 0
+
+
+LLVM :: CodeGen/X86/CangjieGC/static-write-all-phases.ll PASS Script:
+--
+: 'RUN: at line 1';   /root/sym_cjcj_llvm_1_implement_r5668195885/green/build/bin/llc --cangjie-pipeline -mtriple=x86_64 -O0 -print-after=cj-barrier-lowering -o /root/sym_cjcj_llvm_1_implement_r5668195885/green/build/test/CodeGen/X86/CangjieGC/Output/static-write-all-phases.ll.tmp.O0.s < /root/sym_cjcj_llvm_1_implement_r5668195885/green/src/llvm/test/CodeGen/X86/CangjieGC/static-write-all-phases.ll 2>&1 | /root/sym_cjcj_llvm_1_implement_r5668195885/green/build/bin/FileCheck /root/sym_cjcj_llvm_1_implement_r5668195885/green/src/llvm/test/CodeGen/X86/CangjieGC/static-write-all-phases.ll --check-prefix=IR --implicit-check-not='call{{.*}}@GetGCPhase' --implicit-check-not=gcNoRunning
+: 'RUN: at line 2';   /root/sym_cjcj_llvm_1_implement_r5668195885/green/build/bin/FileCheck /root/sym_cjcj_llvm_1_implement_r5668195885/green/src/llvm/test/CodeGen/X86/CangjieGC/static-write-all-phases.ll --check-prefix=ASM --implicit-check-not=GetGCPhase < /root/sym_cjcj_llvm_1_implement_r5668195885/green/build/test/CodeGen/X86/CangjieGC/Output/static-write-all-phases.ll.tmp.O0.s
+: 'RUN: at line 3';   /root/sym_cjcj_llvm_1_implement_r5668195885/green/build/bin/llc --cangjie-pipeline -mtriple=x86_64 -O2 -print-after=cj-barrier-lowering -o /root/sym_cjcj_llvm_1_implement_r5668195885/green/build/test/CodeGen/X86/CangjieGC/Output/static-write-all-phases.ll.tmp.O2.s < /root/sym_cjcj_llvm_1_implement_r5668195885/green/src/llvm/test/CodeGen/X86/CangjieGC/static-write-all-phases.ll 2>&1 | /root/sym_cjcj_llvm_1_implement_r5668195885/green/build/bin/FileCheck /root/sym_cjcj_llvm_1_implement_r5668195885/green/src/llvm/test/CodeGen/X86/CangjieGC/static-write-all-phases.ll --check-prefix=IR --implicit-check-not='call{{.*}}@GetGCPhase' --implicit-check-not=gcNoRunning
+: 'RUN: at line 4';   /root/sym_cjcj_llvm_1_implement_r5668195885/green/build/bin/FileCheck /root/sym_cjcj_llvm_1_implement_r5668195885/green/src/llvm/test/CodeGen/X86/CangjieGC/static-write-all-phases.ll --check-prefix=ASM --implicit-check-not=GetGCPhase < /root/sym_cjcj_llvm_1_implement_r5668195885/green/build/test/CodeGen/X86/CangjieGC/Output/static-write-all-phases.ll.tmp.O2.s
+--
+Exit Code: 0
+
+
+O0 0
+O2 0
+identity f9d56823f5ce58c58f5eb00fb635521c13237d430a89354defbd54388c74e7d8  green/build/bin/llc
+22fedf794f3aabb5a8dd100d9517d67b85217d4dac93d606434c1a56b892a699  green/build/bin/opt
+f564366d8c3db95bd368519f66b9ead5eb9823c13429346f94e1f26fe5b53448  green/build/bin/FileCheck
+3a6c04b86807f01c13da6a746e23c64d6b841a2ca285e43abc787065b7639028  green/build/bin/not
+b875e527fdd1d8fbfa55a5d457a76aaf80f3f7a96fb93bf745f7caa8c0e4bc19  green/build/bin/llvm-dis
+
+producer
+rebuild.rc 0
+lit.rc 1
+test-wall.txt 1
+rebuild-wall.txt 339
+static-O0-ir-check.rc 1
+static-O2-ir-check.rc 1
+static-O0-asm-check.rc 1
+static-O2-asm-check.rc 1
+Counter({'PASS': 20, 'UNSUPPORTED': 2, 'XFAIL': 1, 'FAIL': 1})
+LLVM :: CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll PASS Script:
+--
+: 'RUN: at line 1';   /root/sym_cjcj_llvm_1_implement_r5668195885/producer/build/bin/llc --cangjie-pipeline -mtriple=x86_64 -O0 -print-after=cj-barrier-lowering -o /dev/null < /root/sym_cjcj_llvm_1_implement_r5668195885/producer/src/llvm/test/CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll 2>&1 | /root/sym_cjcj_llvm_1_implement_r5668195885/producer/build/bin/FileCheck /root/sym_cjcj_llvm_1_implement_r5668195885/producer/src/llvm/test/CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll --implicit-check-not=gcNoRunning
+: 'RUN: at line 2';   /root/sym_cjcj_llvm_1_implement_r5668195885/producer/build/bin/llc --cangjie-pipeline -mtriple=x86_64 -O2 -print-after=cj-barrier-lowering -o /dev/null < /root/sym_cjcj_llvm_1_implement_r5668195885/producer/src/llvm/test/CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll 2>&1 | /root/sym_cjcj_llvm_1_implement_r5668195885/producer/build/bin/FileCheck /root/sym_cjcj_llvm_1_implement_r5668195885/producer/src/llvm/test/CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll --implicit-check-not=gcNoRunning
+--
+Exit Code: 0
+
+
+LLVM :: CodeGen/X86/CangjieGC/static-write-all-phases.ll FAIL mp1'0           !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~    error: no match expected
+            4:  %2 = icmp sle i32 %1, 8 
+            5:  br i1 %2, label %gcNoRunning, label %gcRunning 
+not:imp2'0                       !~~~~~~~~~~                    error: no match expected
+            6:  
+            7: gcRunning: ; preds = %0 
+            8:  call void @CJ_MCC_WriteStaticRef(i8 addrspace(1)* %value, i8 addrspace(1)** @root) 
+            9:  br label %storeFinish 
+           10:  
+            .
+            .
+            .
+           15: storeFinish: ; preds = %gcNoRunning, %gcRunning 
+           16:  ret void 
+           17: } 
+           18: *** IR Dump After Cangjie Lower Garbage Collection Barrier Function (cj-barrier-lowering) *** 
+           19: define void @replace_root(i8 addrspace(1)* %value, i8 addrspace(1)** %slot) gc "cangjie" { 
+           20:  %1 = call cangjiegccc i32 @GetGCPhase() 
+not:imp1'1           !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~    error: no match expected
+           21:  %2 = icmp sle i32 %1, 8 
+           22:  br i1 %2, label %gcNoRunning, label %gcRunning 
+not:imp2'1                       !~~~~~~~~~~                    error: no match expected
+           23:  
+           24: gcRunning: ; preds = %0 
+           25:  call void @CJ_MCC_WriteStaticRef(i8 addrspace(1)* %value, i8 addrspace(1)** %slot) 
+           26:  br label %storeFinish 
+           27:  
+            .
+            .
+            .
+           32: storeFinish: ; preds = %gcNoRunning, %gcRunning 
+           33:  ret void 
+           34: } 
+           35: *** IR Dump After Cangjie Lower Garbage Collection Barrier Function (cj-barrier-lowering) *** 
+           36: define void @write_static_struct(i8* %src) gc "cangjie" { 
+           37:  %1 = call cangjiegccc i32 @GetGCPhase() 
+not:imp1'2           !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~    error: no match expected
+           38:  %2 = icmp sle i32 %1, 8 
+           39:  br i1 %2, label %gcNoRunning, label %gcRunning 
+not:imp2'2                       !~~~~~~~~~~                    error: no match expected
+           40:  
+           41: gcRunning: ; preds = %0 
+           42:  call void @CJ_MCC_WriteStaticStruct(i8* bitcast (%payload* @aggregate to i8*), i64 16, i8* %src, i64 16, i8* inttoptr (i64 -9223372036854775806 to i8*)) 
+           43:  br label %storeFinish 
+           44:  
+            .
+            .
+            .
+>>>>>>
+
+--
+
+O0 0
+O2 0
+identity 665da3f01456044c660644f10e3b51bfecbdf22c41832c5a72d644c900f1f741  producer/build/bin/llc
+ba0889609272657f456c53ca9aea6bc936bdf2a136eac37e83c70fd3a9ed7f14  producer/build/bin/opt
+f564366d8c3db95bd368519f66b9ead5eb9823c13429346f94e1f26fe5b53448  producer/build/bin/FileCheck
+3a6c04b86807f01c13da6a746e23c64d6b841a2ca285e43abc787065b7639028  producer/build/bin/not
+b875e527fdd1d8fbfa55a5d457a76aaf80f3f7a96fb93bf745f7caa8c0e4bc19  producer/build/bin/llvm-dis
+
+consumer
+rebuild.rc 0
+lit.rc 1
+test-wall.txt 1
+rebuild-wall.txt 340
+static-O0-ir-check.rc 1
+static-O2-ir-check.rc 1
+static-O0-asm-check.rc 1
+static-O2-asm-check.rc 1
+Counter({'PASS': 20, 'UNSUPPORTED': 2, 'XFAIL': 1, 'FAIL': 1})
+LLVM :: CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll PASS Script:
+--
+: 'RUN: at line 1';   /root/sym_cjcj_llvm_1_implement_r5668195885/consumer/build/bin/llc --cangjie-pipeline -mtriple=x86_64 -O0 -print-after=cj-barrier-lowering -o /dev/null < /root/sym_cjcj_llvm_1_implement_r5668195885/consumer/src/llvm/test/CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll 2>&1 | /root/sym_cjcj_llvm_1_implement_r5668195885/consumer/build/bin/FileCheck /root/sym_cjcj_llvm_1_implement_r5668195885/consumer/src/llvm/test/CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll --implicit-check-not=gcNoRunning
+: 'RUN: at line 2';   /root/sym_cjcj_llvm_1_implement_r5668195885/consumer/build/bin/llc --cangjie-pipeline -mtriple=x86_64 -O2 -print-after=cj-barrier-lowering -o /dev/null < /root/sym_cjcj_llvm_1_implement_r5668195885/consumer/src/llvm/test/CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll 2>&1 | /root/sym_cjcj_llvm_1_implement_r5668195885/consumer/build/bin/FileCheck /root/sym_cjcj_llvm_1_implement_r5668195885/consumer/src/llvm/test/CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll --implicit-check-not=gcNoRunning
+--
+Exit Code: 0
+
+
+LLVM :: CodeGen/X86/CangjieGC/static-write-all-phases.ll FAIL dump-input=help explains the following input dump.
+
+Input was:
+<<<<<<
+            1: *** IR Dump After Cangjie Lower Garbage Collection Barrier Function (cj-barrier-lowering) *** 
+            2: define void @initialize_root(i8 addrspace(1)* %value) gc "cangjie" { 
+check:17'0                                  X~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ error: no match found
+            3:  store i8 addrspace(1)* %value, i8 addrspace(1)** @root, align 8 
+check:17'0     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+check:17'1      ?                                                                possible intended match
+            4:  ret void 
+check:17'0     ~~~~~~~~~~
+            5: } 
+check:17'0     ~~
+            6: *** IR Dump After Cangjie Lower Garbage Collection Barrier Function (cj-barrier-lowering) *** 
+check:17'0     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+            7: define void @replace_root(i8 addrspace(1)* %value, i8 addrspace(1)** %slot) gc "cangjie" { 
+check:17'0     ~~~~~~~~~~~~~~~~~~~~~~~~~~
+check:31'0                               X~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ error: no match found
+            8:  store i8 addrspace(1)* %value, i8 addrspace(1)** %slot, align 8 
+check:31'0     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+check:31'1      ?                                                                possible intended match
+            9:  ret void 
+check:31'0     ~~~~~~~~~~
+           10: } 
+check:31'0     ~~
+           11: *** IR Dump After Cangjie Lower Garbage Collection Barrier Function (cj-barrier-lowering) *** 
+check:31'0     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+           12: define void @write_static_struct(i8* %src) gc "cangjie" { 
+check:31'0     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+check:45                                        X~~~~~~~~~~~~~~~~~~~~~~~~ error: no match found
+           13:  call void @llvm.memcpy.p0i8.p0i8.i64(i8* align 8 bitcast (%payload* @aggregate to i8*), i8* align 8 %src, i64 16, i1 false) 
+check:45       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+           14:  ret void 
+check:45       ~~~~~~~~~~
+           15: } 
+check:45       ~~
+>>>>>>
+
+--
+
+O0 0
+O2 0
+identity 32815fa9dd481b527ee2dbaa08f2bd3a924fc1e41016d211c27be8923119d0c3  consumer/build/bin/llc
+33ffeebb481b421381b34caae097d368aaa2490f77fce3bfab124909349553a6  consumer/build/bin/opt
+f564366d8c3db95bd368519f66b9ead5eb9823c13429346f94e1f26fe5b53448  consumer/build/bin/FileCheck
+3a6c04b86807f01c13da6a746e23c64d6b841a2ca285e43abc787065b7639028  consumer/build/bin/not
+b875e527fdd1d8fbfa55a5d457a76aaf80f3f7a96fb93bf745f7caa8c0e4bc19  consumer/build/bin/llvm-dis
+
+restored
+rebuild.rc 0
+lit.rc 0
+test-wall.txt 1
+rebuild-wall.txt 340
+static-O0-ir-check.rc 0
+static-O2-ir-check.rc 0
+static-O0-asm-check.rc 0
+static-O2-asm-check.rc 0
+Counter({'PASS': 21, 'UNSUPPORTED': 2, 'XFAIL': 1})
+LLVM :: CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll PASS Script:
+--
+: 'RUN: at line 1';   /root/sym_cjcj_llvm_1_implement_r5668195885/restored/build/bin/llc --cangjie-pipeline -mtriple=x86_64 -O0 -print-after=cj-barrier-lowering -o /dev/null < /root/sym_cjcj_llvm_1_implement_r5668195885/restored/src/llvm/test/CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll 2>&1 | /root/sym_cjcj_llvm_1_implement_r5668195885/restored/build/bin/FileCheck /root/sym_cjcj_llvm_1_implement_r5668195885/restored/src/llvm/test/CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll --implicit-check-not=gcNoRunning
+: 'RUN: at line 2';   /root/sym_cjcj_llvm_1_implement_r5668195885/restored/build/bin/llc --cangjie-pipeline -mtriple=x86_64 -O2 -print-after=cj-barrier-lowering -o /dev/null < /root/sym_cjcj_llvm_1_implement_r5668195885/restored/src/llvm/test/CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll 2>&1 | /root/sym_cjcj_llvm_1_implement_r5668195885/restored/build/bin/FileCheck /root/sym_cjcj_llvm_1_implement_r5668195885/restored/src/llvm/test/CodeGen/X86/CangjieGC/static-atomic-runtime-contract.ll --implicit-check-not=gcNoRunning
+--
+Exit Code: 0
+
+
+LLVM :: CodeGen/X86/CangjieGC/static-write-all-phases.ll PASS Script:
+--
+: 'RUN: at line 1';   /root/sym_cjcj_llvm_1_implement_r5668195885/restored/build/bin/llc --cangjie-pipeline -mtriple=x86_64 -O0 -print-after=cj-barrier-lowering -o /root/sym_cjcj_llvm_1_implement_r5668195885/restored/build/test/CodeGen/X86/CangjieGC/Output/static-write-all-phases.ll.tmp.O0.s < /root/sym_cjcj_llvm_1_implement_r5668195885/restored/src/llvm/test/CodeGen/X86/CangjieGC/static-write-all-phases.ll 2>&1 | /root/sym_cjcj_llvm_1_implement_r5668195885/restored/build/bin/FileCheck /root/sym_cjcj_llvm_1_implement_r5668195885/restored/src/llvm/test/CodeGen/X86/CangjieGC/static-write-all-phases.ll --check-prefix=IR --implicit-check-not='call{{.*}}@GetGCPhase' --implicit-check-not=gcNoRunning
+: 'RUN: at line 2';   /root/sym_cjcj_llvm_1_implement_r5668195885/restored/build/bin/FileCheck /root/sym_cjcj_llvm_1_implement_r5668195885/restored/src/llvm/test/CodeGen/X86/CangjieGC/static-write-all-phases.ll --check-prefix=ASM --implicit-check-not=GetGCPhase < /root/sym_cjcj_llvm_1_implement_r5668195885/restored/build/test/CodeGen/X86/CangjieGC/Output/static-write-all-phases.ll.tmp.O0.s
+: 'RUN: at line 3';   /root/sym_cjcj_llvm_1_implement_r5668195885/restored/build/bin/llc --cangjie-pipeline -mtriple=x86_64 -O2 -print-after=cj-barrier-lowering -o /root/sym_cjcj_llvm_1_implement_r5668195885/restored/build/test/CodeGen/X86/CangjieGC/Output/static-write-all-phases.ll.tmp.O2.s < /root/sym_cjcj_llvm_1_implement_r5668195885/restored/src/llvm/test/CodeGen/X86/CangjieGC/static-write-all-phases.ll 2>&1 | /root/sym_cjcj_llvm_1_implement_r5668195885/restored/build/bin/FileCheck /root/sym_cjcj_llvm_1_implement_r5668195885/restored/src/llvm/test/CodeGen/X86/CangjieGC/static-write-all-phases.ll --check-prefix=IR --implicit-check-not='call{{.*}}@GetGCPhase' --implicit-check-not=gcNoRunning
+: 'RUN: at line 4';   /root/sym_cjcj_llvm_1_implement_r5668195885/restored/build/bin/FileCheck /root/sym_cjcj_llvm_1_implement_r5668195885/restored/src/llvm/test/CodeGen/X86/CangjieGC/static-write-all-phases.ll --check-prefix=ASM --implicit-check-not=GetGCPhase < /root/sym_cjcj_llvm_1_implement_r5668195885/restored/build/test/CodeGen/X86/CangjieGC/Output/static-write-all-phases.ll.tmp.O2.s
+--
+Exit Code: 0
+
+
+O0 0
+O2 0
+identity 263a101becd15b1fb7df2b1a7f37214dd752351660bc250d1fc9d4fe18e863a1  restored/build/bin/llc
+28f3b6a746ce8336735627b72babb10c8f66240e67727990b07638d834512455  restored/build/bin/opt
+f564366d8c3db95bd368519f66b9ead5eb9823c13429346f94e1f26fe5b53448  restored/build/bin/FileCheck
+3a6c04b86807f01c13da6a746e23c64d6b841a2ca285e43abc787065b7639028  restored/build/bin/not
+b875e527fdd1d8fbfa55a5d457a76aaf80f3f7a96fb93bf745f7caa8c0e4bc19  restored/build/bin/llvm-dis
+
+REPLAY baseline O0 5 False True
+REPLAY baseline O2 4 False True
+REPLAY green O0 5 True True
+REPLAY green O2 4 True True
+REPLAY producer O0 5 False True
+REPLAY producer O2 4 False True
+REPLAY consumer O0 5 False True
+REPLAY consumer O2 4 False True
+REPLAY restored O0 5 True True
+REPLAY restored O2 4 True True
+build-uptime-before.txt 02:03:44 up 5 days,  2:12,  1 user,  load average: 1.67, 0.76, 0.78
+build-uptime-after.txt 02:09:38 up 5 days,  2:17,  1 user,  load average: 89.31, 99.71, 48.25
+rebuild-uptime-before.txt 02:22:54 up 5 days,  2:31,  1 user,  load average: 2.30, 15.12, 25.87
+rebuild-uptime-after.txt 02:28:34 up 5 days,  2:36,  1 user,  load average: 114.93, 127.43, 78.49

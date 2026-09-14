@@ -1,0 +1,743 @@
+[
+  {
+    "arm": "baseline",
+    "level": "O0",
+    "static": [
+      {
+        "function": "_CGV9b17global10atomicRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O0/temps/2-b17global.opt.ll:105"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [
+          "   6d6f8:\t83 f8 08             \tcmp    $0x8,%eax"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O0/checked-functions/0.asm"
+      },
+      {
+        "function": "_CGV9b17global10globalRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O0/temps/2-b17global.opt.ll:128"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [
+          "   6d7a7:\t83 f8 08             \tcmp    $0x8,%eax"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O0/checked-functions/1.asm"
+      },
+      {
+        "function": "_CGV9b17global13globalPayloadHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O0/temps/2-b17global.opt.ll:174",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O0/temps/2-b17global.opt.ll:178",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O0/temps/2-b17global.opt.ll:182"
+        ],
+        "expected": 3,
+        "runtime_calls": 3,
+        "phase_compares": [
+          "   6d938:\t83 f8 08             \tcmp    $0x8,%eax"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O0/checked-functions/2.asm"
+      },
+      {
+        "function": "_CN9b17global13replaceStructHRNY_7PayloadE",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O0/temps/2-b17global.opt.ll:204",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O0/temps/2-b17global.opt.ll:208",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O0/temps/2-b17global.opt.ll:212"
+        ],
+        "expected": 3,
+        "runtime_calls": 3,
+        "phase_compares": [
+          "   6da5e:\t83 f8 08             \tcmp    $0x8,%eax"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O0/checked-functions/3.asm"
+      },
+      {
+        "function": "_CN9b17global13replaceGlobalHCNY_3BoxE",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O0/temps/3-b17global.opt.ll:134"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [
+          "   6dd0c:\t83 f8 08             \tcmp    $0x8,%eax"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O0/checked-functions/4.asm"
+      }
+    ],
+    "atomic_paths": {
+      "_CN9b17global13replaceAtomicHCNY_3BoxE": [
+        "_CN9b17global13replaceAtomicHCNY_3BoxE",
+        "_CNab15AtomicReferenceIG_E5storeHG_",
+        "CJ_MCC_AtomicWriteReference@plt"
+      ]
+    },
+    "static_pass": false,
+    "atomic_pass": true
+  },
+  {
+    "arm": "baseline",
+    "level": "O2",
+    "static": [
+      {
+        "function": "_CN9b17global6<main>Hv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O2/temps/2-b17global.opt.ll:69",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O2/temps/2-b17global.opt.ll:70",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O2/temps/2-b17global.opt.ll:71",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O2/temps/2-b17global.opt.ll:72"
+        ],
+        "expected": 4,
+        "runtime_calls": 4,
+        "phase_compares": [
+          "   6cea7:\t83 f8 09             \tcmp    $0x9,%eax",
+          "   6ceb6:\t83 fb 09             \tcmp    $0x9,%ebx",
+          "   6ceca:\t83 fb 09             \tcmp    $0x9,%ebx",
+          "   6cee2:\t83 fb 09             \tcmp    $0x9,%ebx",
+          "   6cf0b:\t83 fb 09             \tcmp    $0x9,%ebx",
+          "   6cf1a:\t83 fb 09             \tcmp    $0x9,%ebx",
+          "   6cf2a:\t83 fb 09             \tcmp    $0x9,%ebx"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O2/checked-functions/0.asm"
+      },
+      {
+        "function": "_CGV9b17global10globalRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O2/temps/3-b17global.opt.ll:70"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [
+          "   6d19d:\t83 f8 09             \tcmp    $0x9,%eax"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O2/checked-functions/1.asm"
+      },
+      {
+        "function": "_CGV9b17global13globalPayloadHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O2/temps/3-b17global.opt.ll:85",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O2/temps/3-b17global.opt.ll:86",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O2/temps/3-b17global.opt.ll:87"
+        ],
+        "expected": 3,
+        "runtime_calls": 3,
+        "phase_compares": [
+          "   6d226:\t83 f8 09             \tcmp    $0x9,%eax",
+          "   6d235:\t83 fb 09             \tcmp    $0x9,%ebx",
+          "   6d24d:\t83 fb 09             \tcmp    $0x9,%ebx",
+          "   6d276:\t83 fb 09             \tcmp    $0x9,%ebx",
+          "   6d286:\t83 fb 09             \tcmp    $0x9,%ebx"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O2/checked-functions/2.asm"
+      },
+      {
+        "function": "_CGV9b17global10atomicRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O2/temps/3-b17global.opt.ll:112"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [
+          "   6d33d:\t83 f8 09             \tcmp    $0x9,%eax"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/baseline/replay/O2/checked-functions/3.asm"
+      }
+    ],
+    "atomic_paths": {
+      "_CN9b17global6<main>Hv": [
+        "_CN9b17global6<main>Hv",
+        "CJ_MCC_AtomicWriteReference@plt"
+      ]
+    },
+    "static_pass": false,
+    "atomic_pass": true
+  },
+  {
+    "arm": "green",
+    "level": "O0",
+    "static": [
+      {
+        "function": "_CGV9b17global10atomicRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O0/temps/2-b17global.opt.ll:105"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O0/checked-functions/0.asm"
+      },
+      {
+        "function": "_CGV9b17global10globalRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O0/temps/2-b17global.opt.ll:128"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O0/checked-functions/1.asm"
+      },
+      {
+        "function": "_CGV9b17global13globalPayloadHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O0/temps/2-b17global.opt.ll:174",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O0/temps/2-b17global.opt.ll:178",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O0/temps/2-b17global.opt.ll:182"
+        ],
+        "expected": 3,
+        "runtime_calls": 3,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O0/checked-functions/2.asm"
+      },
+      {
+        "function": "_CN9b17global13replaceStructHRNY_7PayloadE",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O0/temps/2-b17global.opt.ll:204",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O0/temps/2-b17global.opt.ll:208",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O0/temps/2-b17global.opt.ll:212"
+        ],
+        "expected": 3,
+        "runtime_calls": 3,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O0/checked-functions/3.asm"
+      },
+      {
+        "function": "_CN9b17global13replaceGlobalHCNY_3BoxE",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O0/temps/3-b17global.opt.ll:134"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O0/checked-functions/4.asm"
+      }
+    ],
+    "atomic_paths": {
+      "_CN9b17global13replaceAtomicHCNY_3BoxE": [
+        "_CN9b17global13replaceAtomicHCNY_3BoxE",
+        "_CNab15AtomicReferenceIG_E5storeHG_",
+        "CJ_MCC_AtomicWriteReference@plt"
+      ]
+    },
+    "static_pass": true,
+    "atomic_pass": true
+  },
+  {
+    "arm": "green",
+    "level": "O2",
+    "static": [
+      {
+        "function": "_CN9b17global6<main>Hv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O2/temps/2-b17global.opt.ll:69",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O2/temps/2-b17global.opt.ll:70",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O2/temps/2-b17global.opt.ll:71",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O2/temps/2-b17global.opt.ll:72"
+        ],
+        "expected": 4,
+        "runtime_calls": 4,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O2/checked-functions/0.asm"
+      },
+      {
+        "function": "_CGV9b17global10globalRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O2/temps/3-b17global.opt.ll:70"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O2/checked-functions/1.asm"
+      },
+      {
+        "function": "_CGV9b17global13globalPayloadHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O2/temps/3-b17global.opt.ll:85",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O2/temps/3-b17global.opt.ll:86",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O2/temps/3-b17global.opt.ll:87"
+        ],
+        "expected": 3,
+        "runtime_calls": 3,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O2/checked-functions/2.asm"
+      },
+      {
+        "function": "_CGV9b17global10atomicRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O2/temps/3-b17global.opt.ll:112"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/green/replay/O2/checked-functions/3.asm"
+      }
+    ],
+    "atomic_paths": {
+      "_CN9b17global6<main>Hv": [
+        "_CN9b17global6<main>Hv",
+        "CJ_MCC_AtomicWriteReference@plt"
+      ]
+    },
+    "static_pass": true,
+    "atomic_pass": true
+  },
+  {
+    "arm": "producer",
+    "level": "O0",
+    "static": [
+      {
+        "function": "_CGV9b17global10atomicRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O0/temps/2-b17global.opt.ll:105"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [
+          "   6d6f8:\t83 f8 08             \tcmp    $0x8,%eax"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O0/checked-functions/0.asm"
+      },
+      {
+        "function": "_CGV9b17global10globalRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O0/temps/2-b17global.opt.ll:128"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [
+          "   6d7a7:\t83 f8 08             \tcmp    $0x8,%eax"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O0/checked-functions/1.asm"
+      },
+      {
+        "function": "_CGV9b17global13globalPayloadHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O0/temps/2-b17global.opt.ll:174",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O0/temps/2-b17global.opt.ll:178",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O0/temps/2-b17global.opt.ll:182"
+        ],
+        "expected": 3,
+        "runtime_calls": 3,
+        "phase_compares": [
+          "   6d938:\t83 f8 08             \tcmp    $0x8,%eax"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O0/checked-functions/2.asm"
+      },
+      {
+        "function": "_CN9b17global13replaceStructHRNY_7PayloadE",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O0/temps/2-b17global.opt.ll:204",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O0/temps/2-b17global.opt.ll:208",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O0/temps/2-b17global.opt.ll:212"
+        ],
+        "expected": 3,
+        "runtime_calls": 3,
+        "phase_compares": [
+          "   6da5e:\t83 f8 08             \tcmp    $0x8,%eax"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O0/checked-functions/3.asm"
+      },
+      {
+        "function": "_CN9b17global13replaceGlobalHCNY_3BoxE",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O0/temps/3-b17global.opt.ll:134"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [
+          "   6dd0c:\t83 f8 08             \tcmp    $0x8,%eax"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O0/checked-functions/4.asm"
+      }
+    ],
+    "atomic_paths": {
+      "_CN9b17global13replaceAtomicHCNY_3BoxE": [
+        "_CN9b17global13replaceAtomicHCNY_3BoxE",
+        "_CNab15AtomicReferenceIG_E5storeHG_",
+        "CJ_MCC_AtomicWriteReference@plt"
+      ]
+    },
+    "static_pass": false,
+    "atomic_pass": true
+  },
+  {
+    "arm": "producer",
+    "level": "O2",
+    "static": [
+      {
+        "function": "_CN9b17global6<main>Hv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O2/temps/2-b17global.opt.ll:69",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O2/temps/2-b17global.opt.ll:70",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O2/temps/2-b17global.opt.ll:71",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O2/temps/2-b17global.opt.ll:72"
+        ],
+        "expected": 4,
+        "runtime_calls": 4,
+        "phase_compares": [
+          "   6cea7:\t83 f8 09             \tcmp    $0x9,%eax",
+          "   6ceb6:\t83 fb 09             \tcmp    $0x9,%ebx",
+          "   6ceca:\t83 fb 09             \tcmp    $0x9,%ebx",
+          "   6cee2:\t83 fb 09             \tcmp    $0x9,%ebx",
+          "   6cf0b:\t83 fb 09             \tcmp    $0x9,%ebx",
+          "   6cf1a:\t83 fb 09             \tcmp    $0x9,%ebx",
+          "   6cf2a:\t83 fb 09             \tcmp    $0x9,%ebx"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O2/checked-functions/0.asm"
+      },
+      {
+        "function": "_CGV9b17global10globalRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O2/temps/3-b17global.opt.ll:70"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [
+          "   6d19d:\t83 f8 09             \tcmp    $0x9,%eax"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O2/checked-functions/1.asm"
+      },
+      {
+        "function": "_CGV9b17global13globalPayloadHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O2/temps/3-b17global.opt.ll:85",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O2/temps/3-b17global.opt.ll:86",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O2/temps/3-b17global.opt.ll:87"
+        ],
+        "expected": 3,
+        "runtime_calls": 3,
+        "phase_compares": [
+          "   6d226:\t83 f8 09             \tcmp    $0x9,%eax",
+          "   6d235:\t83 fb 09             \tcmp    $0x9,%ebx",
+          "   6d24d:\t83 fb 09             \tcmp    $0x9,%ebx",
+          "   6d276:\t83 fb 09             \tcmp    $0x9,%ebx",
+          "   6d286:\t83 fb 09             \tcmp    $0x9,%ebx"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O2/checked-functions/2.asm"
+      },
+      {
+        "function": "_CGV9b17global10atomicRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O2/temps/3-b17global.opt.ll:112"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [
+          "   6d33d:\t83 f8 09             \tcmp    $0x9,%eax"
+        ],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/producer/replay/O2/checked-functions/3.asm"
+      }
+    ],
+    "atomic_paths": {
+      "_CN9b17global6<main>Hv": [
+        "_CN9b17global6<main>Hv",
+        "CJ_MCC_AtomicWriteReference@plt"
+      ]
+    },
+    "static_pass": false,
+    "atomic_pass": true
+  },
+  {
+    "arm": "consumer",
+    "level": "O0",
+    "static": [
+      {
+        "function": "_CGV9b17global10atomicRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O0/temps/2-b17global.opt.ll:105"
+        ],
+        "expected": 1,
+        "runtime_calls": 0,
+        "phase_compares": [],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O0/checked-functions/0.asm"
+      },
+      {
+        "function": "_CGV9b17global10globalRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O0/temps/2-b17global.opt.ll:128"
+        ],
+        "expected": 1,
+        "runtime_calls": 0,
+        "phase_compares": [],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O0/checked-functions/1.asm"
+      },
+      {
+        "function": "_CGV9b17global13globalPayloadHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O0/temps/2-b17global.opt.ll:174",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O0/temps/2-b17global.opt.ll:178",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O0/temps/2-b17global.opt.ll:182"
+        ],
+        "expected": 3,
+        "runtime_calls": 0,
+        "phase_compares": [],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O0/checked-functions/2.asm"
+      },
+      {
+        "function": "_CN9b17global13replaceStructHRNY_7PayloadE",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O0/temps/2-b17global.opt.ll:204",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O0/temps/2-b17global.opt.ll:208",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O0/temps/2-b17global.opt.ll:212"
+        ],
+        "expected": 3,
+        "runtime_calls": 0,
+        "phase_compares": [],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O0/checked-functions/3.asm"
+      },
+      {
+        "function": "_CN9b17global13replaceGlobalHCNY_3BoxE",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O0/temps/3-b17global.opt.ll:134"
+        ],
+        "expected": 1,
+        "runtime_calls": 0,
+        "phase_compares": [],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O0/checked-functions/4.asm"
+      }
+    ],
+    "atomic_paths": {
+      "_CN9b17global13replaceAtomicHCNY_3BoxE": [
+        "_CN9b17global13replaceAtomicHCNY_3BoxE",
+        "_CNab15AtomicReferenceIG_E5storeHG_",
+        "CJ_MCC_AtomicWriteReference@plt"
+      ]
+    },
+    "static_pass": false,
+    "atomic_pass": true
+  },
+  {
+    "arm": "consumer",
+    "level": "O2",
+    "static": [
+      {
+        "function": "_CN9b17global6<main>Hv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O2/temps/2-b17global.opt.ll:69",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O2/temps/2-b17global.opt.ll:70",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O2/temps/2-b17global.opt.ll:71",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O2/temps/2-b17global.opt.ll:72"
+        ],
+        "expected": 4,
+        "runtime_calls": 0,
+        "phase_compares": [],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O2/checked-functions/0.asm"
+      },
+      {
+        "function": "_CGV9b17global10globalRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O2/temps/3-b17global.opt.ll:70"
+        ],
+        "expected": 1,
+        "runtime_calls": 0,
+        "phase_compares": [],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O2/checked-functions/1.asm"
+      },
+      {
+        "function": "_CGV9b17global13globalPayloadHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O2/temps/3-b17global.opt.ll:85",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O2/temps/3-b17global.opt.ll:86",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O2/temps/3-b17global.opt.ll:87"
+        ],
+        "expected": 3,
+        "runtime_calls": 0,
+        "phase_compares": [],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O2/checked-functions/2.asm"
+      },
+      {
+        "function": "_CGV9b17global10atomicRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O2/temps/3-b17global.opt.ll:112"
+        ],
+        "expected": 1,
+        "runtime_calls": 0,
+        "phase_compares": [],
+        "passed": false,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/consumer/replay/O2/checked-functions/3.asm"
+      }
+    ],
+    "atomic_paths": {
+      "_CN9b17global6<main>Hv": [
+        "_CN9b17global6<main>Hv",
+        "CJ_MCC_AtomicWriteReference@plt"
+      ]
+    },
+    "static_pass": false,
+    "atomic_pass": true
+  },
+  {
+    "arm": "restored",
+    "level": "O0",
+    "static": [
+      {
+        "function": "_CGV9b17global10atomicRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O0/temps/2-b17global.opt.ll:105"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O0/checked-functions/0.asm"
+      },
+      {
+        "function": "_CGV9b17global10globalRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O0/temps/2-b17global.opt.ll:128"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O0/checked-functions/1.asm"
+      },
+      {
+        "function": "_CGV9b17global13globalPayloadHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O0/temps/2-b17global.opt.ll:174",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O0/temps/2-b17global.opt.ll:178",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O0/temps/2-b17global.opt.ll:182"
+        ],
+        "expected": 3,
+        "runtime_calls": 3,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O0/checked-functions/2.asm"
+      },
+      {
+        "function": "_CN9b17global13replaceStructHRNY_7PayloadE",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O0/temps/2-b17global.opt.ll:204",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O0/temps/2-b17global.opt.ll:208",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O0/temps/2-b17global.opt.ll:212"
+        ],
+        "expected": 3,
+        "runtime_calls": 3,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O0/checked-functions/3.asm"
+      },
+      {
+        "function": "_CN9b17global13replaceGlobalHCNY_3BoxE",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O0/temps/3-b17global.opt.ll:134"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O0/checked-functions/4.asm"
+      }
+    ],
+    "atomic_paths": {
+      "_CN9b17global13replaceAtomicHCNY_3BoxE": [
+        "_CN9b17global13replaceAtomicHCNY_3BoxE",
+        "_CNab15AtomicReferenceIG_E5storeHG_",
+        "CJ_MCC_AtomicWriteReference@plt"
+      ]
+    },
+    "static_pass": true,
+    "atomic_pass": true
+  },
+  {
+    "arm": "restored",
+    "level": "O2",
+    "static": [
+      {
+        "function": "_CN9b17global6<main>Hv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O2/temps/2-b17global.opt.ll:69",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O2/temps/2-b17global.opt.ll:70",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O2/temps/2-b17global.opt.ll:71",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O2/temps/2-b17global.opt.ll:72"
+        ],
+        "expected": 4,
+        "runtime_calls": 4,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O2/checked-functions/0.asm"
+      },
+      {
+        "function": "_CGV9b17global10globalRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O2/temps/3-b17global.opt.ll:70"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O2/checked-functions/1.asm"
+      },
+      {
+        "function": "_CGV9b17global13globalPayloadHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O2/temps/3-b17global.opt.ll:85",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O2/temps/3-b17global.opt.ll:86",
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O2/temps/3-b17global.opt.ll:87"
+        ],
+        "expected": 3,
+        "runtime_calls": 3,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O2/checked-functions/2.asm"
+      },
+      {
+        "function": "_CGV9b17global10atomicRootHv",
+        "ir_sites": [
+          "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O2/temps/3-b17global.opt.ll:112"
+        ],
+        "expected": 1,
+        "runtime_calls": 1,
+        "phase_compares": [],
+        "passed": true,
+        "assembly": "/root/sym_cjcj_llvm_1_implement_r5668195885/restored/replay/O2/checked-functions/3.asm"
+      }
+    ],
+    "atomic_paths": {
+      "_CN9b17global6<main>Hv": [
+        "_CN9b17global6<main>Hv",
+        "CJ_MCC_AtomicWriteReference@plt"
+      ]
+    },
+    "static_pass": true,
+    "atomic_pass": true
+  }
+]
