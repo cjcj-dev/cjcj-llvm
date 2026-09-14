@@ -1,0 +1,19 @@
+--- a/llvm/lib/CodeGen/CJBarrierLowering.cpp
++++ b/llvm/lib/CodeGen/CJBarrierLowering.cpp
+@@ -129,7 +129,15 @@
+       II->setTailCall(false);
+     }
+ 
+-    Function *Callee = getOrInsertRuntimeFunc(II);
++    Function *Callee = nullptr;
++    if (II->getIntrinsicID() == Intrinsic::cj_gcwrite_static_ref ||
++        II->getIntrinsicID() == Intrinsic::cj_gcwrite_static_struct) {
++      IRBuilder<> Builder(II);
++      createStoreOrMems(II, Builder);
++      II->eraseFromParent();
++      return;
++    }
++    Callee = getOrInsertRuntimeFunc(II);
+     switch (II->getIntrinsicID()) {
+     case Intrinsic::cj_gcwrite_struct: {
+       Value *GCTib = getOrInsertGCTib(II);

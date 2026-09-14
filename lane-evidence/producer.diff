@@ -1,0 +1,14 @@
+--- a/llvm/lib/CodeGen/CJBarrierLowering.cpp
++++ b/llvm/lib/CodeGen/CJBarrierLowering.cpp
+@@ -966,7 +966,10 @@
+           CI->eraseFromParent();
+           Changed = true;
+         } else {
+-          Changed |= GCPhase.fastBarrier(IID, CI);
++          Changed |= GCPhase.fastBarrier(
++              (IID == Intrinsic::cj_gcwrite_static_ref ||
++               IID == Intrinsic::cj_gcwrite_static_struct)
++                  ? Intrinsic::cj_gcread_static_ref : IID, CI);
+         }
+         continue;
+       case Intrinsic::cj_array_copy_ref:

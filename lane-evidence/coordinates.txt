@@ -1,0 +1,9 @@
+COMMAND=['git', '-C', '/root/cj_build/llvm_rebase', 'rev-parse', 'origin/main']
+1e806ee5489af1c9d23c1021798ff09b0d210742
+RC=0
+COMMAND=['git', 'rev-parse', 'HEAD']
+3a5f02e1ee4947b1457ee20b293c36a66cef48da
+RC=0
+COMMAND=['git', 'branch', '--show-current']
+sym/1-implement-r5668195885
+RC=0
