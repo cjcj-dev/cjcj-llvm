@@ -1,6 +1,6 @@
-; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O0 -print-after=cj-barrier-lowering -o %t.O0.s < %s 2>&1 | FileCheck %s --check-prefix=IR --implicit-check-not='call cangjiegc i64 @GetGCPhase' --implicit-check-not=gcNoRunning
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O0 -print-after=cj-barrier-lowering -o %t.O0.s < %s 2>&1 | FileCheck %s --check-prefix=IR --implicit-check-not='call{{.*}}@GetGCPhase' --implicit-check-not=gcNoRunning
 ; RUN: FileCheck %s --check-prefix=ASM --implicit-check-not=GetGCPhase < %t.O0.s
-; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O2 -print-after=cj-barrier-lowering -o %t.O2.s < %s 2>&1 | FileCheck %s --check-prefix=IR --implicit-check-not='call cangjiegc i64 @GetGCPhase' --implicit-check-not=gcNoRunning
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O2 -print-after=cj-barrier-lowering -o %t.O2.s < %s 2>&1 | FileCheck %s --check-prefix=IR --implicit-check-not='call{{.*}}@GetGCPhase' --implicit-check-not=gcNoRunning
 ; RUN: FileCheck %s --check-prefix=ASM --implicit-check-not=GetGCPhase < %t.O2.s
 ;
 ; ZGC zBarrierSet.inline.hpp:265 stores store_good(value) into native roots.
