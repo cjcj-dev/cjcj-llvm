@@ -1,0 +1,56 @@
+COMMAND=['rg', '-n', 'cj_gcwrite_static|cj_gcread_static|cj_atomic_|cj_.*generic|GCPhase.fastBarrier|replaceInstWithBarrier', 'llvm/lib/CodeGen/CJBarrierLowering.cpp']
+62:    {Intrinsic::cj_gcwrite_static_ref, "CJ_MCC_WriteStaticRef"},
+63:    {Intrinsic::cj_gcwrite_static_struct, "CJ_MCC_WriteStaticStruct"},
+67:    {Intrinsic::cj_gcread_static_ref, "CJ_MCC_ReadStaticRef"},
+68:    {Intrinsic::cj_gcread_static_struct, "CJ_MCC_ReadStaticStruct"},
+72:    {Intrinsic::cj_atomic_store, "CJ_MCC_AtomicWriteReference"},
+73:    {Intrinsic::cj_atomic_load, "CJ_MCC_AtomicReadReference"},
+74:    {Intrinsic::cj_atomic_swap, "CJ_MCC_AtomicSwapReference"},
+75:    {Intrinsic::cj_atomic_compare_swap, "CJ_MCC_AtomicCompareAndSwapReference"},
+76:    {Intrinsic::cj_assign_generic, "CJ_MCC_AssignGeneric"},
+77:    {Intrinsic::cj_gcwrite_generic, "CJ_MCC_WriteGeneric"},
+78:    {Intrinsic::cj_gcread_generic, "CJ_MCC_ReadGeneric"},
+79:    {Intrinsic::cj_array_copy_generic, "CJ_MCC_ArrayCopyGeneric"},
+80:    {Intrinsic::cj_gcwrite_generic_payload, "CJ_MCC_WriteGenericPayload"},
+81:    {Intrinsic::cj_gcread_generic_payload, "CJ_MCC_ReadGenericPayload"}};
+127:  void replaceInstWithBarrier(IntrinsicInst *II) {
+163:    case Intrinsic::cj_gcread_static_struct:
+164:    case Intrinsic::cj_gcwrite_static_struct: {
+176:    case Intrinsic::cj_array_copy_generic: {
+243:    case Intrinsic::cj_gcread_static_struct:
+244:    case Intrinsic::cj_gcwrite_static_struct: {
+253:    case Intrinsic::cj_array_copy_generic: {
+385:    case Intrinsic::cj_atomic_store:
+386:    case Intrinsic::cj_atomic_swap:
+391:    case Intrinsic::cj_atomic_compare_swap:
+407:        IID == Intrinsic::cj_gcwrite_static_ref ||
+409:        IID == Intrinsic::cj_gcwrite_static_struct ||
+412:        IID == Intrinsic::cj_atomic_store) {
+514:    if (IID != Intrinsic::cj_atomic_swap &&
+515:        IID != Intrinsic::cj_atomic_compare_swap) {
+520:    if (IID == Intrinsic::cj_atomic_compare_swap) {
+960:      case Intrinsic::cj_gcwrite_static_ref:
+962:      case Intrinsic::cj_gcwrite_static_struct:
+969:          Changed |= GCPhase.fastBarrier(IID, CI);
+974:      case Intrinsic::cj_atomic_store:
+975:        Changed |= GCPhase.fastBarrier(IID, CI);
+977:      case Intrinsic::cj_atomic_swap:
+978:      case Intrinsic::cj_atomic_compare_swap:
+1038:        ID == Intrinsic::cj_gcread_static_ref) {
+1042:    if (ID == Intrinsic::cj_atomic_load) {
+1059:        GCBarrier.replaceInstWithBarrier(cast<IntrinsicInst>(&I));
+1074:  case Intrinsic::cj_gcwrite_static_ref:
+1075:  case Intrinsic::cj_gcwrite_static_struct:
+1079:  case Intrinsic::cj_gcread_static_ref:
+1080:  case Intrinsic::cj_gcread_static_struct:
+1082:  case Intrinsic::cj_atomic_store:
+1083:  case Intrinsic::cj_atomic_load:
+1084:  case Intrinsic::cj_atomic_swap:
+1085:  case Intrinsic::cj_atomic_compare_swap:
+1088:  case Intrinsic::cj_array_copy_generic:
+1089:  case Intrinsic::cj_assign_generic:
+1090:  case Intrinsic::cj_gcwrite_generic:
+1091:  case Intrinsic::cj_gcread_generic:
+1092:  case Intrinsic::cj_gcwrite_generic_payload:
+1093:  case Intrinsic::cj_gcread_generic_payload:
+RC=0

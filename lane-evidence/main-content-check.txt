@@ -1,0 +1,28 @@
+COMMAND=['git', 'grep', '-c', 'silentUnknownAdmitTag', 'cjcjdev/main', '--', 'llvm/lib']
+cjcjdev/main:llvm/lib/Transforms/Scalar/CJIRVerifier.cpp:5
+RC=0
+COMMAND=['git', 'grep', '-c', 'silentUnknownAdmitTag', 'HEAD', '--', 'llvm/lib']
+HEAD:llvm/lib/Transforms/Scalar/CJIRVerifier.cpp:5
+RC=0
+COMMAND=['git', 'grep', '-c', 'reportUnknownPayload', 'cjcjdev/main', '--', 'llvm/lib']
+cjcjdev/main:llvm/lib/Transforms/Scalar/CJIRVerifier.cpp:5
+RC=0
+COMMAND=['git', 'grep', '-c', 'reportUnknownPayload', 'HEAD', '--', 'llvm/lib']
+HEAD:llvm/lib/Transforms/Scalar/CJIRVerifier.cpp:5
+RC=0
+COMMAND=['git', 'grep', '-c', 'uncolorNonHeapGCPtrCopies', 'cjcjdev/main', '--', 'llvm/lib']
+cjcjdev/main:llvm/lib/CodeGen/CJBarrierLowering.cpp:2
+RC=0
+COMMAND=['git', 'grep', '-c', 'uncolorNonHeapGCPtrCopies', 'HEAD', '--', 'llvm/lib']
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:2
+RC=0
+COMMAND=['git', 'grep', '-c', 'cj_gcwrite_generic_payload', 'cjcjdev/main', '--', 'llvm/lib']
+cjcjdev/main:llvm/lib/CodeGen/CJBarrierLowering.cpp:2
+cjcjdev/main:llvm/lib/Transforms/Scalar/CJBoxedValueBarrier.cpp:1
+cjcjdev/main:llvm/lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:1
+RC=0
+COMMAND=['git', 'grep', '-c', 'cj_gcwrite_generic_payload', 'HEAD', '--', 'llvm/lib']
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:2
+HEAD:llvm/lib/Transforms/Scalar/CJBoxedValueBarrier.cpp:1
+HEAD:llvm/lib/Transforms/Scalar/ManagedABIGateVerifier.cpp:1
+RC=0
