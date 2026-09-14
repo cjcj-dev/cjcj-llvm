@@ -400,9 +400,13 @@ public:
 
     // A generational collector needs the runtime path for these even while no
     // tracing cycle is active, so old-to-young writes enter its remembered set.
+    // Static roots also require store-good colouring in every phase, including
+    // initialization (ZBarrierSet::AccessBarrier::oop_store_not_in_heap).
     // Never lower them to a phase-guarded plain store.
     if (IID == Intrinsic::cj_gcwrite_ref ||
+        IID == Intrinsic::cj_gcwrite_static_ref ||
         IID == Intrinsic::cj_gcwrite_struct ||
+        IID == Intrinsic::cj_gcwrite_static_struct ||
         IID == Intrinsic::cj_array_copy_ref ||
         IID == Intrinsic::cj_array_copy_struct ||
         IID == Intrinsic::cj_atomic_store) {
