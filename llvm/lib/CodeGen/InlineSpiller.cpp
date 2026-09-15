@@ -937,7 +937,8 @@ foldMemoryOperand(ArrayRef<std::pair<MachineInstr *, unsigned>> Ops,
     const MachineOperand &Op0 = MI->getOperand(Ops[0].second);
     if (Ops.size() == 1 && Op0.isDef()) {
       MakeSubstitution();
-    } else if (Ops.size() == 2 && Op0.isDef() && MI->getOperand(1).isTied() &&
+    } else if (Ops.size() == 2 && Op0.isDef() && MI->getOperand(1).isReg() &&
+               MI->getOperand(1).isTied() &&
                Op0.getReg() == MI->getOperand(1).getReg()) {
       MakeSubstitution();
     }
