@@ -642,7 +642,7 @@ public:
     IRBuilder<> Builder(ReadInst);
     // Place may carry colour (same as createStoreOrMems write places).
     LoadInst *Load =
-        loadTaggedPointer(Builder, uncolorIfGCPtr(RefFieldPtr, Builder), Order);
+        loadTaggedPointer(Builder, RefFieldPtr, Order);
     Instruction *PtrToInt =
         cast<Instruction>(Builder.CreatePtrToInt(Load, Type::getInt64Ty(C)));
     PtrToInt->setDebugLoc(*Loc);
@@ -656,6 +656,7 @@ public:
                               uint64_t Order) {
     LoadInst *Load = Builder.CreateLoad(DstTy, RefFieldPtr);
     Load->setDebugLoc(*Loc);
+    Load->setMetadata("cj.colored.value", MDNode::get(C, {}));
     if (Order) {
       Load->setAtomic(
           (AtomicOrdering)(Order + (uint64_t)AtomicOrdering::Monotonic));
@@ -714,12 +715,12 @@ public:
         BasicBlock::Create(C, "gcNoMarked", SplitBB->getParent(), Succ);
     BranchInst::Create(Succ, TrueBranch);
     IRBuilder<> Builder(TrueBranch->getTerminator());
-    // RefField.h:179 and its :191-194 static_assert fix the address in the low 48 bits.
-    // If that ABI width changes, this mask must move to a runtime-owned export.
-    constexpr unsigned AddressBits = 48;
-    constexpr uint64_t AddressMask = (uint64_t(1) << AddressBits) - 1;
-    Value *Address = Builder.CreateAnd(
-        PtrToInt, ConstantInt::get(Type::getInt64Ty(C), AddressMask));
+    // ZPointer::uncolor, zAddress.inline.hpp:609-614. The fast path has
+    // established the current remap epoch, so use its published load shift.
+    Type *I64 = Type::getInt64Ty(C);
+    Constant *ShiftGV = M->getOrInsertGlobal("g_cjLoadShift", I64);
+    Value *Shift = Builder.CreateLoad(I64, ShiftGV, "cj.load.shift");
+    Value *Address = Builder.CreateLShr(PtrToInt, Shift, "cj.load.address");
     cast<Instruction>(Address)->setDebugLoc(*Loc);
     Instruction *Uncolored =
         cast<Instruction>(Builder.CreateIntToPtr(Address, DstTy));
@@ -779,7 +780,7 @@ public:
     Type *I64 = Type::getInt64Ty(C);
 
     IRBuilder<> Builder(CI);
-    Value *Place = uncolorIfGCPtr(FieldPtr, Builder);
+    Value *Place = FieldPtr;
     LoadInst *Prev = Builder.CreateLoad(NewVal->getType(), Place, "cj.store.prev");
     Prev->setDebugLoc(DL);
     Value *PrevI = Builder.CreatePtrToInt(Prev, I64, "cj.store.prev.i");
@@ -794,8 +795,6 @@ public:
         Builder.CreateICmpEQ(Bad, ConstantInt::get(I64, (uint64_t)0),
                              "cj.store.colourok");
     cast<Instruction>(ColourOk)->setDebugLoc(DL);
-
-    constexpr uint64_t AddressMask = (uint64_t(1) << 48) - 1;
 
     // Then = color_store_good + bare store; Else = MCC.
     // Split at CI so the gcwrite starts Tail; move it into Else.
@@ -816,8 +815,9 @@ public:
     Value *NewBits =
         FastBuilder.CreateCall(CopyAsm, NewVal, "cj.store.new.bits");
     cast<CallInst>(NewBits)->setDebugLoc(DL);
-    Value *NewI = FastBuilder.CreateAnd(
-        NewBits, ConstantInt::get(I64, AddressMask), "cj.store.new.i");
+    Constant *ShiftGV = M->getOrInsertGlobal("g_cjLoadShift", I64);
+    Value *Shift = FastBuilder.CreateLoad(I64, ShiftGV, "cj.store.shift");
+    Value *NewI = FastBuilder.CreateShl(NewBits, Shift, "cj.store.new.i");
     cast<Instruction>(NewI)->setDebugLoc(DL);
     Constant *GoodGV = M->getOrInsertGlobal("g_cjStoreGoodMask", I64);
     Value *GoodMask = FastBuilder.CreateLoad(I64, GoodGV, "cj.storegoodmask");
@@ -825,12 +825,8 @@ public:
     Value *ColoredI =
         FastBuilder.CreateOr(NewI, GoodMask, "cj.store.colored.i");
     cast<Instruction>(ColoredI)->setDebugLoc(DL);
-    Value *IsNull = FastBuilder.CreateICmpEQ(
-        NewI, ConstantInt::get(I64, (uint64_t)0), "cj.store.new.isnull");
-    cast<Instruction>(IsNull)->setDebugLoc(DL);
-    Value *Word = FastBuilder.CreateSelect(IsNull, NewI, ColoredI,
-                                           "cj.store.word");
-    cast<Instruction>(Word)->setDebugLoc(DL);
+    // ZAddress::store_good, zAddress.inline.hpp:806-808: null is colored too.
+    Value *Word = ColoredI;
     unsigned PlaceAS = Place->getType()->getPointerAddressSpace();
     Value *PlaceI64 = FastBuilder.CreateBitCast(
         Place, PointerType::get(I64, PlaceAS), "cj.store.place.i64");
@@ -1181,92 +1177,6 @@ static bool combineSafepointStub(Module *M,
   return true;
 }
 
-static bool isNonHeapPlace(Value *Ptr) {
-  auto *PT = dyn_cast<PointerType>(Ptr->getType());
-  return PT && PT->getAddressSpace() == 0;
-}
-
-static bool isAlreadyUncolored(Value *V) {
-  if (auto *II = dyn_cast<IntrinsicInst>(V))
-    return II->getIntrinsicID() == Intrinsic::ptrmask;
-  return false;
-}
-
-// STACK_ROOTS_STAY_PLAIN: AS1 refs that enter or leave a non-heap slot must
-// be plain. Value-struct fields (String.myData) are scalar loads/stores of
-// addrspace(1)* through an AS0 place — not gcread/gcwrite (zBarrier load
-// side; COLOUR_BOUNDARY F3). Heap-place raw loads stay untouched.
-static bool uncolorNonHeapGCPtrCopies(Function &F) {
-  bool Changed = false;
-  SmallVector<LoadInst *, 8> Loads;
-  SmallVector<StoreInst *, 8> Stores;
-  for (BasicBlock &BB : F) {
-    for (Instruction &I : BB) {
-      if (auto *LI = dyn_cast<LoadInst>(&I)) {
-        if (isGCPointerType(LI->getType()) &&
-            isNonHeapPlace(LI->getPointerOperand()))
-          Loads.push_back(LI);
-      } else if (auto *SI = dyn_cast<StoreInst>(&I)) {
-        if (isGCPointerType(SI->getValueOperand()->getType()) &&
-            isNonHeapPlace(SI->getPointerOperand()))
-          Stores.push_back(SI);
-      }
-    }
-  }
-  for (LoadInst *LI : Loads) {
-    Instruction *Next = LI->getNextNode();
-    if (!Next)
-      continue;
-    IRBuilder<> Builder(Next);
-    Value *Plain = uncolorIfGCPtr(LI, Builder);
-    if (Plain == LI)
-      continue;
-    LI->replaceUsesWithIf(Plain, [Plain](Use &U) { return U.getUser() != Plain; });
-    Changed = true;
-  }
-  // Incoming AS1 args stored to an AS0 slot (no preceding load).
-  // Skip values already peeled by the load walk.
-  for (StoreInst *SI : Stores) {
-    Value *Val = SI->getValueOperand();
-    if (isAlreadyUncolored(Val))
-      continue;
-    IRBuilder<> Builder(SI);
-    Value *Plain = uncolorIfGCPtr(Val, Builder);
-    if (Plain == Val)
-      continue;
-    SI->setOperand(0, Plain);
-    Changed = true;
-  }
-  return Changed;
-}
-
-// Bare CreateCopyTo memmove/memcpy on AS1 interiors (mmstrip). Helper is shared
-// with createStoreOrMems place peeling (llvm::uncolorIfGCPtr).
-static bool uncolorMemTransferOperands(Function &F) {
-  bool Changed = false;
-  for (BasicBlock &BB : F) {
-    for (Instruction &I : BB) {
-      auto *MT = dyn_cast<MemTransferInst>(&I);
-      if (!MT)
-        continue;
-      IRBuilder<> Builder(MT);
-      Value *Dst = MT->getRawDest();
-      Value *Src = MT->getRawSource();
-      Value *NewDst = uncolorIfGCPtr(Dst, Builder);
-      Value *NewSrc = uncolorIfGCPtr(Src, Builder);
-      if (NewDst != Dst) {
-        MT->setDest(NewDst);
-        Changed = true;
-      }
-      if (NewSrc != Src) {
-        MT->setSource(NewSrc);
-        Changed = true;
-      }
-    }
-  }
-  return Changed;
-}
-
 // llvm.cj.copy.no.ref.struct has already had its concrete AggType and exact
 // size checked by CJIRVerifier.  It carries no reference slots and therefore
 // bypasses CJBarrierSplit and all runtime barrier entry points.  Restore the
@@ -1328,10 +1238,8 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
     Changed |= combineSafepointStub(F.getParent(), Safepoints);
 
   // Independent of barrier set: bare CreateMemMove has no CJ barrier intrinsic.
-  Changed |= uncolorMemTransferOperands(F);
   // Independent of barrier set: value-struct field load/store is a raw
   // LoadInst/StoreInst, not llvm.cj.gcread/gcwrite.
-  Changed |= uncolorNonHeapGCPtrCopies(F);
 
   if (Barriers.empty()) {
     return Changed;
