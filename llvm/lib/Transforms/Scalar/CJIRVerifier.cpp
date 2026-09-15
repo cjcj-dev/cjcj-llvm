@@ -467,6 +467,12 @@ public:
       return;
     }
     switch (IID) {
+    case Intrinsic::cj_gcread_static_ref: {
+      Value *Storage = findMemoryBasePointer(Call.getArgOperand(0));
+      Assert(!isa<AllocaInst>(Storage),
+             "P01: plain local root must not use a colored static read barrier", &Call);
+      break;
+    }
     case Intrinsic::cj_alloca_generic: {
       Value *TIArg = Call.getArgOperand(0)->stripPointerCasts();
       if (auto *GV = dyn_cast<GlobalVariable>(TIArg)) {
