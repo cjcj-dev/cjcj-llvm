@@ -54,6 +54,33 @@ namespace {
 const static StringRef NewObjFastStr = "CJ_MCC_NewObjectFast";
 const static StringRef NewObjFinalizerFastStr = "CJ_MCC_NewFinalizerFast";
 constexpr StringRef SafepointStub = "CJ_Safepoint_Stub";
+constexpr unsigned kCjHeapRangeCap = 8;
+
+static Value *emitReservedHeapSlot(IRBuilder<> &Builder, Module *M, Value *PlaceI,
+                                   const Twine &Name) {
+  LLVMContext &C = M->getContext();
+  Type *I64 = Type::getInt64Ty(C);
+  ArrayType *ArrTy = ArrayType::get(I64, kCjHeapRangeCap);
+  Value *Count =
+      Builder.CreateLoad(I64, M->getOrInsertGlobal("g_cjHeapRangeCount", I64), Name + ".n");
+  Constant *Starts = M->getOrInsertGlobal("g_cjHeapRangeStart", ArrTy);
+  Constant *Ends = M->getOrInsertGlobal("g_cjHeapRangeEnd", ArrTy);
+  Value *In = Builder.getFalse();
+  for (unsigned i = 0; i < kCjHeapRangeCap; ++i) {
+    Value *Idx = Builder.getInt64(i);
+    Value *Live = Builder.CreateICmpULT(Idx, Count, Name + ".live" + Twine(i));
+    Value *SPtr = Builder.CreateInBoundsGEP(
+        ArrTy, Starts, {Builder.getInt64(0), Builder.getInt32(i)}, Name + ".sp" + Twine(i));
+    Value *EPtr = Builder.CreateInBoundsGEP(
+        ArrTy, Ends, {Builder.getInt64(0), Builder.getInt32(i)}, Name + ".ep" + Twine(i));
+    Value *S = Builder.CreateLoad(I64, SPtr, Name + ".s" + Twine(i));
+    Value *E = Builder.CreateLoad(I64, EPtr, Name + ".e" + Twine(i));
+    Value *Hit = Builder.CreateAnd(Builder.CreateICmpUGE(PlaceI, S),
+                                   Builder.CreateICmpULT(PlaceI, E), Name + ".hit" + Twine(i));
+    In = Builder.CreateOr(In, Builder.CreateAnd(Live, Hit), Name + ".acc" + Twine(i));
+  }
+  return In;
+}
 template <typename KeyT, typename ValT>
 using StdMap = std::unordered_map<KeyT, ValT>;
 const static StdMap<unsigned, StringRef> IntrinsicMap{
@@ -655,10 +682,7 @@ public:
       CmpEQ = Builder.CreateAnd(CmpEQ, HeapOwner, "cj.read.heap.fast");
       Type *I64Ty = Type::getInt64Ty(C);
       Value *PlaceI = Builder.CreatePtrToInt(RefFieldPtr, I64Ty, "cj.read.place.i");
-      Value *HeapStart = Builder.CreateLoad(I64Ty, M->getOrInsertGlobal("g_cjHeapStart", I64Ty), "cj.heap.start");
-      Value *HeapEnd = Builder.CreateLoad(I64Ty, M->getOrInsertGlobal("g_cjHeapEnd", I64Ty), "cj.heap.end");
-      Value *InHeap = Builder.CreateAnd(Builder.CreateICmpUGE(PlaceI, HeapStart),
-                                        Builder.CreateICmpULT(PlaceI, HeapEnd), "cj.read.inheap");
+      Value *InHeap = emitReservedHeapSlot(Builder, M, PlaceI, "cj.read.inheap");
       CmpEQ = Builder.CreateAnd(CmpEQ, InHeap, "cj.read.heap.slot");
     }
     splitFastPathAndSlowPath(ReadInst->getParent(), CmpEQ, PtrToInt);
@@ -813,13 +837,7 @@ public:
     Value *HeapOwner = Builder.CreateICmpUGT(Owner, Builder.getInt64(1), "cj.store.heap.owner");
     ColourOk = Builder.CreateAnd(ColourOk, HeapOwner, "cj.store.heap.fast");
     Value *PlaceI = Builder.CreatePtrToInt(Place, I64, "cj.store.place.i");
-    Constant *HeapStartGV = M->getOrInsertGlobal("g_cjHeapStart", I64);
-    Constant *HeapEndGV = M->getOrInsertGlobal("g_cjHeapEnd", I64);
-    Value *HeapStart = Builder.CreateLoad(I64, HeapStartGV, "cj.heap.start");
-    Value *HeapEnd = Builder.CreateLoad(I64, HeapEndGV, "cj.heap.end");
-    Value *InHeap = Builder.CreateAnd(Builder.CreateICmpUGE(PlaceI, HeapStart, "cj.store.ge.start"),
-                                      Builder.CreateICmpULT(PlaceI, HeapEnd, "cj.store.lt.end"),
-                                      "cj.store.inheap");
+    Value *InHeap = emitReservedHeapSlot(Builder, M, PlaceI, "cj.store.inheap");
     ColourOk = Builder.CreateAnd(ColourOk, InHeap, "cj.store.heap.slot");
 
     // Then = color_store_good + bare store; Else = MCC.
