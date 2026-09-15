@@ -469,7 +469,8 @@ public:
     switch (IID) {
     case Intrinsic::cj_gcread_static_ref: {
       Value *Storage = findMemoryBasePointer(Call.getArgOperand(0));
-      Assert(!isa<AllocaInst>(Storage),
+      Assert(!isa<AllocaInst>(Storage) &&
+                 !(isa<Argument>(Storage) && Storage->getType()->getPointerAddressSpace() == 0),
              "P01: plain local root must not use a colored static read barrier", &Call);
       break;
     }
@@ -959,7 +960,10 @@ public:
     }
 
     if (isGCPointerType(LI.getType()) && isa<Constant>(PtrBase)) {
-      checkFailed("Need read static barrier!", &LI);
+      // Cangjie immutable literal records contain plain linker addresses.
+      auto *Global = dyn_cast<GlobalVariable>(PtrBase);
+      if (!Global || !Global->isConstant())
+        checkFailed("Need read static barrier!", &LI);
     }
   }
 

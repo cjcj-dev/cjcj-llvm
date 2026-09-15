@@ -12,3 +12,13 @@ define i8 addrspace(1)* @loaded_value(i8 addrspace(1)* %slot_address, i64 %shift
   ret i8 addrspace(1)* %plain
 }
 !0 = !{}
+
+define i8 addrspace(1)* @plain_argument_slot(i8 addrspace(1)** %slot) gc "cangjie" {
+  %value = load i8 addrspace(1)*, i8 addrspace(1)** %slot
+  ret i8 addrspace(1)* %value
+}
+@literal_slot = constant i8 addrspace(1)* null
+define i8 addrspace(1)* @plain_literal_slot() gc "cangjie" {
+  %value = load i8 addrspace(1)*, i8 addrspace(1)** @literal_slot
+  ret i8 addrspace(1)* %value
+}
