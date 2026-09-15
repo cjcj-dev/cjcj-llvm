@@ -1,5 +1,5 @@
-; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O0 -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s --implicit-check-not=GetGCPhase --implicit-check-not=gcNoRunning
-; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O2 -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s --implicit-check-not=GetGCPhase --implicit-check-not=gcNoRunning
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O0 -print-after=cj-barrier-lowering -print-module-scope -filter-print-funcs=plain_stack_store -o /dev/null < %s 2>&1 | FileCheck %s --implicit-check-not=GetGCPhase --implicit-check-not=gcNoRunning
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O2 -print-after=cj-barrier-lowering -print-module-scope -filter-print-funcs=plain_stack_store -o /dev/null < %s 2>&1 | FileCheck %s --implicit-check-not=GetGCPhase --implicit-check-not=gcNoRunning
 ;
 ; ZBarrierSet::AccessBarrier::oop_store_not_in_heap, zBarrierSet.inline.hpp:258.
 ; Native slots keep their colored store protocol independently of phase.
