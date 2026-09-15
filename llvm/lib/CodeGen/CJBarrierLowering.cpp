@@ -647,6 +647,13 @@ public:
         cast<Instruction>(Builder.CreatePtrToInt(Load, Type::getInt64Ty(C)));
     PtrToInt->setDebugLoc(*Loc);
     Value *CmpEQ = cmpTaggedPointer(PtrToInt, Builder);
+    if (ReadBarrier->getIntrinsicID() == Intrinsic::cj_gcread_ref) {
+      // A value-type constructor can receive stack ($BP=0), global ($BP=1),
+      // or heap storage. Only the heap owner uses this inline heap fast path.
+      Value *Owner = Builder.CreatePtrToInt(getBaseObj(ReadBarrier), Type::getInt64Ty(C));
+      Value *HeapOwner = Builder.CreateICmpUGT(Owner, Builder.getInt64(1), "cj.read.heap.owner");
+      CmpEQ = Builder.CreateAnd(CmpEQ, HeapOwner, "cj.read.heap.fast");
+    }
     splitFastPathAndSlowPath(ReadInst->getParent(), CmpEQ, PtrToInt);
   }
 
@@ -698,7 +705,7 @@ public:
   //   %Cond = icmp eq i64 %tag, 0
   //   br i1 %Cond, label %gcNoMarked label %gcMarked
   // gcNoMarked:
-  //   %address = and i64 %PtrToInt, 0x0000ffffffffffff
+  //   %address = lshr i64 %PtrToInt, @g_cjLoadShift
   //   %val1 = inttoptr i64 %address to i8 addrspace(1)*
   //   br label %loadFinish
   // gcMarked:
@@ -765,7 +772,7 @@ private:
 //
 // ZGC color_store_good (zBarrier.inline.hpp:448-450 /
 // zAddress.inline.hpp:806-808). Hit arm peels new, ORs StoreGood, i64 store.
-// Null stays plain 0 (WCollector.h:756-758). Miss goes to MCC. The hit arm
+// Null is store-good colored. Non-heap owners and mask misses go to MCC. The hit arm
 // hands the pre-store word to the runtime exit: like ZGC's load_atomic(p)
 // capture (zBarrier.inline.hpp:695-706), this is the SATB deletion record and
 // cannot be reconstructed from the installed new word.
@@ -795,6 +802,9 @@ public:
         Builder.CreateICmpEQ(Bad, ConstantInt::get(I64, (uint64_t)0),
                              "cj.store.colourok");
     cast<Instruction>(ColourOk)->setDebugLoc(DL);
+    Value *Owner = Builder.CreatePtrToInt(getBaseObj(CI), I64);
+    Value *HeapOwner = Builder.CreateICmpUGT(Owner, Builder.getInt64(1), "cj.store.heap.owner");
+    ColourOk = Builder.CreateAnd(ColourOk, HeapOwner, "cj.store.heap.fast");
 
     // Then = color_store_good + bare store; Else = MCC.
     // Split at CI so the gcwrite starts Tail; move it into Else.
@@ -1013,7 +1023,7 @@ void CJBarrierLowering::writeBarrierFastPath(Function &F,
 //   %3 = icmp eq i64 %2, 0
 //   br i1 %3, label %gcNoMarked label %gcMarked
 // gcNoMarked:
-//   %val1 = and %0, 0x0000ffffffffffff
+//   %val1 = lshr %0, @g_cjLoadShift
 //   br label %loadFinish
 // gcMarked:
 //   %val2 = call @llvm.cj.gcread.ref
