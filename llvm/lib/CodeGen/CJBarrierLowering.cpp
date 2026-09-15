@@ -653,6 +653,13 @@ public:
       Value *Owner = Builder.CreatePtrToInt(getBaseObj(ReadBarrier), Type::getInt64Ty(C));
       Value *HeapOwner = Builder.CreateICmpUGT(Owner, Builder.getInt64(1), "cj.read.heap.owner");
       CmpEQ = Builder.CreateAnd(CmpEQ, HeapOwner, "cj.read.heap.fast");
+      Type *I64Ty = Type::getInt64Ty(C);
+      Value *PlaceI = Builder.CreatePtrToInt(RefFieldPtr, I64Ty, "cj.read.place.i");
+      Value *HeapStart = Builder.CreateLoad(I64Ty, M->getOrInsertGlobal("g_cjHeapStart", I64Ty), "cj.heap.start");
+      Value *HeapEnd = Builder.CreateLoad(I64Ty, M->getOrInsertGlobal("g_cjHeapEnd", I64Ty), "cj.heap.end");
+      Value *InHeap = Builder.CreateAnd(Builder.CreateICmpUGE(PlaceI, HeapStart),
+                                        Builder.CreateICmpULT(PlaceI, HeapEnd), "cj.read.inheap");
+      CmpEQ = Builder.CreateAnd(CmpEQ, InHeap, "cj.read.heap.slot");
     }
     splitFastPathAndSlowPath(ReadInst->getParent(), CmpEQ, PtrToInt);
   }
@@ -805,6 +812,15 @@ public:
     Value *Owner = Builder.CreatePtrToInt(getBaseObj(CI), I64);
     Value *HeapOwner = Builder.CreateICmpUGT(Owner, Builder.getInt64(1), "cj.store.heap.owner");
     ColourOk = Builder.CreateAnd(ColourOk, HeapOwner, "cj.store.heap.fast");
+    Value *PlaceI = Builder.CreatePtrToInt(Place, I64, "cj.store.place.i");
+    Constant *HeapStartGV = M->getOrInsertGlobal("g_cjHeapStart", I64);
+    Constant *HeapEndGV = M->getOrInsertGlobal("g_cjHeapEnd", I64);
+    Value *HeapStart = Builder.CreateLoad(I64, HeapStartGV, "cj.heap.start");
+    Value *HeapEnd = Builder.CreateLoad(I64, HeapEndGV, "cj.heap.end");
+    Value *InHeap = Builder.CreateAnd(Builder.CreateICmpUGE(PlaceI, HeapStart, "cj.store.ge.start"),
+                                      Builder.CreateICmpULT(PlaceI, HeapEnd, "cj.store.lt.end"),
+                                      "cj.store.inheap");
+    ColourOk = Builder.CreateAnd(ColourOk, InHeap, "cj.store.heap.slot");
 
     // Then = color_store_good + bare store; Else = MCC.
     // Split at CI so the gcwrite starts Tail; move it into Else.
