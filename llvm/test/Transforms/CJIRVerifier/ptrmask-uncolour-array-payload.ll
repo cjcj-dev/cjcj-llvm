@@ -18,8 +18,7 @@ define void @allow_uncolour_ptrmask_memmove() gc "cangjie" {
 entry:
   %rawarray = call i8 addrspace(1)* @llvm.cj.malloc.array(
       i8* bitcast (%TypeInfo* @RawArrayUInt8.ti to i8*), i64 200, i64 1)
-  %uncolor.ptr = call i8 addrspace(1)* @llvm.ptrmask.p1i8.i64(i8 addrspace(1)* %rawarray, i64 281474976710655)
-  %array.cast = bitcast i8 addrspace(1)* %uncolor.ptr to i8* addrspace(1)*
+  %array.cast = bitcast i8 addrspace(1)* %rawarray to i8* addrspace(1)*
   %object.payload = getelementptr i8*, i8* addrspace(1)* %array.cast, i32 1
   %layout = bitcast i8* addrspace(1)* %object.payload to %ArrayLayout.UInt8 addrspace(1)*
   %elements = getelementptr inbounds %ArrayLayout.UInt8, %ArrayLayout.UInt8 addrspace(1)* %layout, i32 0, i32 1

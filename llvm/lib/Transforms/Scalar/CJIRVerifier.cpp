@@ -462,7 +462,18 @@ public:
     }
 
     unsigned IID = Call.getIntrinsicID();
+    if (IID == Intrinsic::ptrmask && isGCPointerType(Call.getType())) {
+      checkFailed("P01: GC addresses are plain; ptrmask cannot uncolor a field value", &Call);
+      return;
+    }
     switch (IID) {
+    case Intrinsic::cj_gcread_static_ref: {
+      Value *Storage = findMemoryBasePointer(Call.getArgOperand(0));
+      Assert(!isa<AllocaInst>(Storage) &&
+                 !(isa<Argument>(Storage) && Storage->getType()->getPointerAddressSpace() == 0),
+             "P01: plain local root must not use a colored static read barrier", &Call);
+      break;
+    }
     case Intrinsic::cj_alloca_generic: {
       Value *TIArg = Call.getArgOperand(0)->stripPointerCasts();
       if (auto *GV = dyn_cast<GlobalVariable>(TIArg)) {
@@ -904,11 +915,14 @@ public:
 
   void visitStoreInst(StoreInst &SI) {
     Value *Val = SI.getValueOperand();
+    Value *PtrBase = findMemoryBasePointer(SI.getPointerOperand());
+    if (auto *Loaded = dyn_cast<LoadInst>(PtrBase)) {
+      Assert(!Loaded->getMetadata("cj.colored.value"),
+             "P01: colored field value cannot be used as an address", &SI);
+    }
     if (!Val->getType()->isPointerTy())
       return;
-
     Value *ValBase = findMemoryBasePointer(Val);
-    Value *PtrBase = findMemoryBasePointer(SI.getPointerOperand());
     if (isGCPointerType(ValBase->getType()) &&
         isGCPointerType(PtrBase->getType())) {
       checkFailed("Need write barrier!", &SI);
@@ -919,17 +933,37 @@ public:
     }
   }
 
-  void visitLoadInst(LoadInst &LI) {
-    if (!LI.getType()->isPointerTy())
+  void visitIntToPtrInst(IntToPtrInst &Cast) {
+    if (!isGCPointerType(Cast.getType()))
       return;
+    auto *Shift = dyn_cast<BinaryOperator>(Cast.getOperand(0));
+    if (!Shift || Shift->getOpcode() != Instruction::LShr)
+      return;
+    auto *Bits = dyn_cast<PtrToIntInst>(Shift->getOperand(0));
+    if (!Bits || !isGCPointerType(Bits->getPointerOperand()->getType()))
+      return;
+    auto *Loaded = dyn_cast<LoadInst>(Bits->getPointerOperand());
+    Assert(Loaded && Loaded->getMetadata("cj.colored.value"),
+           "P01: uncolor requires a loaded colored value, not a plain address", &Cast);
+  }
 
+  void visitLoadInst(LoadInst &LI) {
     Value *PtrBase = findMemoryBasePointer(LI.getPointerOperand());
+    if (auto *Loaded = dyn_cast<LoadInst>(PtrBase)) {
+      Assert(!Loaded->getMetadata("cj.colored.value"),
+             "P01: colored field value cannot be used as an address", &LI);
+    }
+    if (!LI.getType()->isPointerTy() || LI.getMetadata("cj.colored.value"))
+      return;
     if (isGCPointerType(LI.getType()) && isGCPointerType(PtrBase->getType())) {
       checkFailed("Need read barrier!", &LI);
     }
 
     if (isGCPointerType(LI.getType()) && isa<Constant>(PtrBase)) {
-      checkFailed("Need read static barrier!", &LI);
+      // Cangjie immutable literal records contain plain linker addresses.
+      auto *Global = dyn_cast<GlobalVariable>(PtrBase);
+      if (!Global || !Global->isConstant())
+        checkFailed("Need read static barrier!", &LI);
     }
   }
 
@@ -1885,54 +1919,9 @@ private:
            isa<GlobalVariable>(Base);
   }
 
-  // Cangjie uncolour ABI: colour lives in bits 48+ of an AS1 pointer
-  // (IRBuilder.cj UncolorIfGCPtr, mask 0x0000FFFFFFFFFFFF).  Dual of
-  // SafepointIRVerifier.cpp:1004-1005 AddressBits=48.  ZGC's
-  // ZAddressOffsetMask (zAddress.hpp:39) is the offset field of an
-  // *uncoloured* zaddress; ZGC colour is in the low metadata bits of a
-  // zpointer (zAddress.hpp:48-73), so the numeric mask is not copied from
-  // HotSpot.  A ptrmask is identity-preserving for provenance iff it is
-  // this exact constant (keep bits [0,47], clear [48,63]).
-  static constexpr unsigned UncolourAddressBits = 48;
-  static constexpr uint64_t UncolourAddressMask =
-      (uint64_t(1) << UncolourAddressBits) - 1;
-
-  bool isUncolourPtrmask(const IntrinsicInst *II) {
-    if (!II || II->getIntrinsicID() != Intrinsic::ptrmask)
-      return false;
-    auto *Mask = dyn_cast<ConstantInt>(II->getArgOperand(1));
-    return Mask && Mask->getValue().getActiveBits() <= 64 &&
-           Mask->getZExtValue() == UncolourAddressMask;
-  }
-
-  Value *peelUncolourPtrmasks(Value *V) {
-    SmallPtrSet<Value *, 4> Seen;
-    while (auto *II = dyn_cast<IntrinsicInst>(V)) {
-      if (!Seen.insert(V).second)
-        break;
-      if (!isUncolourPtrmask(II))
-        break;
-      V = II->getArgOperand(0);
-    }
-    return V;
-  }
-
-  Value *stripConstantOffsetsThroughUncolourPtrmask(Value *Ptr, APInt &Offset) {
-    SmallPtrSet<Value *, 8> Seen;
-    while (Seen.insert(Ptr).second) {
-      Value *Stripped =
-          Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
-      if (!isUncolourPtrmask(dyn_cast<IntrinsicInst>(Stripped)))
-        return Stripped;
-      Ptr = cast<IntrinsicInst>(Stripped)->getArgOperand(0);
-    }
-    return Ptr;
-  }
-
   IntrinsicInst *getKnownHeapAllocation(Value *Base,
                                         StructType *&LayoutTy) {
     LayoutTy = nullptr;
-    Base = peelUncolourPtrmasks(Base);
     auto *Allocation = dyn_cast<IntrinsicInst>(Base);
     if (!Allocation)
       return nullptr;
@@ -2270,7 +2259,7 @@ private:
       return ReferencePayloadKind::Unknown;
 
     APInt Offset(DL.getIndexSizeInBits(PtrTy->getAddressSpace()), 0);
-    Value *Base = stripConstantOffsetsThroughUncolourPtrmask(Ptr, Offset);
+    Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, true);
     StructType *LayoutTy = nullptr;
     auto *Allocation = getKnownHeapAllocation(Base, LayoutTy);
     if (!Allocation ||

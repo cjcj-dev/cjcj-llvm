@@ -220,6 +220,12 @@ void CJMetadataInfo::recordGlobalVariable(const GlobalVariable *GV) {
   GCStrategy *GS = AP.getAnalysisIfAvailable<GCModuleInfo>()->getGCStrategy(
       StringRef("cangjie"));
 
+  // Immutable literal records contain plain linker addresses. They are read
+  // in the compiler's plain domain and must not enter the colored root table.
+  // Keep the metadata handled above; only GC root registration is excluded.
+  if (GV->isConstant() && !GV->isExternallyInitialized())
+    return;
+
   // GCRoots
   if (auto PT = dyn_cast<PointerType>(GV->getValueType())) {
     if (*GS->isGCManagedPointer(PT)) {
