@@ -542,15 +542,6 @@ public:
     StoreInst *St =
         FastBuilder.CreateStore(Word, PlaceI64, /*isVolatile=*/true);
     St->setDebugLoc(DL);
-    Value *BaseObj = getBaseObj(CI);
-    FunctionType *PostStoreTy = FunctionType::get(
-        Type::getVoidTy(C),
-        {NewVal->getType(), BaseObj->getType(), FieldPtr->getType(), I64}, false);
-    FunctionCallee PostStore =
-        M->getOrInsertFunction("CJ_MCC_PostWriteRefField", PostStoreTy);
-    CallInst *PostStoreCall = FastBuilder.CreateCall(
-        PostStore, {NewVal, BaseObj, FieldPtr, PrevI});
-    PostStoreCall->setDebugLoc(DL);
     CI->moveBefore(ElseTerm);
   }
 
