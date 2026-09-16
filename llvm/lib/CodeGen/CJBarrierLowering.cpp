@@ -52,31 +52,66 @@ namespace {
 const static StringRef NewObjFastStr = "CJ_MCC_NewObjectFast";
 const static StringRef NewObjFinalizerFastStr = "CJ_MCC_NewFinalizerFast";
 constexpr StringRef SafepointStub = "CJ_Safepoint_Stub";
-constexpr unsigned kCjHeapRangeCap = 8;
+// Runtime P04 publishes every ZGC reservation (ZMaxVirtualReservations=100).
+// This table is the P01 slot-domain ABI; query only the live entries.
+constexpr unsigned kCjHeapRangeCap = 100;
 
 static Value *emitReservedHeapSlot(IRBuilder<> &Builder, Module *M, Value *PlaceI,
                                    const Twine &Name) {
   LLVMContext &C = M->getContext();
   Type *I64 = Type::getInt64Ty(C);
   ArrayType *ArrTy = ArrayType::get(I64, kCjHeapRangeCap);
-  Value *Count =
-      Builder.CreateLoad(I64, M->getOrInsertGlobal("g_cjHeapRangeCount", I64), Name + ".n");
+  Value *Count = Builder.CreateLoad(
+      I64, M->getOrInsertGlobal("g_cjHeapRangeCount", I64), Name + ".n");
   Constant *Starts = M->getOrInsertGlobal("g_cjHeapRangeStart", ArrTy);
   Constant *Ends = M->getOrInsertGlobal("g_cjHeapRangeEnd", ArrTy);
-  Value *In = Builder.getFalse();
-  for (unsigned i = 0; i < kCjHeapRangeCap; ++i) {
-    Value *Idx = Builder.getInt64(i);
-    Value *Live = Builder.CreateICmpULT(Idx, Count, Name + ".live" + Twine(i));
-    Value *SPtr = Builder.CreateInBoundsGEP(
-        ArrTy, Starts, {Builder.getInt64(0), Builder.getInt32(i)}, Name + ".sp" + Twine(i));
-    Value *EPtr = Builder.CreateInBoundsGEP(
-        ArrTy, Ends, {Builder.getInt64(0), Builder.getInt32(i)}, Name + ".ep" + Twine(i));
-    Value *S = Builder.CreateLoad(I64, SPtr, Name + ".s" + Twine(i));
-    Value *E = Builder.CreateLoad(I64, EPtr, Name + ".e" + Twine(i));
-    Value *Hit = Builder.CreateAnd(Builder.CreateICmpUGE(PlaceI, S),
-                                   Builder.CreateICmpULT(PlaceI, E), Name + ".hit" + Twine(i));
-    In = Builder.CreateOr(In, Builder.CreateAnd(Live, Hit), Name + ".acc" + Twine(i));
-  }
+
+  // Keep the decision at this helper's original read/store call sites. The
+  // runtime count controls a bounded loop, rather than unrolling empty slots.
+  BasicBlock *Entry = Builder.GetInsertBlock();
+  Instruction *ResumeAt = &*Builder.GetInsertPoint();
+  Function *F = Entry->getParent();
+  BasicBlock *Done = Entry->splitBasicBlock(ResumeAt, Name + ".done");
+  BasicBlock *Check = BasicBlock::Create(C, Name + ".check", F, Done);
+  BasicBlock *Loop = BasicBlock::Create(C, Name + ".loop", F, Done);
+  BasicBlock *Next = BasicBlock::Create(C, Name + ".next", F, Done);
+  BasicBlock *Invalid = BasicBlock::Create(C, Name + ".invalid", F, Done);
+  Entry->getTerminator()->eraseFromParent();
+  Builder.SetInsertPoint(Entry);
+  Value *Valid = Builder.CreateICmpULE(Count, Builder.getInt64(kCjHeapRangeCap),
+                                      Name + ".count.valid");
+  Builder.CreateCondBr(Valid, Check, Invalid);
+
+  Builder.SetInsertPoint(Invalid);
+  Builder.CreateCall(Intrinsic::getDeclaration(M, Intrinsic::trap));
+  Builder.CreateUnreachable();
+
+  Builder.SetInsertPoint(Check);
+  Builder.CreateCondBr(Builder.CreateICmpNE(Count, Builder.getInt64(0)), Loop, Done);
+
+  Builder.SetInsertPoint(Loop);
+  PHINode *Index = Builder.CreatePHI(I64, 2, Name + ".index");
+  Index->addIncoming(Builder.getInt64(0), Check);
+  Value *SPtr = Builder.CreateInBoundsGEP(
+      ArrTy, Starts, {Builder.getInt64(0), Index}, Name + ".sp");
+  Value *EPtr = Builder.CreateInBoundsGEP(
+      ArrTy, Ends, {Builder.getInt64(0), Index}, Name + ".ep");
+  Value *Start = Builder.CreateLoad(I64, SPtr, Name + ".start");
+  Value *End = Builder.CreateLoad(I64, EPtr, Name + ".end");
+  Value *Hit = Builder.CreateAnd(Builder.CreateICmpUGE(PlaceI, Start),
+                                  Builder.CreateICmpULT(PlaceI, End), Name + ".hit");
+  Builder.CreateCondBr(Hit, Done, Next);
+
+  Builder.SetInsertPoint(Next);
+  Value *NextIndex = Builder.CreateAdd(Index, Builder.getInt64(1), Name + ".next.index");
+  Index->addIncoming(NextIndex, Next);
+  Builder.CreateCondBr(Builder.CreateICmpULT(NextIndex, Count), Loop, Done);
+
+  Builder.SetInsertPoint(ResumeAt);
+  PHINode *In = Builder.CreatePHI(Builder.getInt1Ty(), 3, Name + ".result");
+  In->addIncoming(Builder.getFalse(), Check);
+  In->addIncoming(Builder.getTrue(), Loop);
+  In->addIncoming(Builder.getFalse(), Next);
   return In;
 }
 template <typename KeyT, typename ValT>
