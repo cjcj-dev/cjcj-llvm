@@ -30,7 +30,7 @@
 ; CHECK: %cj.store.inheap.result = phi i1
 ; CHECK: %cj.store.heap.slot = and i1 %cj.store.heap.fast, %cj.store.inheap.result
 ; CHECK: br i1 %cj.store.heap.slot, label %storeFinish, label %gcStoreBad
-; CHECK: call void @CJ_MCC_PostWriteRefField
+; CHECK-NOT: call void @CJ_MCC_PostWriteRefField
 ; CHECK: call void @CJ_MCC_WriteRefField
 
 define void @p04_write(i8 addrspace(1)* %value, i8 addrspace(1)* %base,

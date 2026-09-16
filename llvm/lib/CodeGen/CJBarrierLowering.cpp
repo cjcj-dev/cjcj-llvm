@@ -38,8 +38,6 @@ using namespace cangjie;
 
 static cl::opt<bool> EnableTaggedPointer("enable-tagged-pointer",
                                          cl::init(true), cl::Hidden);
-static cl::opt<bool> EnableGCPhase("enable-gc-phase", cl::init(true),
-                                   cl::Hidden);
 static cl::opt<bool> EnableGCFastPath("enable-gc-fast-path", cl::init(true),
                                       cl::Hidden);
 
@@ -141,37 +139,6 @@ const static StdMap<unsigned, StringRef> IntrinsicMap{
     {Intrinsic::cj_array_copy_generic, "CJ_MCC_ArrayCopyGeneric"},
     {Intrinsic::cj_gcwrite_generic_payload, "CJ_MCC_WriteGenericPayload"},
     {Intrinsic::cj_gcread_generic_payload, "CJ_MCC_ReadGenericPayload"}};
-
-struct BBInfo {
-  // BB last used barrier after safepoint
-  CallBase *LastBarrier;
-
-  bool HasCalls; // has GC Calls
-
-  //  there are barriers before first safepoint
-  bool BeforeCall;
-  bool Visited;
-  Instruction *OutCheck;
-  Instruction *InCheck;
-
-  // 8: default preBBs size
-  SmallVector<BasicBlock *, 8> PreBBs;
-
-  BBInfo() : HasCalls(false), BeforeCall(false), Visited(false) {
-    LastBarrier = nullptr;
-    OutCheck = nullptr;
-    InCheck = nullptr;
-  }
-};
-
-static bool mayBeSafepoint(Instruction *Inst) {
-  if (auto CI = dyn_cast<CallBase>(Inst)) {
-    if (CI->getIntrinsicID() == Intrinsic::cj_gc_statepoint) {
-      return true;
-    }
-  }
-  return false;
-}
 
 /// Declarations for Cangjie barrier functions.
 class BarrierMaker {
@@ -355,337 +322,33 @@ private:
   }
 };
 
-// Insert gc-phase check for write barriers.
-class GCPhaseCheck {
-public:
-  explicit GCPhaseCheck(Function &F) : C(F.getContext()) {
-    GCStateCheckFunc = F.getParent()->getFunction("GetGCPhase");
-    assert(GCStateCheckFunc && "Has no GetGCPhase");
-  };
-  ~GCPhaseCheck() = default;
-
-  void initBBInfo(Function &F) {
-    BBInfosMap.clear();
-    Barriers.clear();
-    BarrierCheckMap.clear();
-    for (auto &BB : F) {
-      BBInfosMap[&BB] = BBInfo();
-    }
-  }
-
-  void setLastBarrier(CallBase *CI) {
-    BasicBlock *BB = CI->getParent();
-    auto &Info = BBInfosMap[BB];
-    if (Info.LastBarrier == nullptr) {
-      Info.LastBarrier = CI;
-      if (Info.HasCalls) {
-        createCheck(CI);
-      }
-    }
-    if (!Info.HasCalls) {
-      Info.BeforeCall = true;
-    }
-  }
-
-  void setHasCall(BasicBlock *BB) {
-    auto &Info = BBInfosMap[BB];
-    Info.HasCalls = true;
-    Info.LastBarrier = nullptr;
-  }
-
-  bool isNullPointer(Value *V) {
-    if (isa<Constant>(V)) {
-      return V->getValueID() == Value::ConstantPointerNullVal;
-    }
+// ZBarrierSet::barrier_needed (zBarrierSet.cpp:230-244): the storage
+// contract, not the collection phase, determines whether a barrier is needed.
+// Preserve P01's proof for plain stack/value storage. A null owner alone is
+// not sufficient: an unknown AS1 slot must retain its runtime barrier.
+static bool hasProvenNonHeapDestination(CallBase *CI) {
+  Value *Dst = nullptr;
+  switch (CI->getIntrinsicID()) {
+  case Intrinsic::cj_gcwrite_ref:
+    Dst = getPointerArg(CI);
+    break;
+  case Intrinsic::cj_gcwrite_struct:
+    Dst = getDest(CI);
+    break;
+  default:
     return false;
   }
 
-  // A null base object is not a storage-class proof.  Raw lowering is valid
-  // only when the destination itself is rooted in an alloca or AS0; an
-  // unknown AS1 destination may still be a heap reference slot and must stay
-  // on the MCC path so the runtime publishes a coloured word.
-  bool hasProvenNonHeapDestination(CallBase *CI) {
-    Value *Dst = nullptr;
-    switch (CI->getIntrinsicID()) {
-    case Intrinsic::cj_gcwrite_ref:
-      Dst = getPointerArg(CI);
-      break;
-    case Intrinsic::cj_gcwrite_struct:
-      Dst = getDest(CI);
-      break;
-    default:
-      return false;
-    }
-
-    auto *DstTy = dyn_cast<PointerType>(Dst->getType());
-    if (DstTy && DstTy->getAddressSpace() == 0)
-      return true;
-
-    Value *Base = findMemoryBasePointer(Dst);
-    if (isa<AllocaInst>(Base))
-      return true;
-    auto *BaseTy = dyn_cast<PointerType>(Base->getType());
-    return BaseTy && BaseTy->getAddressSpace() == 0;
-  }
-
-  bool fastBarrier(unsigned IID, CallBase *CI) {
-    switch (IID) {
-    // Stack/AS0 writes have no HeapSlot colour contract.  Null alone proves
-    // nothing: keep an unproven AS1 destination on MCC.
-    case Intrinsic::cj_gcwrite_ref:
-    case Intrinsic::cj_gcwrite_struct: {
-      Value *BaseObj = getBaseObj(CI);
-      if (isNullPointer(BaseObj) && hasProvenNonHeapDestination(CI)) {
-        IRBuilder<> Builder(CI);
-        createStoreOrMems(CI, Builder);
-        CI->eraseFromParent();
-        return true;
-      }
-      break;
-    }
-    // non-constant ordering.
-    case Intrinsic::cj_atomic_store:
-    case Intrinsic::cj_atomic_swap:
-      if (!isa<Constant>(getAtomicOrder(CI))) {
-        return false;
-      }
-      break;
-    case Intrinsic::cj_atomic_compare_swap:
-      if (!isa<Constant>(CI->getArgOperand(AtomicCompareSwap::SuccOrder)) ||
-          !isa<Constant>(CI->getArgOperand(AtomicCompareSwap::FailOrder))) {
-        return false;
-      }
-      break;
-    default:
-      break;
-    }
-
-    // A generational collector needs the runtime path for these even while no
-    // tracing cycle is active, so old-to-young writes enter its remembered set.
-    // Static roots also require store-good colouring in every phase, including
-    // initialization (ZBarrierSet::AccessBarrier::oop_store_not_in_heap).
-    // Never lower them to a phase-guarded plain store.
-    if (IID == Intrinsic::cj_gcwrite_ref ||
-        IID == Intrinsic::cj_gcwrite_static_ref ||
-        IID == Intrinsic::cj_gcwrite_struct ||
-        IID == Intrinsic::cj_gcwrite_static_struct ||
-        IID == Intrinsic::cj_array_copy_ref ||
-        IID == Intrinsic::cj_array_copy_struct ||
-        IID == Intrinsic::cj_atomic_store) {
-      return false;
-    }
-
-    setLastBarrier(CI);
-    Barriers.push_back(CI);
+  auto *DstTy = dyn_cast<PointerType>(Dst->getType());
+  if (DstTy && DstTy->getAddressSpace() == 0)
     return true;
-  }
 
-  void updateBBOut(BasicBlock *BB) {
-    BBInfo &Info = BBInfosMap[BB];
-    if (Info.HasCalls && Info.LastBarrier != nullptr) {
-      Info.OutCheck = BarrierCheckMap[Info.LastBarrier];
-      assert(Info.OutCheck && "out check don't generate.");
-    }
-  }
-
-  void finishAll() {
-    updateBBInfo();
-    replaceBarrier();
-  }
-
-  void createGCCheck(BasicBlock *InsertBB, BasicBlock *True,
-                     BasicBlock *False) {
-    IRBuilder<> IRB(InsertBB);
-    CallInst *GCState = IRB.CreateCall(GCStateCheckFunc);
-    GCState->setCallingConv(CallingConv::CangjieGC);
-    auto CheckResult = IRB.CreateICmpSLE(
-        GCState, Constant::getIntegerValue(GCState->getType(), APInt(32, 8)));
-    IRB.CreateCondBr(CheckResult, True, False);
-  }
-
-private:
-  LLVMContext &C;
-  Function *GCStateCheckFunc = nullptr;
-  SmallVector<CallBase *, 8> Barriers;
-  SmallMapVector<BasicBlock *, BBInfo, 8> BBInfosMap;
-  SmallMapVector<Instruction *, Instruction *, 8> BarrierCheckMap;
-
-  Instruction *createCheck(CallBase *CI) {
-    Instruction *CheckResult = BarrierCheckMap[CI];
-    if (CheckResult)
-      return CheckResult;
-    IRBuilder<> Builder(CI);
-    // direct load from thread local if possible
-    CallInst *GCState = Builder.CreateCall(GCStateCheckFunc);
-    GCState->setCallingConv(CallingConv::CangjieGC);
-    // 8: related and equal to enum GCPhase::kGCPhaseInit.
-    CheckResult = dyn_cast<Instruction>(Builder.CreateICmpSLE(
-        GCState, Constant::getIntegerValue(GCState->getType(), APInt(32, 8))));
-    BarrierCheckMap[CI] = CheckResult;
-    return CheckResult;
-  }
-
-  Instruction *createPhi(BasicBlock *BB,
-                         SmallVector<Instruction *, 8> &PhiValues) {
-    auto &Info = BBInfosMap[BB];
-    unsigned IncomingSize = PhiValues.size();
-    Type *CheckType = PhiValues[0]->getType();
-    IRBuilder<> Builder(BB->getFirstNonPHI());
-    PHINode *Phi = Builder.CreatePHI(CheckType, IncomingSize);
-    for (unsigned i = 0; i < PhiValues.size(); i++) {
-      Phi->addIncoming(PhiValues[i], Info.PreBBs[i]);
-    }
-    return Phi;
-  }
-
-  void updateBBInfo() {
-    for (auto &Info : BBInfosMap) {
-      BasicBlock *CurBB = Info.first;
-      for (BasicBlock *Succ : successors(CurBB)) {
-        auto &BBInfo = BBInfosMap[Succ];
-        BBInfo.PreBBs.push_back(CurBB);
-      }
-    }
-  }
-
-  void resetLastCheckResult(Instruction *&CR, BasicBlock *CurBB, unsigned i) {
-    for (BasicBlock::iterator BBInst = CurBB->begin();;) {
-      if (Barriers[i] == &*BBInst)
-        break;
-      if (mayBeSafepoint(&*BBInst)) {
-        CR = nullptr;
-        break;
-      }
-      BBInst++;
-    }
-  }
-
-  Instruction *createFastInstr(BasicBlock *TrueBranch, CallBase *CI,
-                               const DebugLoc &CurDbg) {
-    IRBuilder<> Builder(TrueBranch->getTerminator());
-    Instruction *NewInst = createStoreOrMems(CI, Builder);
-    if (NewInst != nullptr) {
-      NewInst->setDebugLoc(CurDbg);
-    }
-    return NewInst;
-  }
-
-  void handleSuccPhi(CallBase *CI, BasicBlock *FalseBranch, Instruction *New,
-                     BasicBlock *TrueBranch, BasicBlock *Succ) {
-    Intrinsic::ID IID = CI->getIntrinsicID();
-    if (IID != Intrinsic::cj_atomic_swap &&
-        IID != Intrinsic::cj_atomic_compare_swap) {
-      return;
-    }
-    Value *Result = nullptr;
-    IRBuilder<> BuilderExtract(TrueBranch->getTerminator());
-    if (IID == Intrinsic::cj_atomic_compare_swap) {
-      Result = BuilderExtract.CreateExtractValue(New, 1, "swapResult");
-    } else {
-      Result = BuilderExtract.CreateIntToPtr(
-          New, Type::getInt8Ty(CI->getContext())->getPointerTo(1));
-    }
-    IRBuilder<> Builder(Succ->getFirstNonPHI());
-    PHINode *Phi = Builder.CreatePHI(CI->getType(), 2);
-    CI->replaceAllUsesWith(Phi);
-    Phi->addIncoming(CI, FalseBranch);
-    Phi->addIncoming(Result, TrueBranch);
-  }
-  // do the following conversion:
-  //   call void @llvm.cj.gcwrite
-  // =====>
-  //   br i1 CondVal, label %gcNoRunning, label %gcRunning
-  // gcRunning:
-  //   call void @llvm.cj.gcwrite
-  //   br label %storeFinish
-  // gcNoRunning:
-  //   store xxx
-  //   br label %storeFinish
-  // storeFinish:
-  //   ...
-  BasicBlock *SplitFastPathAndSlowPath(CallBase *CurInst, BasicBlock *SplitBB,
-                                       Value *CondVal) {
-    const DebugLoc &CurDbg = CurInst->getDebugLoc();
-    BasicBlock *FalseBranch = SplitBB->splitBasicBlock(CurInst, "gcRunning");
-    BasicBlock *Succ =
-        FalseBranch->splitBasicBlock(CurInst->getNextNode(), "storeFinish");
-    BasicBlock *TrueBranch =
-        BasicBlock::Create(C, "gcNoRunning", SplitBB->getParent(), Succ);
-    BranchInst::Create(Succ, TrueBranch);
-    Instruction *NewInst = createFastInstr(TrueBranch, CurInst, CurDbg);
-
-    Instruction *OriginBr = SplitBB->getTerminator();
-    IRBuilder<> BuilderBr(OriginBr);
-    BuilderBr.CreateCondBr(CondVal, TrueBranch, FalseBranch);
-    OriginBr->eraseFromParent();
-    FalseBranch->getTerminator()->setDebugLoc(CurDbg);
-    TrueBranch->getTerminator()->setDebugLoc(CurDbg);
-    handleSuccPhi(CurInst, FalseBranch, NewInst, TrueBranch, Succ);
-    return Succ;
-  }
-
-  void replaceBarrier() {
-    if (Barriers.empty())
-      return;
-    // cal in state
-    for (auto &Info : BBInfosMap) {
-      // use pre bb's gc state value
-      auto &BBInfo = Info.second;
-      auto BB = Info.first;
-      calculateBBCheck(BB, BBInfo);
-    }
-
-    for (unsigned i = 0; i < Barriers.size();) {
-      BasicBlock *CurBB = Barriers[i]->getParent();
-      auto &Info = BBInfosMap[CurBB];
-      Instruction *CR = Info.InCheck;
-      do {
-        if (!CR) {
-          CR = createCheck(Barriers[i]);
-        }
-        CallBase *CI = Barriers[i];
-        CurBB = SplitFastPathAndSlowPath(CI, CurBB, CR);
-        i++;
-        if (i == Barriers.size() || CurBB != Barriers[i]->getParent()) {
-          break;
-        }
-        resetLastCheckResult(CR, CurBB, i);
-      } while (true);
-    }
-  }
-
-  void calculateBBCheck(BasicBlock *BB, BBInfo &Info) {
-    if (Info.Visited || (Info.HasCalls && !Info.BeforeCall)) {
-      return;
-    }
-    Info.Visited = true;
-    SmallVector<Instruction *, 8> PhiValues;
-    for (auto CurBB : Info.PreBBs) {
-      auto &CurInfo = BBInfosMap[CurBB];
-      if (!CurInfo.HasCalls) {
-        calculateBBCheck(CurBB, CurInfo);
-      }
-      // no barrier, and pre BB has no last barrier
-      if (CurInfo.OutCheck == nullptr) {
-        PhiValues.clear();
-        break;
-      } else {
-        PhiValues.push_back(CurInfo.OutCheck);
-      }
-    }
-    // update outcheck
-    if (PhiValues.size() > 1) {
-      Info.InCheck = createPhi(BB, PhiValues);
-    } else if (PhiValues.size() == 1) {
-      Info.InCheck = PhiValues[0];
-    } else if (!Info.HasCalls && Info.LastBarrier != nullptr) {
-      Info.InCheck = createCheck(Info.LastBarrier);
-    }
-    if (!Info.HasCalls) {
-      Info.OutCheck = Info.InCheck;
-    }
-  }
-};
+  Value *Base = findMemoryBasePointer(Dst);
+  if (isa<AllocaInst>(Base))
+    return true;
+  auto *BaseTy = dyn_cast<PointerType>(Base->getType());
+  return BaseTy && BaseTy->getAddressSpace() == 0;
+}
 
 class ReadBarrier {
 public:
@@ -914,15 +577,6 @@ public:
     StoreInst *St =
         FastBuilder.CreateStore(Word, PlaceI64, /*isVolatile=*/true);
     St->setDebugLoc(DL);
-    Value *BaseObj = getBaseObj(CI);
-    FunctionType *PostStoreTy = FunctionType::get(
-        Type::getVoidTy(C),
-        {NewVal->getType(), BaseObj->getType(), FieldPtr->getType(), I64}, false);
-    FunctionCallee PostStore =
-        M->getOrInsertFunction("CJ_MCC_PostWriteRefField", PostStoreTy);
-    CallInst *PostStoreCall = FastBuilder.CreateCall(
-        PostStore, {NewVal, BaseObj, FieldPtr, PrevI});
-    PostStoreCall->setDebugLoc(DL);
     CI->moveBefore(ElseTerm);
   }
 
@@ -956,7 +610,6 @@ public:
   StringRef getPassName() const override;
   void getAnalysisUsage(AnalysisUsage &AU) const override;
 
-  bool doInitialization(Module &M) override;
   bool runOnFunction(Function &F) override;
 };
 } // namespace
@@ -988,79 +641,6 @@ void CJBarrierLowering::getAnalysisUsage(AnalysisUsage &AU) const {
   FunctionPass::getAnalysisUsage(AU);
 }
 
-/// doInitialization - If this module uses the GC intrinsics, find them now.
-bool CJBarrierLowering::doInitialization(Module &M) {
-  bool HasCangjieFunction = false;
-  for (const Function &F : M) {
-    if (F.hasCangjieGC()) {
-      HasCangjieFunction = true;
-      break;
-    }
-  }
-  if (!HasCangjieFunction)
-    return false;
-
-  Function *GCStateCheckFunc = M.getFunction("GetGCPhase");
-  if (GCStateCheckFunc != nullptr) { // have GetGCPhase in module
-    return false;
-  }
-  LLVMContext &C = M.getContext();
-  FunctionType *FuncType = FunctionType::get(Type::getInt32Ty(C), false);
-  GCStateCheckFunc =
-      cast<Function>(M.getOrInsertFunction("GetGCPhase", FuncType).getCallee());
-  GCStateCheckFunc->addFnAttr(Attribute::get(C, "gc-leaf-function"));
-  GCStateCheckFunc->addFnAttr(Attribute::get(C, "cj-runtime"));
-  GCStateCheckFunc->setCallingConv(CallingConv::CangjieGC);
-  GCStateCheckFunc->setUnnamedAddr(GlobalValue::UnnamedAddr::Local);
-  return false;
-}
-
-static bool fastBarrierInline(Function &F, GCPhaseCheck &GCPhase) {
-  bool Changed = false;
-  GCPhase.initBBInfo(F);
-  for (BasicBlock &BB : F) {
-    for (auto It = BB.begin(), E = BB.end(); It != E;) {
-      auto *CI = dyn_cast<CallBase>(&*It++);
-      if (!CI) {
-        continue;
-      }
-      if (mayBeSafepoint(CI)) {
-        GCPhase.setHasCall(&BB);
-      }
-      unsigned IID = CI->getIntrinsicID();
-      switch (IID) {
-      default:
-        break;
-      case Intrinsic::cj_gcwrite_ref:
-      case Intrinsic::cj_gcwrite_static_ref:
-      case Intrinsic::cj_gcwrite_struct:
-      case Intrinsic::cj_gcwrite_static_struct:
-        if (DisableGCSupport || EnableSafepointOnly) {
-          IRBuilder<> Builder(CI);
-          createStoreOrMems(CI, Builder);
-          CI->eraseFromParent();
-          Changed = true;
-        } else {
-          Changed |= GCPhase.fastBarrier(IID, CI);
-        }
-        continue;
-      case Intrinsic::cj_array_copy_ref:
-      case Intrinsic::cj_array_copy_struct:
-      case Intrinsic::cj_atomic_store:
-        Changed |= GCPhase.fastBarrier(IID, CI);
-        continue;
-      case Intrinsic::cj_atomic_swap:
-      case Intrinsic::cj_atomic_compare_swap:
-        // Do not implement fastpath currently now!
-        continue;
-      }
-    }
-    GCPhase.updateBBOut(&BB);
-  }
-  GCPhase.finishAll();
-  return Changed;
-}
-
 void CJBarrierLowering::writeBarrierFastPath(Function &F,
                                              SetVector<CallInst *> &Barriers) {
   if (EnableTaggedPointer && !CangjieJIT) {
@@ -1076,11 +656,27 @@ void CJBarrierLowering::writeBarrierFastPath(Function &F,
     }
   }
 
-  if (!EnableGCPhase || CangjieJIT)
+  if (CangjieJIT)
     return;
 
-  GCPhaseCheck GCPhase(F);
-  fastBarrierInline(F, GCPhase);
+  // Discharge only statically proven plain-storage accesses here. Native
+  // static roots and unknown heap slots always retain their color protocol.
+  for (CallInst *CI : Barriers) {
+    const unsigned IID = CI->getIntrinsicID();
+    const bool RefOrStruct = IID == Intrinsic::cj_gcwrite_ref ||
+                             IID == Intrinsic::cj_gcwrite_struct;
+    const bool StaticRefOrStruct = IID == Intrinsic::cj_gcwrite_static_ref ||
+                                   IID == Intrinsic::cj_gcwrite_static_struct;
+    if (!RefOrStruct && !StaticRefOrStruct)
+      continue;
+    if (DisableGCSupport || EnableSafepointOnly ||
+        (RefOrStruct && isa<ConstantPointerNull>(getBaseObj(CI)) &&
+         hasProvenNonHeapDestination(CI))) {
+      IRBuilder<> Builder(CI);
+      createStoreOrMems(CI, Builder);
+      CI->eraseFromParent();
+    }
+  }
 }
 
 // do the following conversion:
@@ -1290,7 +886,6 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
   const Triple TT(F.getParent()->getTargetTriple());
   if (TT.isARM()){
     EnableTaggedPointer = false;
-    EnableGCPhase = false;
     EnableGCFastPath = false;
   }
 
