@@ -2049,14 +2049,13 @@ void AArch64AsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
 // Note: emit specific inst should update inst size info in
 // AArch64InstrInfo::getInstSizeInBytes for AArch64 at the same time
 //   ldr  x2, [x28, #AllocBufferOffset]        // get Alloc Buffer
-//   ldr  x2, [x2]             // get region ptr
 //   ldr  x3, [x2]             // x3 = allocPtr
 //   ldr  x4, [x2, #8]         // x4 = limit
 //   add  x5, x3, x1        // x5 = allocPtr + size
 //   cmp  x5, x4               // allocPtr + size > limit ?
 //   b.gt .LNewObjSlowPath
 //   str  x0, [x3]             // allocPtr->KlassInfo = Klass
-//   str  x5, [x2]             // region->allocPtr = allocPtr + size
+//   str  x5, [x2]             // AllocBuffer.tlab.top = allocPtr + size
 //   mov  x0, x3               // ret/arg = allocPtr
 //  <<< hasFinalizer
 //   bl   MCC_OnFinalizerCreated
@@ -2148,7 +2147,6 @@ void AArch64AsmPrinter::emitCJThrowException(const MachineInstr *MI,
 // Note: emit specific inst should update inst size info in
 // AArch64InstrInfo::getInstSizeInBytes for AArch64 at the same time
 //   ldr  x4, [x28, #AllocBufferOffset]  // get Alloc Buffer
-//   ldr  x4, [x4]             // get region ptr
 //   ldr  x5, [x4]             // x5 = allocPtr
 //   ldr  x6, [x4, #8]         // x6 = limit
 //   add  x7, x5, x2           // x7 = allocPtr + size
@@ -2156,7 +2154,7 @@ void AArch64AsmPrinter::emitCJThrowException(const MachineInstr *MI,
 //   b.gt .LNewArraySlowPath
 //   str  x0, [x5]             // allocPtr->KlassInfo = Klass
 //   str  x1, [x5, #8]         // allocPtr->Length = ArrayLength
-//   str  x7, [x4]             // region->allocPtr = allocPtr + size
+//   str  x7, [x4]             // AllocBuffer.tlab.top = allocPtr + size
 //   mov  x0, x5               // ret/arg = allocPtr
 //   b    .LNewArrayFin
 // .LNewArraySlowPath

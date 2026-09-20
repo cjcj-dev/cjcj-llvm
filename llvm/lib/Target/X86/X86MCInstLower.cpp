@@ -3246,14 +3246,13 @@ void X86AsmPrinter::reloadSPForEpilogue(MachineFunction &MF) {
 
 // if linux
 //   movq  (%r15)     %rdx    get AllocBuffer
-//   movq  (%rdx)     %rdx    get region ptr
 //   movq  (%rdx)     %rax    rax = allocPtr
 //   movq  8(%rdx)    %rcx    rcx = limit
 //   leaq  (%rax, %rsi) %r8    r8 = allocPtr + size
 //   cmpq  %rcx       %r8     allocPtr + size > limit ?
 //   jg    LNewObjSlowPath
 //   movq  %rdi       (%rax)  allocPtr->KlassInfo = Klass
-//   movq  %r8        (%rdx)  region->allocPtr = allocPtr + size
+//   movq  %r8        (%rdx)  AllocBuffer.tlab.top = allocPtr + size
 // <<<<  hasFinalizer
 //   movq  %rax       %rdi    arg0 = allocPtr
 //   callq MCC_OnFinalizerCreated
@@ -3265,14 +3264,13 @@ void X86AsmPrinter::reloadSPForEpilogue(MachineFunction &MF) {
 // -----------------------------------------------
 // else if win64
 //   movq  (%r15)     %r9     get AllocBuffer
-//   movq  (%r9)      %r9     get region ptr
 //   movq  (%r9)      %rax    rax = allocPtr
 //   movq  8(%r9)     %r10    r10 = limit
 //   leaq  (%rax, %rdx) %r8   r8 = allocPtr + size
 //   cmpq  %r10       %r8     allocPtr + size > limit ?
 //   jg    LNewObjSlowPath
 //   movq  %rcx       (%rax)  allocPtr->KlassInfo = Klass
-//   movq  %r8        (%r9)   region->allocPtr = allocPtr + size
+//   movq  %r8        (%r9)   AllocBuffer.tlab.top = allocPtr + size
 // <<<<  hasFinalizer
 //   movq  %rax       %rcx    arg0 = allocPtr
 //   callq MCC_OnFinalizerCreated
@@ -3410,7 +3408,6 @@ void X86AsmPrinter::emitCJThrowException(const MachineInstr *MI,
 
 // linux:
 //   movq  (%r15)     %r9     get AllocBuffer
-//   movq  (%r9)      %r9     get region ptr
 //   movq  (%r9)      %rax    rax = allocPtr
 //   movq  8(%r9)     %r10    r10 = limit
 //   leaq  (%rax, %rdx) %r8   r8 = allocPtr + size
@@ -3418,7 +3415,7 @@ void X86AsmPrinter::emitCJThrowException(const MachineInstr *MI,
 //   jg    LNewArraySlowPath
 //   movq  %rdi       (%rax)  allocPtr->KlassInfo = Klass
 //   movq  %rsi       8(%rax) allocPtr->Length = ArrayLen
-//   movq  %r8        (%r9)   region->allocPtr = allocPtr + size
+//   movq  %r8        (%r9)   AllocBuffer.tlab.top = allocPtr + size
 //   jmp   LNewArrayFin
 // LNewArraySlowPath
 //   callq CJ_MCC_NewArray@PLT
@@ -3426,7 +3423,6 @@ void X86AsmPrinter::emitCJThrowException(const MachineInstr *MI,
 // -----------------------------------------------
 // win64:
 //   movq  (%r15)     %r9     get AllocBuffer
-//   movq  (%r9)      %r9     get region ptr
 //   movq  (%r9)      %rax    rax = allocPtr
 //   movq  8(%r9)     %r10    r10 = limit
 //   leaq  (%rax, %r8) %r11   r11 = allocPtr + size
@@ -3434,7 +3430,7 @@ void X86AsmPrinter::emitCJThrowException(const MachineInstr *MI,
 //   jg    LNewArraySlowPath
 //   movq  %rcx       (%rax)  allocPtr->KlassInfo = Klass
 //   movq  %rdx       8(%rax) allocPtr->Length = ArrayLen
-//   movq  %r11       (%r9)   region->allocPtr = allocPtr + size
+//   movq  %r11       (%r9)   AllocBuffer.tlab.top = allocPtr + size
 //   jmp   LNewArrayFin
 // LNewArraySlowPath
 //   callq CJ_MCC_NewArray@PLT
