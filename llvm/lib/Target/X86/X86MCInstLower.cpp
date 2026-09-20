@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/CodeGen/CangjieTLABLayout.h"
 #include "MCTargetDesc/X86ATTInstPrinter.h"
 #include "MCTargetDesc/X86BaseInfo.h"
 #include "MCTargetDesc/X86InstComments.h"
@@ -3283,7 +3284,6 @@ void X86AsmPrinter::reloadSPForEpilogue(MachineFunction &MF) {
 // endif
 void X86AsmPrinter::emitMccNewObjectForCopyGC(ParamForEmitNewObj &Param) {
   unsigned AllocBufferReg;
-  unsigned RegionInfoReg;
   unsigned AllocPtrReg;
   unsigned LimitReg;
   unsigned TmpReg;
@@ -3292,7 +3292,6 @@ void X86AsmPrinter::emitMccNewObjectForCopyGC(ParamForEmitNewObj &Param) {
 
   if (!getSubtargetInfo().getTargetTriple().isOSWindows()) {
     AllocBufferReg = X86::RDX;
-    RegionInfoReg = X86::RDX;
     AllocPtrReg = X86::RAX;
     LimitReg = X86::RCX;
     TmpReg = X86::R8;
@@ -3300,7 +3299,6 @@ void X86AsmPrinter::emitMccNewObjectForCopyGC(ParamForEmitNewObj &Param) {
     ArgReg1 = X86::RSI;
   } else {
     AllocBufferReg = X86::R9;
-    RegionInfoReg = X86::R9;
     AllocPtrReg = X86::RAX;
     LimitReg = X86::R10;
     TmpReg = X86::R8;
@@ -3316,27 +3314,19 @@ void X86AsmPrinter::emitMccNewObjectForCopyGC(ParamForEmitNewObj &Param) {
                            .addReg(0);
   EmitAndCountInstruction(AllocBuffer);
 
-  // 0: regionPtr in AllocBuffer
-  MCInst GetRegionPtr = MCInstBuilder(X86::MOV64rm)
-                            .addReg(RegionInfoReg)
-                            .addReg(AllocBufferReg)
-                            .addImm(1)
-                            .addReg(0)
-                            .addImm(0)
-                            .addReg(0);
   MCInst GetAllocPtr = MCInstBuilder(X86::MOV64rm)
                            .addReg(AllocPtrReg)
-                           .addReg(RegionInfoReg)
+                           .addReg(AllocBufferReg)
                            .addImm(1)
                            .addReg(0)
-                           .addImm(0)
+                           .addImm(CangjieTLABLayout::TopOffset)
                            .addReg(0);
   MCInst GetLimit = MCInstBuilder(X86::MOV64rm)
                         .addReg(LimitReg)
-                        .addReg(RegionInfoReg)
+                        .addReg(AllocBufferReg)
                         .addImm(1)
                         .addReg(0)
-                        .addImm(8)
+                        .addImm(CangjieTLABLayout::EndOffset)
                         .addReg(0);
   MCInst CalNewAllocPtr = MCInstBuilder(X86::LEA64r)
                               .addReg(TmpReg)
@@ -3357,14 +3347,13 @@ void X86AsmPrinter::emitMccNewObjectForCopyGC(ParamForEmitNewObj &Param) {
                         .addReg(0)
                         .addReg(ArgReg0);
   MCInst StoreNewAllocPtr = MCInstBuilder(X86::MOV64mr)
-                                .addReg(RegionInfoReg)
+                                .addReg(AllocBufferReg)
                                 .addImm(1)
                                 .addReg(0)
-                                .addImm(0)
+                                .addImm(CangjieTLABLayout::TopOffset)
                                 .addReg(0)
                                 .addReg(TmpReg);
 
-  EmitAndCountInstruction(GetRegionPtr);
   EmitAndCountInstruction(GetAllocPtr);
   EmitAndCountInstruction(GetLimit);
   EmitAndCountInstruction(CalNewAllocPtr);
@@ -3460,7 +3449,6 @@ void X86AsmPrinter::emitCJNewArrayFastPath(const MachineInstr &MI,
   MCSymbol *LSlow = OutContext.createTempSymbol("NewArraySlowPath", true);
   const MCSymbolRefExpr *SlowExpr = MCSymbolRefExpr::create(LSlow, OutContext);
   unsigned AllocBufferReg = X86::R9;
-  unsigned RegionInfoReg = X86::R9;
   unsigned AllocPtrReg = X86::RAX;
   unsigned LimitReg = X86::R10;
   unsigned TmpReg;
@@ -3489,27 +3477,19 @@ void X86AsmPrinter::emitCJNewArrayFastPath(const MachineInstr &MI,
                            .addReg(0);
   EmitAndCountInstruction(AllocBuffer);
 
-  // 0: regionPtr in AllocBuffer
-  MCInst GetRegionPtr = MCInstBuilder(X86::MOV64rm)
-                            .addReg(RegionInfoReg)
-                            .addReg(AllocBufferReg)
-                            .addImm(1)
-                            .addReg(0)
-                            .addImm(0)
-                            .addReg(0);
   MCInst GetAllocPtr = MCInstBuilder(X86::MOV64rm)
                            .addReg(AllocPtrReg)
-                           .addReg(RegionInfoReg)
+                           .addReg(AllocBufferReg)
                            .addImm(1)
                            .addReg(0)
-                           .addImm(0)
+                           .addImm(CangjieTLABLayout::TopOffset)
                            .addReg(0);
   MCInst GetLimit = MCInstBuilder(X86::MOV64rm)
                         .addReg(LimitReg)
-                        .addReg(RegionInfoReg)
+                        .addReg(AllocBufferReg)
                         .addImm(1)
                         .addReg(0)
-                        .addImm(8)
+                        .addImm(CangjieTLABLayout::EndOffset)
                         .addReg(0);
   MCInst CalNewAllocPtr = MCInstBuilder(X86::LEA64r)
                               .addReg(TmpReg)
@@ -3540,10 +3520,10 @@ void X86AsmPrinter::emitCJNewArrayFastPath(const MachineInstr &MI,
                                 .addReg(0)
                                 .addReg(ArgReg1);
   MCInst StoreNewAllocPtr = MCInstBuilder(X86::MOV64mr)
-                                .addReg(RegionInfoReg)
+                                .addReg(AllocBufferReg)
                                 .addImm(1)
                                 .addReg(0)
-                                .addImm(0)
+                                .addImm(CangjieTLABLayout::TopOffset)
                                 .addReg(0)
                                 .addReg(TmpReg);
   MCSymbol *LFinish = OutContext.createTempSymbol("NewArrayFin", true);
@@ -3553,7 +3533,6 @@ void X86AsmPrinter::emitCJNewArrayFastPath(const MachineInstr &MI,
   X86MCInstLower MCInstLowering(*MF, *this);
   MCInst CallNewArraySlowPath = MCInstBuilder(X86::CALL64pcrel32).addOperand(
       MCInstLowering.LowerMachineOperand(&MI, MOSym).getValue());
-  EmitAndCountInstruction(GetRegionPtr);
   EmitAndCountInstruction(GetAllocPtr);
   EmitAndCountInstruction(GetLimit);
   EmitAndCountInstruction(CalNewAllocPtr);
