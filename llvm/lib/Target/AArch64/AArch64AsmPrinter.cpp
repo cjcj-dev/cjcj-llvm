@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/CodeGen/CangjieTLABLayout.h"
 #include "AArch64.h"
 #include "AArch64MCInstLower.h"
 #include "AArch64MachineFunctionInfo.h"
@@ -2048,14 +2049,13 @@ void AArch64AsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
 // Note: emit specific inst should update inst size info in
 // AArch64InstrInfo::getInstSizeInBytes for AArch64 at the same time
 //   ldr  x2, [x28, #AllocBufferOffset]        // get Alloc Buffer
-//   ldr  x2, [x2]             // get region ptr
 //   ldr  x3, [x2]             // x3 = allocPtr
 //   ldr  x4, [x2, #8]         // x4 = limit
 //   add  x5, x3, x1        // x5 = allocPtr + size
 //   cmp  x5, x4               // allocPtr + size > limit ?
 //   b.gt .LNewObjSlowPath
 //   str  x0, [x3]             // allocPtr->KlassInfo = Klass
-//   str  x5, [x2]             // region->allocPtr = allocPtr + size
+//   str  x5, [x2]             // AllocBuffer.tlab.top = allocPtr + size
 //   mov  x0, x3               // ret/arg = allocPtr
 //  <<< hasFinalizer
 //   bl   MCC_OnFinalizerCreated
@@ -2075,11 +2075,12 @@ void AArch64AsmPrinter::emitMccNewObjectForCopyGC(
   // 8: each imm represents 8 In MCInst.
   MCInst GetAllocBuffer = MCInstBuilder(LDRXui).addReg(X2).addReg(X28).addImm(
       getAllocBufferOffsetInCJTLS() / 8);
-  // 0: offset of region Ptr in AllocBuffer is 0 bytes
-  MCInst GetRegionPtr = MCInstBuilder(LDRXui).addReg(X2).addReg(X2).addImm(0);
-  MCInst GetAllocPtr = MCInstBuilder(LDRXui).addReg(X3).addReg(X2).addImm(0);
-  // 1: offset of limit in region is 8 bytes
-  MCInst GetLimit = MCInstBuilder(LDRXui).addReg(X4).addReg(X2).addImm(1);
+  MCInst GetAllocPtr = 
+      MCInstBuilder(LDRXui).addReg(X3).addReg(X2)
+          .addImm(CangjieTLABLayout::TopOffset / 8);
+  MCInst GetLimit = 
+      MCInstBuilder(LDRXui).addReg(X4).addReg(X2)
+          .addImm(CangjieTLABLayout::EndOffset / 8);
   MCInst CalNewAllocPtr =
       MCInstBuilder(ADDXrs).addReg(X5).addReg(X3).addReg(X1).addImm(0);
   MCInst CmpNewAllocPtrWithLimit =
@@ -2088,13 +2089,13 @@ void AArch64AsmPrinter::emitMccNewObjectForCopyGC(
       MCInstBuilder(Bcc).addImm(AArch64CC::GT).addExpr(SlowExpr);
   MCInst SetKlass = MCInstBuilder(STRXui).addReg(X0).addReg(X3).addImm(0);
   MCInst StoreNewAllocPtr =
-      MCInstBuilder(STRXui).addReg(X5).addReg(X2).addImm(0);
+      MCInstBuilder(STRXui).addReg(X5).addReg(X2)
+          .addImm(CangjieTLABLayout::TopOffset / 8);
   MCInst CopyAllocPtrToX0 =
       MCInstBuilder(ORRXrs).addReg(X0).addReg(XZR).addReg(X3).addImm(0);
   MCInst BranchToFin = MCInstBuilder(B).addExpr(Param.FinExpr);
   OutStreamer->emitLabel(LFast);
   EmitToStreamer(*OutStreamer, GetAllocBuffer);
-  EmitToStreamer(*OutStreamer, GetRegionPtr);
   EmitToStreamer(*OutStreamer, GetAllocPtr);
   EmitToStreamer(*OutStreamer, GetLimit);
   EmitToStreamer(*OutStreamer, CalNewAllocPtr);
@@ -2146,7 +2147,6 @@ void AArch64AsmPrinter::emitCJThrowException(const MachineInstr *MI,
 // Note: emit specific inst should update inst size info in
 // AArch64InstrInfo::getInstSizeInBytes for AArch64 at the same time
 //   ldr  x4, [x28, #AllocBufferOffset]  // get Alloc Buffer
-//   ldr  x4, [x4]             // get region ptr
 //   ldr  x5, [x4]             // x5 = allocPtr
 //   ldr  x6, [x4, #8]         // x6 = limit
 //   add  x7, x5, x2           // x7 = allocPtr + size
@@ -2154,7 +2154,7 @@ void AArch64AsmPrinter::emitCJThrowException(const MachineInstr *MI,
 //   b.gt .LNewArraySlowPath
 //   str  x0, [x5]             // allocPtr->KlassInfo = Klass
 //   str  x1, [x5, #8]         // allocPtr->Length = ArrayLength
-//   str  x7, [x4]             // region->allocPtr = allocPtr + size
+//   str  x7, [x4]             // AllocBuffer.tlab.top = allocPtr + size
 //   mov  x0, x5               // ret/arg = allocPtr
 //   b    .LNewArrayFin
 // .LNewArraySlowPath
@@ -2174,11 +2174,12 @@ void AArch64AsmPrinter::emitCJNewArrayFastPath(const MachineInstr &MI,
   // 8: each imm represents 8 In MCInst.
   MCInst GetAllocBuffer = MCInstBuilder(LDRXui).addReg(X4).addReg(X28).addImm(
       getAllocBufferOffsetInCJTLS() / 8);
-  // 0: offset of region Ptr in AllocBuffer is 0 bytes
-  MCInst GetRegionPtr = MCInstBuilder(LDRXui).addReg(X4).addReg(X4).addImm(0);
-  MCInst GetAllocPtr = MCInstBuilder(LDRXui).addReg(X5).addReg(X4).addImm(0);
-  // 1: offset of limit in region is 8 bytes
-  MCInst GetLimit = MCInstBuilder(LDRXui).addReg(X6).addReg(X4).addImm(1);
+  MCInst GetAllocPtr = 
+      MCInstBuilder(LDRXui).addReg(X5).addReg(X4)
+          .addImm(CangjieTLABLayout::TopOffset / 8);
+  MCInst GetLimit = 
+      MCInstBuilder(LDRXui).addReg(X6).addReg(X4)
+          .addImm(CangjieTLABLayout::EndOffset / 8);
   MCInst CalNewAllocPtr =
       MCInstBuilder(ADDXrs).addReg(X7).addReg(X5).addReg(X2).addImm(0);
   MCInst CmpNewAllocPtrWithLimit =
@@ -2189,7 +2190,8 @@ void AArch64AsmPrinter::emitCJNewArrayFastPath(const MachineInstr &MI,
   MCInst StoreArrayLength =
       MCInstBuilder(STRXui).addReg(X1).addReg(X5).addImm(1);
   MCInst StoreNewAllocPtr =
-      MCInstBuilder(STRXui).addReg(X7).addReg(X4).addImm(0);
+      MCInstBuilder(STRXui).addReg(X7).addReg(X4)
+          .addImm(CangjieTLABLayout::TopOffset / 8);
   MCInst CopyAllocPtrToX0 =
       MCInstBuilder(ORRXrs).addReg(X0).addReg(XZR).addReg(X5).addImm(0);
   MCSymbol *LFinish = OutContext.createTempSymbol("NewArrayFin", true);
@@ -2202,7 +2204,6 @@ void AArch64AsmPrinter::emitCJNewArrayFastPath(const MachineInstr &MI,
       MCInstBuilder(SlowCallOpcode).addOperand(CallSlowPathMCOp);
   OutStreamer->emitLabel(LFast);
   EmitToStreamer(*OutStreamer, GetAllocBuffer);
-  EmitToStreamer(*OutStreamer, GetRegionPtr);
   EmitToStreamer(*OutStreamer, GetAllocPtr);
   EmitToStreamer(*OutStreamer, GetLimit);
   EmitToStreamer(*OutStreamer, CalNewAllocPtr);

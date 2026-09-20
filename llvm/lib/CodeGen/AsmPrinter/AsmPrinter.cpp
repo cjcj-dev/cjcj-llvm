@@ -10,6 +10,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/CodeGen/CangjieTLABLayout.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "CodeViewDebug.h"
 #include "DwarfDebug.h"
@@ -161,7 +162,7 @@ extern cl::opt<bool> EnableSafepointOutline;
 
 // Warning: The following values must be synchronized with
 // the data struct `ThreadLocalData` in runtime
-constexpr int64_t AllocBufferOffsetInCJTLS = 0;
+constexpr int64_t AllocBufferOffsetInCJTLS = CangjieTLABLayout::BufferOffset;
 constexpr int64_t MutatorOffsetInCJTLS = AllocBufferOffsetInCJTLS + 8;
 constexpr int64_t CJThreadOffsetInCJTLS = MutatorOffsetInCJTLS + 8;
 constexpr int64_t ScheduleOffsetInCJTLS = CJThreadOffsetInCJTLS + 8;

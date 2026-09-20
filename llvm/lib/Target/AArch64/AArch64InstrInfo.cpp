@@ -89,7 +89,7 @@ unsigned AArch64InstrInfo::getCangjieSpecificCallInstSizeInBytes(
   if (isStatepointOpcode(MI.getOpcode())) {
     StatepointOpers SO(&MI);
     if (SO.getID() == Cangjie::CJStatepointID::NewArrayFast) {
-      return 52; // 52: 52 bytes(13 insts) for new array call
+      return 48; // 48 bytes (12 instructions) for the direct TLAB array path
     }
     MOSym = &(SO.getCallTarget());
   } else {
