@@ -12,7 +12,7 @@ declare void @llvm.cj.gcwrite.struct.p0i8(i8 addrspace(1)*, i8 addrspace(1)*,
 ; A null base does not make a slot non-heap. The allocation result is a heap
 ; object even though the field pointer has no global or argument origin.
 ; CHECK-LABEL: define void @keep_heap_destination(
-; CHECK: call void @llvm.cj.gcwrite.ref(
+; CHECK: call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(
 ; CHECK-NOT: store i8 addrspace(1)* %value
 ; CHECK: ret void
 define void @keep_heap_destination(i8 addrspace(1)* %value) gc "cangjie" {
@@ -30,9 +30,9 @@ entry:
 ; An alloca is a structural non-heap proof. Preserve the existing raw stack
 ; store optimization even when the barrier's destination is cast to AS1.
 ; CHECK-LABEL: define void @lower_nonheap_destination(
-; CHECK-NOT: call void @llvm.cj.gcwrite.ref(
+; CHECK-NOT: call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(
 ; CHECK: store i8 addrspace(1)* %value
-; CHECK-NOT: call void @llvm.cj.gcwrite.ref(
+; CHECK-NOT: call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(
 ; CHECK: ret void
 define void @lower_nonheap_destination(i8 addrspace(1)* %value) gc "cangjie" {
 entry:

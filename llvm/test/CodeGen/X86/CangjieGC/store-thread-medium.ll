@@ -30,6 +30,7 @@ define void @strong(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
 ; CHECK: call void @CJ_MCC_StoreBarrierOnHeapField(
 ; CHECK-NEXT: br label %storeFinish
 ; CHECK: storeFinish:
+; CHECK: %cj.store.new.bits = call i64 asm "movq $1, $0", "=&r,r"(i8 addrspace(1)* %value)
 ; CHECK: load i64, i64* @g_cjStoreGoodMaskOffset
 ; CHECK: store volatile i64 %cj.store.colored
   call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %value, i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %slot, i32 1)

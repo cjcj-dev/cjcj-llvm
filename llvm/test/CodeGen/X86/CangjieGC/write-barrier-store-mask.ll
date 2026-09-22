@@ -1,39 +1,30 @@
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -print-after=cj-barrier-lowering \
 ; RUN:   -o /dev/null < %s 2>&1 | FileCheck %s
 
-; ZGC color_store_good (zAddress.inline.hpp:806). Null stays 0.
-; The colour test and the paint are unconditional: there is no phase-guarded
-; plain-store form and no census variant to fall back to.
-;
+; ZGC x86:457-469 and zAddress.inline.hpp:806: null is store-good colored.
 ; CHECK-LABEL: define void @write_ref(
-; CHECK: [[PLACE:%.*]] = call i8 addrspace(1)* addrspace(1)* @llvm.ptrmask.p1p1i8.i64(i8 addrspace(1)* addrspace(1)* %field, i64 281474976710655)
-; CHECK: [[PREV:%.*]] = load i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)* [[PLACE]]
-; CHECK: [[PREV_I:%.*]] = ptrtoint i8 addrspace(1)* [[PREV]] to i64
-; CHECK: [[MASK:%.*]] = load i64, i64* @g_cjStoreBadMask
-; CHECK: [[BAD:%.*]] = and i64 [[PREV_I]], [[MASK]]
-; CHECK: [[COLOUR_OK:%.*]] = icmp eq i64 [[BAD]], 0
-; CHECK-NOT: cj.store.hascolour
-; CHECK-NOT: cj.store.same
-; CHECK: br i1 [[COLOUR_OK]], label %storeFinish, label %gcStoreBad
+; CHECK: storeFast:
+; CHECK: load i16
+; CHECK: load i64, i64* @g_cjStoreBadMaskOffset
+; CHECK: %cj.store.bad = and i64
+; CHECK: br i1 {{.*}}, label %storeFinish, label %storeMedium
+; CHECK: storeSlow:
+; CHECK: call void @CJ_MCC_StoreBarrierOnHeapField
 ; CHECK: storeFinish:
-; CHECK: [[NEW_BITS:%.*]] = call i64 asm "movq $1, $0", "=&r,r"(i8 addrspace(1)* %val)
-; CHECK: [[NEW_I:%.*]] = and i64 [[NEW_BITS]], 281474976710655
-; CHECK: [[GOODMASK:%.*]] = load i64, i64* @g_cjStoreGoodMask
-; CHECK: [[COLORED_I:%.*]] = or i64 [[NEW_I]], [[GOODMASK]]
-; CHECK: [[ISNULL:%.*]] = icmp eq i64 [[NEW_I]], 0
-; CHECK: [[WORD:%.*]] = select i1 [[ISNULL]], i64 [[NEW_I]], i64 [[COLORED_I]]
+; CHECK: [[BITS:%.*]] = call i64 asm "movq $1, $0", "=&r,r"(i8 addrspace(1)* %val)
+; CHECK: [[SHIFT:%.*]] = load i64, i64* @g_cjLoadShift
+; CHECK: load i64, i64* @g_cjStoreGoodMaskOffset
+; CHECK: [[NEW:%.*]] = shl i64 [[BITS]], [[SHIFT]]
+; CHECK: [[WORD:%.*]] = or i64 [[NEW]], %cj.storegoodmask
 ; CHECK: store volatile i64 [[WORD]]
-; CHECK-NEXT: call void @CJ_MCC_PostWriteRefField(i8 addrspace(1)* %val, i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %field, i64 [[PREV_I]])
-; CHECK: gcStoreBad:
-; CHECK: call void @CJ_MCC_WriteRefField
-;
+; CHECK-NOT: CJ_MCC_PostWriteRefField
 ; CHECK-LABEL: define void @write_ref_null_val(
 ; CHECK: storeFinish:
-; CHECK: cj.store.new.isnull
-; CHECK: select i1
+; CHECK: call i64 asm "movq $1, $0", "=&r,r"(i8 addrspace(1)* null)
+; CHECK: load i64, i64* @g_cjStoreGoodMaskOffset
+; CHECK: or i64 {{.*}}, %cj.storegoodmask
+; CHECK-NOT: select i1
 ; CHECK: store volatile i64
-; CHECK-NEXT: call void @CJ_MCC_PostWriteRefField(i8 addrspace(1)* null, i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %field, i64 {{%.*}})
-; CHECK: gcStoreBad:
 ;
 ; A null base cannot prove that an addrspace(1) destination is non-heap. Route
 ; it through the MCC producer instead of the old raw-store special case.
@@ -65,23 +56,23 @@
 define void @write_ref(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
                        i8 addrspace(1)* addrspace(1)* %field) gc "cangjie" {
 entry:
-  call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
-                                 i8 addrspace(1)* addrspace(1)* %field)
+  call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
+                                 i8 addrspace(1)* addrspace(1)* %field, i32 1)
   ret void
 }
 
 define void @write_ref_null_val(i8 addrspace(1)* %base,
                                 i8 addrspace(1)* addrspace(1)* %field) gc "cangjie" {
 entry:
-  call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* null, i8 addrspace(1)* %base,
-                                 i8 addrspace(1)* addrspace(1)* %field)
+  call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* null, i8 addrspace(1)* %base,
+                                 i8 addrspace(1)* addrspace(1)* %field, i32 1)
   ret void
 }
 
 define void @write_ref_null_base(i8 addrspace(1)* %val,
                                  i8 addrspace(1)* addrspace(1)* %field) gc "cangjie" {
 entry:
-  call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val,
+  call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val,
                                  i8 addrspace(1)* null,
                                  i8 addrspace(1)* addrspace(1)* %field)
   ret void
@@ -91,7 +82,7 @@ define void @write_ref_null_base_alloca(i8 addrspace(1)* %val) gc "cangjie" {
 entry:
   %slot = alloca i8 addrspace(1)*, align 8
   %slot.as1 = addrspacecast i8 addrspace(1)** %slot to i8 addrspace(1)* addrspace(1)*
-  call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val,
+  call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val,
                                  i8 addrspace(1)* null,
                                  i8 addrspace(1)* addrspace(1)* %slot.as1)
   ret void
@@ -110,8 +101,8 @@ entry:
 ; (std.core Error.init Verifier crash).
 ; CHECK-LABEL: define void @write_loaded_ref(
 ; CHECK: gcNoMarked:
-; CHECK: gcStoreBad:
-; CHECK: call void @CJ_MCC_WriteRefField
+; CHECK: storeSlow:
+; CHECK: call void @CJ_MCC_StoreBarrierOnHeapField
 define void @write_loaded_ref(i8 addrspace(1)* %srcobj,
                               i8 addrspace(1)* addrspace(1)* %srcfield,
                               i8 addrspace(1)* %dstobj,
@@ -119,13 +110,12 @@ define void @write_loaded_ref(i8 addrspace(1)* %srcobj,
 entry:
   %val = call i8 addrspace(1)* @llvm.cj.gcread.ref(
       i8 addrspace(1)* %srcobj, i8 addrspace(1)* addrspace(1)* %srcfield)
-  call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val, i8 addrspace(1)* %dstobj,
-                                 i8 addrspace(1)* addrspace(1)* %dstfield)
+  call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val, i8 addrspace(1)* %dstobj,
+                                 i8 addrspace(1)* addrspace(1)* %dstfield, i32 1)
   ret void
 }
 
-declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*,
-                                  i8 addrspace(1)* addrspace(1)*)
+declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...)
 declare i8 addrspace(1)* @llvm.cj.gcread.ref(
     i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*)
 declare void @llvm.cj.atomic.store(i8 addrspace(1)*, i8 addrspace(1)*,

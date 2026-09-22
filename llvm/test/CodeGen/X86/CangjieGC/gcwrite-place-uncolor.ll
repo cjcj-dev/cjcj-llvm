@@ -1,22 +1,22 @@
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -print-after=cj-barrier-lowering \
 ; RUN:   -o /dev/null < %s 2>&1 | FileCheck %s
 
-; Peel colour from the place before loading prev, then OR g_cjStoreGoodMask
-; on the hit arm. Both steps are unconditional.
+; ZGC x86:457-469: the slot is an uncolored address; the stored word is colored.
 
 define void @write_ref_place(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
                              i8 addrspace(1)* addrspace(1)* %field) gc "cangjie" {
 ; CHECK-LABEL: define void @write_ref_place(
-; CHECK: [[PLACE_PLAIN:%.*]] = call i8 addrspace(1)* addrspace(1)* @llvm.ptrmask.p1p1i8.i64(i8 addrspace(1)* addrspace(1)* %field, i64 281474976710655)
-; CHECK: load i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)* [[PLACE_PLAIN]]
-; CHECK: load i64, i64* @g_cjStoreBadMask
+; CHECK: storeFast:
+; CHECK: bitcast i8 addrspace(1)* addrspace(1)* %field to i16 addrspace(1)*
+; CHECK: load i16
+; CHECK: load i64, i64* @g_cjStoreBadMaskOffset
+; CHECK: storeSlow:
+; CHECK: call void @CJ_MCC_StoreBarrierOnHeapField
 ; CHECK: storeFinish:
-; CHECK: load i64, i64* @g_cjStoreGoodMask
-; CHECK: gcStoreBad:
-; CHECK: call void @CJ_MCC_WriteRefField
+; CHECK: load i64, i64* @g_cjStoreGoodMaskOffset
 entry:
-  call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
-                                 i8 addrspace(1)* addrspace(1)* %field)
+  call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
+                                 i8 addrspace(1)* addrspace(1)* %field, i32 1)
   ret void
 }
 
@@ -30,7 +30,6 @@ entry:
   ret void
 }
 
-declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*,
-                                  i8 addrspace(1)* addrspace(1)*)
+declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...)
 declare void @llvm.cj.atomic.store(i8 addrspace(1)*, i8 addrspace(1)*,
                                    i8 addrspace(1)* addrspace(1)*, i32)
