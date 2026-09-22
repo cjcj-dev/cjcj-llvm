@@ -346,6 +346,7 @@ using ModelledPHISet = DenseSet<ModelledPHI, DenseMapInfo<ModelledPHI>>;
 class InstructionUseExpr : public GVNExpression::BasicExpression {
   unsigned MemoryUseOrder = -1;
   bool Volatile = false;
+  unsigned CJStoreStrength = 0;
   ArrayRef<int> ShuffleMask;
 
 public:
@@ -355,6 +356,8 @@ public:
     allocateOperands(R, A);
     setOpcode(I->getOpcode());
     setType(I->getType());
+    if (auto *SI = dyn_cast<StoreInst>(I))
+      CJStoreStrength = SI->getCJStoreStrength();
 
     if (ShuffleVectorInst *SVI = dyn_cast<ShuffleVectorInst>(I))
       ShuffleMask = SVI->getShuffleMask().copy(A);
@@ -367,14 +370,24 @@ public:
   void setMemoryUseOrder(unsigned MUO) { MemoryUseOrder = MUO; }
   void setVolatile(bool V) { Volatile = V; }
 
+  unsigned getCJStoreStrength() const { return CJStoreStrength; }
+
+  bool equals(const GVNExpression::Expression &Other) const override {
+    if (!BasicExpression::equals(Other))
+      return false;
+    const auto &OE = static_cast<const InstructionUseExpr &>(Other);
+    return MemoryUseOrder == OE.MemoryUseOrder && Volatile == OE.Volatile &&
+           ShuffleMask == OE.ShuffleMask && CJStoreStrength == OE.CJStoreStrength;
+  }
+
   hash_code getHashValue() const override {
     return hash_combine(GVNExpression::BasicExpression::getHashValue(),
-                        MemoryUseOrder, Volatile, ShuffleMask);
+                        MemoryUseOrder, Volatile, ShuffleMask, CJStoreStrength);
   }
 
   template <typename Function> hash_code getHashValue(Function MapFn) {
     hash_code H = hash_combine(getOpcode(), getType(), MemoryUseOrder, Volatile,
-                               ShuffleMask);
+                               ShuffleMask, CJStoreStrength);
     for (auto *V : operands())
       H = hash_combine(H, MapFn(V));
     return H;
@@ -386,7 +399,7 @@ using BasicBlocksSet = SmallPtrSet<const BasicBlock *, 32>;
 class ValueTable {
   DenseMap<Value *, uint32_t> ValueNumbering;
   DenseMap<GVNExpression::Expression *, uint32_t> ExpressionNumbering;
-  DenseMap<size_t, uint32_t> HashNumbering;
+  DenseMap<std::pair<size_t, unsigned>, uint32_t> HashNumbering;
   BumpPtrAllocator Allocator;
   ArrayRecycler<Value *> Recycler;
   uint32_t nextValueNumber = 1;
@@ -507,12 +520,14 @@ public:
     uint32_t e = ExpressionNumbering[exp];
     if (!e) {
       hash_code H = exp->getHashValue([=](Value *V) { return lookupOrAdd(V); });
-      auto I = HashNumbering.find(H);
+      // Even the use-number fallback must preserve the store decorator.
+      auto Key = std::make_pair(size_t(H), exp->getCJStoreStrength());
+      auto I = HashNumbering.find(Key);
       if (I != HashNumbering.end()) {
         e = I->second;
       } else {
         e = nextValueNumber++;
-        HashNumbering[H] = e;
+        HashNumbering[Key] = e;
         ExpressionNumbering[exp] = e;
       }
     }

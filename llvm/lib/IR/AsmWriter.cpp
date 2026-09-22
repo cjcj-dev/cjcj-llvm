@@ -3972,6 +3972,10 @@ void AssemblyWriter::printInstruction(const Instruction &I) {
       (isa<AtomicRMWInst>(I) && cast<AtomicRMWInst>(I).isVolatile()))
     Out << " volatile";
 
+  if (const auto *SI = dyn_cast<StoreInst>(&I))
+    if (unsigned Strength = SI->getCJStoreStrength())
+      Out << " cj_strength(" << Strength << ')';
+
   // Print out optimization information.
   WriteOptimizationInfo(Out, &I);
 

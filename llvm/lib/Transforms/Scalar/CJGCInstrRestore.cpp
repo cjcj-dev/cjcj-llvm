@@ -271,7 +271,10 @@ bool restoreGCWriteRef(SmallVector<Instruction *, 4> *Instrs, SmallDenseMap<Valu
       auto *ValuePtr = castToI8AddrSpace1PtrType(SI->getOperand(0), IRB);
       auto *DerivedPtr =
           castToI8AddrSpace1PtrTypeAddrSpace1PtrType(SI->getOperand(1), IRB);
-      auto *GCInstr = IRB.CreateCall(IntrinsicFunc, {ValuePtr, BasePtr, DerivedPtr});
+      SmallVector<Value *, 4> Args{ValuePtr, BasePtr, DerivedPtr};
+      if (unsigned Strength = cast<StoreInst>(SI)->getCJStoreStrength())
+        Args.push_back(IRB.getInt32(Strength));
+      auto *GCInstr = IRB.CreateCall(IntrinsicFunc, Args);
       addMetadataToGCInstr(GCInstr, SI);
       ToBeErased.push_back(SI);
     }

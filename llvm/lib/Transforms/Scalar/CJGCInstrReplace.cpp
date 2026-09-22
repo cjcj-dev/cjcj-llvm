@@ -132,6 +132,9 @@ bool changeGCWriteRef(SmallVector<CallBase *, 4> *GCInstrs) {
     auto *AddedStoreInstr = IRB.CreateStore(GCWriteRef->getArgOperand(0),
                                             GCWriteRef->getArgOperand(2));
     addGCInstrMetadata(AddedStoreInstr, GCWriteRef);
+    if (GCWriteRef->arg_size() == 4)
+      AddedStoreInstr->setCJStoreStrength(
+          cast<ConstantInt>(GCWriteRef->getArgOperand(3))->getZExtValue());
   }
   for (auto *GCWriteRef : *GCInstrs) {
     GCWriteRef->eraseFromParent();

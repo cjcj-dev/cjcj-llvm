@@ -31,7 +31,8 @@ struct GCReadStaticRef {
 };
 
 struct GCWriteRef {
-  enum { Val, BaseObj, FieldPtr };
+  enum { Val, BaseObj, FieldPtr, Strength };
+  enum StrengthKind { Unknown = 0, Strong = 1, NoKeepAlive = 2 };
 };
 
 struct GCWriteStaticRef {

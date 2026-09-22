@@ -3137,6 +3137,8 @@ void ModuleBitcodeWriter::writeInstruction(const Instruction &I,
       Vals.push_back(
           getEncodedSyncScopeID(cast<StoreInst>(I).getSyncScopeID()));
     }
+    if (unsigned Strength = cast<StoreInst>(I).getCJStoreStrength())
+      Vals.push_back(Strength);
     break;
   case Instruction::AtomicCmpXchg:
     Code = bitc::FUNC_CODE_INST_CMPXCHG;

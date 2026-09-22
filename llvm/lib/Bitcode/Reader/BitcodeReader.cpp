@@ -5871,7 +5871,7 @@ Error BitcodeReader::parseFunctionBody(Function *F) {
           return error("Invalid record");
       }
 
-      if (OpNum + 2 != Record.size())
+      if (OpNum + 2 != Record.size() && OpNum + 3 != Record.size())
         return error("Invalid record");
 
       if (Error Err = typeCheckLoadStoreInst(Val->getType(), Ptr->getType()))
@@ -5885,6 +5885,11 @@ Error BitcodeReader::parseFunctionBody(Function *F) {
       if (!Align)
         Align = TheModule->getDataLayout().getABITypeAlign(Val->getType());
       I = new StoreInst(Val, Ptr, Record[OpNum + 1], *Align);
+      if (OpNum + 3 == Record.size()) {
+        if (Record.back() > 2)
+          return error("Invalid Cangjie store strength");
+        cast<StoreInst>(I)->setCJStoreStrength(Record.back());
+      }
       InstructionList.push_back(I);
       break;
     }
@@ -5907,7 +5912,7 @@ Error BitcodeReader::parseFunctionBody(Function *F) {
           return error("Invalid record");
       }
 
-      if (OpNum + 4 != Record.size())
+      if (OpNum + 4 != Record.size() && OpNum + 5 != Record.size())
         return error("Invalid record");
 
       if (Error Err = typeCheckLoadStoreInst(Val->getType(), Ptr->getType()))
@@ -5927,6 +5932,11 @@ Error BitcodeReader::parseFunctionBody(Function *F) {
       if (!Align)
         return error("Alignment missing from atomic store");
       I = new StoreInst(Val, Ptr, Record[OpNum + 1], *Align, Ordering, SSID);
+      if (OpNum + 5 == Record.size()) {
+        if (Record.back() > 2)
+          return error("Invalid Cangjie store strength");
+        cast<StoreInst>(I)->setCJStoreStrength(Record.back());
+      }
       InstructionList.push_back(I);
       break;
     }

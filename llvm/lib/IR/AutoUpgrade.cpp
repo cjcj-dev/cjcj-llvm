@@ -540,6 +540,13 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
     return false;
   Name = Name.substr(5); // Strip off "llvm."
 
+  // Legacy three-operand stores are unknown-strength accesses.
+  if (Name == "cj.gcwrite.ref" && !F->isVarArg() && F->arg_size() == 3) {
+    rename(F);
+    NewFn = Intrinsic::getDeclaration(F->getParent(), Intrinsic::cj_gcwrite_ref);
+    return true;
+  }
+
   switch (Name[0]) {
   default: break;
   case 'a': {
@@ -3847,6 +3854,7 @@ void llvm::UpgradeIntrinsicCall(CallBase *CI, Function *NewFn) {
     DefaultCase();
     return;
   }
+  case Intrinsic::cj_gcwrite_ref:
   case Intrinsic::arm_neon_vst1:
   case Intrinsic::arm_neon_vst2:
   case Intrinsic::arm_neon_vst3:

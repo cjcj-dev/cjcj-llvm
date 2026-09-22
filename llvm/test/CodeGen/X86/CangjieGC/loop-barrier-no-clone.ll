@@ -15,11 +15,11 @@ define void @foo1(i8 addrspace(1)* %arg0, i64 %arg1, i8 addrspace(1)* %arg2) gc 
 ; CHECK-LABEL: define void @foo1
 ; CHECK-NOT: .pin
 ; CHECK-NOT: gcNoRunning
-; CHECK: load i64, i64* @g_cjStoreBadMask
+; CHECK: load i64, i64* @g_cjStoreBadMaskOffset
+; CHECK: storeSlow:
+; CHECK: call void @CJ_MCC_StoreBarrierOnHeapField
 ; CHECK: storeFinish:
-; CHECK: load i64, i64* @g_cjStoreGoodMask
-; CHECK: gcStoreBad:
-; CHECK: call void @CJ_MCC_WriteRefField
+; CHECK: load i64, i64* @g_cjStoreGoodMaskOffset
 ; CHECK: ret void
 
 entry:
@@ -31,7 +31,7 @@ loop.preheader:
 
 arr.end1:
   %i = phi i64 [ %add.i, %arr.end1 ], [ 0, %loop.preheader]
-  call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %arg2, i8 addrspace(1)* %arg0, i8 addrspace(1)* addrspace(1)* %a)
+  call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %arg2, i8 addrspace(1)* %arg0, i8 addrspace(1)* addrspace(1)* %a, i32 1)
   %add.i = add i64 %i, 1
   %icmpslt = icmp slt i64 %add.i, %arg1
   br i1 %icmpslt, label %arr.end1, label %loopexit
@@ -40,4 +40,4 @@ loopexit:
   ret void
 }
 
-declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %arg0, i8 addrspace(1)* nocapture, i8 addrspace(1)* addrspace(1)* nocapture)
+declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...)

@@ -7349,6 +7349,16 @@ int LLParser::parseStore(Instruction *&Inst, PerFunctionState &PFS) {
     Lex.Lex();
   }
 
+  unsigned CJStrength = 0;
+  if (EatIfPresent(lltok::kw_cj_strength)) {
+    if (parseToken(lltok::lparen, "expected '(' after cj_strength") ||
+        parseUInt32(CJStrength) ||
+        parseToken(lltok::rparen, "expected ')' after store strength"))
+      return true;
+    if (CJStrength > 2)
+      return error(Lex.getLoc(), "invalid Cangjie store strength");
+  }
+
   if (parseTypeAndValue(Val, Loc, PFS) ||
       parseToken(lltok::comma, "expected ',' after store operand") ||
       parseTypeAndValue(Ptr, PtrLoc, PFS) ||
@@ -7374,7 +7384,9 @@ int LLParser::parseStore(Instruction *&Inst, PerFunctionState &PFS) {
   if (!Alignment)
     Alignment = M->getDataLayout().getABITypeAlign(Val->getType());
 
-  Inst = new StoreInst(Val, Ptr, isVolatile, *Alignment, Ordering, SSID);
+  auto *Store = new StoreInst(Val, Ptr, isVolatile, *Alignment, Ordering, SSID);
+  Store->setCJStoreStrength(CJStrength);
+  Inst = Store;
   return AteExtraComma ? InstExtraComma : InstNormal;
 }
 

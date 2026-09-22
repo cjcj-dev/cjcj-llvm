@@ -11,7 +11,7 @@ declare void @llvm.cj.memset.p0i8(i8*, i8, i64, i1)
 declare void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)*, i8*, i64, i1 immarg)
 
 ; SPLIT-LABEL: define void @split_nested_array
-; SPLIT-COUNT-2: call void @llvm.cj.gcwrite.ref
+; SPLIT-COUNT-2: call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref
 ; SPLIT-NOT: call void @llvm.cj.gcwrite.struct
 define void @split_nested_array(i8 addrspace(1)* %object, %Nested* %source) gc "cangjie" {
 entry:
