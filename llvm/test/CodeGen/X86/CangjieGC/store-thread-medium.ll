@@ -10,17 +10,22 @@ define void @strong(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
 ; CHECK: call i8* asm sideeffect "movq %r15, $0"
 ; CHECK: load i64, i64* @g_cjThreadGCDataOffset
 ; CHECK: load i64, i64* @g_cjStoreBadMaskOffset
-; CHECK: %cj.store.bad = and i64
+; CHECK: [[MASKADDR:%.*]] = getelementptr i8, i8* %cj.gcdata, i64 %cjStoreBadMaskOffset
+; CHECK: [[MASKPTR:%.*]] = bitcast i8* [[MASKADDR]] to i64*
+; CHECK: %cj.storebadmask = load i64, i64* [[MASKPTR]]
+; CHECK: %cj.store.bad = and i64 %cj.store.prev.low, %cj.storebadmask
 ; CHECK: br i1 {{.*}}, label %storeFinish, label %storeMedium
 ; CHECK: storeMedium:
 ; CHECK: load i64, i64* @g_cjStoreBarrierBufferCurrentOffset
-; CHECK: %cj.store.current = load i64
+; CHECK: [[CURADDR:%.*]] = getelementptr i8, i8* %cj.store.buffer, i64 %cjStoreBarrierBufferCurrentOffset
+; CHECK: [[CURPTR:%.*]] = bitcast i8* [[CURADDR]] to i64*
+; CHECK: %cj.store.current = load i64, i64* [[CURPTR]]
 ; CHECK: icmp eq i64 %cj.store.current, 0
 ; CHECK: br i1 {{.*}}, label %storeSlow, label %storeAppend
 ; CHECK: storeAppend:
 ; CHECK: load i64, i64* @g_cjStoreBarrierEntrySize
 ; CHECK: %cj.store.next = sub i64 %cj.store.current
-; CHECK: store i64 %cj.store.next
+; CHECK: store i64 %cj.store.next, i64* [[CURPTR]]
 ; CHECK: load i64, i64* @g_cjStoreBarrierEntryPOffset
 ; CHECK: store i64
 ; CHECK: load i64, i64* @g_cjStoreBarrierEntryPrevOffset
