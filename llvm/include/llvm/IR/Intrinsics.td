@@ -434,8 +434,9 @@ def int_gcwrite : Intrinsic<[],
 
 //===------------------- Cangjie GC Barrier Intrinsics --------------------===//
 //
+// Optional i32 strength: 0 unknown (also legacy omission), 1 strong, 2 no-keep-alive.
 def int_cj_gcwrite_ref              : Intrinsic<[],
-                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptrgcptr_ty],
+                                                [llvm_gcptr_ty, llvm_gcptr_ty, llvm_gcptrgcptr_ty, llvm_vararg_ty],
                                                 [IntrArgMemOnly, NoCapture<ArgIndex<1>>, NoCapture<ArgIndex<2>>]>;
 def int_cj_gcwrite_struct           : Intrinsic<[],
                                                 [llvm_gcptr_ty, llvm_gcptr_ty, llvm_anyptr_ty, llvm_anyint_ty],

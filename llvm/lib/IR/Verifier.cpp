@@ -5123,7 +5123,22 @@ void Verifier::visitIntrinsicCall(Intrinsic::ID ID, CallBase &Call) {
     Check(Call.getParent()->getParent()->hasGC(),
           "Enclosing function does not use GC.", Call);
     break;
-  case Intrinsic::cj_gcwrite_ref:
+  case Intrinsic::cj_gcwrite_ref: {
+    Check(Call.arg_size() == 3 || Call.arg_size() == 4,
+          "gcwrite.ref requires three operands and optional strength", Call);
+    if (Call.arg_size() == 4) {
+      auto *Strength = dyn_cast<ConstantInt>(Call.getArgOperand(3));
+      Check(Strength && Strength->getType()->isIntegerTy(32) &&
+                Strength->getZExtValue() <= 2,
+            "gcwrite.ref strength must be i32 0, 1, or 2", Call);
+    }
+    Check(Call.getParent()->getParent()->hasCangjieGC(),
+          "Enclosing function check GC error.", Call);
+    for (Value *Arg : Call.args())
+      if (Arg->getType()->isPointerTy())
+        Check(!isa<UndefValue>(Arg), "cangjie intrinsic contains the undef operand!", Call);
+    break;
+  }
   case Intrinsic::cj_gcwrite_struct:
   case Intrinsic::cj_gcwrite_static_ref:
   case Intrinsic::cj_gcwrite_static_struct:

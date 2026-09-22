@@ -56,6 +56,44 @@ constexpr StringRef SafepointStub = "CJ_Safepoint_Stub";
 // This table is the P01 slot-domain ABI; query only the live entries.
 constexpr unsigned kCjHeapRangeCap = 100;
 
+// ZGC non-nmethod barriers use the current thread, never patched nmethod masks.
+// These layout symbols are provided by the matching runtime ABI (#856).
+static Value *loadBarrierABI(IRBuilder<> &B, Module *M, StringRef Symbol) {
+  return B.CreateLoad(B.getInt64Ty(), M->getOrInsertGlobal(Symbol, B.getInt64Ty()),
+                      Symbol.drop_front(2));
+}
+
+static Value *barrierField(IRBuilder<> &B, Module *M, Value *Base,
+                           StringRef Offset, Type *FieldTy) {
+  Value *Bytes = B.CreateBitCast(Base, B.getInt8PtrTy());
+  Value *Address = B.CreateGEP(B.getInt8Ty(), Bytes, loadBarrierABI(B, M, Offset));
+  return B.CreateBitCast(Address, FieldTy->getPointerTo());
+}
+
+static Value *loadThreadGCData(IRBuilder<> &B, Module *M) {
+  const Triple TT(M->getTargetTriple());
+  FunctionType *Ty = FunctionType::get(B.getInt8PtrTy(), false);
+  const char *Asm = TT.isX86() ? "movq %r15, $0" : "mov $0, x28";
+  Value *TLS = B.CreateCall(InlineAsm::get(Ty, Asm, "=r,~{memory}", true), {},
+                            "cj.tls");
+  return B.CreateLoad(B.getInt8PtrTy(),
+      barrierField(B, M, TLS, "g_cjThreadGCDataOffset", B.getInt8PtrTy()),
+      "cj.gcdata");
+}
+
+static Value *loadThreadMask(IRBuilder<> &B, Module *M, Value *Data,
+                             StringRef Offset, StringRef Name) {
+  return B.CreateLoad(B.getInt64Ty(),
+                     barrierField(B, M, Data, Offset, B.getInt64Ty()), Name);
+}
+
+static unsigned storeStrength(const CallInst *CI) {
+  if (CI->arg_size() == 4)
+    if (const auto *S = dyn_cast<ConstantInt>(CI->getArgOperand(GCWriteRef::Strength)))
+      return S->getZExtValue();
+  return GCWriteRef::Unknown;
+}
+
 static Value *emitReservedHeapSlot(IRBuilder<> &Builder, Module *M, Value *PlaceI,
                                    const Twine &Name) {
   LLVMContext &C = M->getContext();
@@ -160,6 +198,10 @@ public:
 
     Function *Callee = getOrInsertRuntimeFunc(II);
     switch (II->getIntrinsicID()) {
+    case Intrinsic::cj_gcwrite_ref:
+      replaceCallInst(Callee, {II->getArgOperand(0), II->getArgOperand(1),
+                               II->getArgOperand(2)}, II);
+      break;
     case Intrinsic::cj_gcwrite_struct: {
       Value *GCTib = getOrInsertGCTib(II);
       Value *Param[6] = {II->getArgOperand(GCWriteStruct::BaseObj),
@@ -239,6 +281,10 @@ private:
 
   StringRef getRuntimeFuncName(IntrinsicInst *II) {
     Intrinsic::ID IID = II->getIntrinsicID();
+    if (IID == Intrinsic::cj_gcwrite_ref) {
+      if (storeStrength(II) == GCWriteRef::Strong) return "CJ_MCC_WriteRefField_Strong";
+      if (storeStrength(II) == GCWriteRef::NoKeepAlive) return "CJ_MCC_WriteRefField_Weak";
+    }
     auto Itr = IntrinsicMap.find(IID);
     assert(Itr != IntrinsicMap.end() && "Runtime Intrinsic don`t exist.");
     return Itr->second;
@@ -255,6 +301,11 @@ private:
     const Triple TT(II->getModule()->getTargetTriple());
     auto isARM = TT.isARM();
     switch (II->getIntrinsicID()) {
+    case Intrinsic::cj_gcwrite_ref:
+      FuncType = FunctionType::get(Type::getVoidTy(C),
+          {II->getArgOperand(0)->getType(), II->getArgOperand(1)->getType(),
+           II->getArgOperand(2)->getType()}, false);
+      break;
     case Intrinsic::cj_gcwrite_struct: {
       Type *ParamType[6] = {GCPtr, GCPtr, I64, GCPtr, I64, I8Ptr};
       if (isARM)
@@ -400,28 +451,11 @@ public:
     return Load;
   }
 
-  // Phase B of the ZGC-style colouring work (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6).
-  //
-  // This used to be `lshr 48; icmp eq 0`, which asks "are the top 16 bits zero" and so hard-codes
-  // "a good reference carries no colour". That is what stops a good colour from being flipped
-  // lazily, and therefore what forces the runtime's full-heap extermination walk. Test against a
-  // mask the runtime owns instead, so a later phase can give good a non-zero value and flip it at
-  // a phase boundary -- ZGC does the same with ZPointerLoadBadMask (zBarrier.inline.hpp:626-628).
-  //
-  // The runtime owns the mask and republishes it at every phase boundary
-  // (WCollector.h set_good_masks), so the provider is not optional: a build
-  // without `g_cjLoadBadMask` is a build against a runtime this compiler does
-  // not target. The declaration is therefore strong and the load unconditional
-  // -- a missing provider must fail at load time, not silently fall back to a
-  // predicate that cannot see a flipped good colour.
-  //
-  // %mask = load i64, i64* @g_cjLoadBadMask
-  // %bad  = and i64 %Ptr, %mask
-  // %ret  = icmp eq i64 %bad, 0
+  // ZGC x86 load_at: test the current thread load-bad mask.
   Value *cmpTaggedPointer(Value *TagPtr, IRBuilder<> &Builder) {
     Type *I64 = Type::getInt64Ty(C);
-    Constant *MaskGV = M->getOrInsertGlobal("g_cjLoadBadMask", I64);
-    Value *Mask = Builder.CreateLoad(I64, MaskGV, "cj.loadbadmask");
+    Value *Mask = loadThreadMask(Builder, M, loadThreadGCData(Builder, M),
+                                "g_cjLoadBadMaskOffset", "cj.loadbadmask");
     cast<Instruction>(Mask)->setDebugLoc(*Loc);
     Value *Bad = Builder.CreateAnd(TagPtr, Mask);
     cast<Instruction>(Bad)->setDebugLoc(*Loc);
@@ -496,88 +530,121 @@ private:
   const DebugLoc *Loc = nullptr;
 };
 
-// ZGC store_barrier_on_heap_oop_field (zBarrier.inline.hpp:695-706) plus
-// x86 emit_store_fast_path_check (zBarrierSetAssembler_x86.cpp:358-374).
-//
-// ZGC color_store_good (zBarrier.inline.hpp:448-450 /
-// zAddress.inline.hpp:806-808). Hit arm peels new, ORs StoreGood, i64 store.
-// Null is store-good colored. Non-heap owners and mask misses go to MCC. The hit arm
-// hands the pre-store word to the runtime exit: like ZGC's load_atomic(p)
-// capture (zBarrier.inline.hpp:695-706), this is the SATB deletion record and
-// cannot be reconstructed from the installed new word.
+// ZGC zBarrierSetAssembler_x86.cpp:428-628, non-nmethod store barriers.
 class WriteBarrier {
 public:
   explicit WriteBarrier(Function &F) : M(F.getParent()), C(F.getContext()) {}
 
   void storeFastPath(CallInst *CI) {
+    IRBuilder<> B(CI);
+    B.SetCurrentDebugLocation(CI->getDebugLoc());
+    Value *Place = getPointerArg(CI);
     Value *NewVal = getValueArg(CI);
-    Value *FieldPtr = getPointerArg(CI);
-    const DebugLoc &DL = CI->getDebugLoc();
-    Type *I64 = Type::getInt64Ty(C);
+    Type *I64 = B.getInt64Ty();
+    Function *F = CI->getFunction();
+    BasicBlock *Entry = CI->getParent();
+    BasicBlock *Done = Entry->splitBasicBlock(CI, "storeDone");
+    BasicBlock *Native = BasicBlock::Create(C, "storeAccessor", F, Done);
+    BasicBlock *Fast = BasicBlock::Create(C, "storeFast", F, Done);
+    BasicBlock *Medium = BasicBlock::Create(C, "storeMedium", F, Done);
+    BasicBlock *Slow = BasicBlock::Create(C, "storeSlow", F, Done);
+    BasicBlock *Store = BasicBlock::Create(C, "storeFinish", F, Done);
+    Entry->getTerminator()->eraseFromParent();
+    B.SetInsertPoint(Entry);
+    // Cangjie value types may name stack/plain storage. Classify the slot
+    // before entering the heap barrier, as the runtime accessor does.
+    B.CreateBr(Done);
+    B.SetInsertPoint(Entry->getTerminator());
+    Value *InHeap = emitReservedHeapSlot(B, M, B.CreatePtrToInt(Place, I64),
+                                        "cj.store.inheap");
+    Instruction *OldBranch = B.GetInsertBlock()->getTerminator();
+    B.CreateCondBr(InHeap, Fast, Native);
+    OldBranch->eraseFromParent();
+    B.SetInsertPoint(Native);
+    B.CreateBr(Done);
+    CI->moveBefore(Native->getTerminator());
 
-    IRBuilder<> Builder(CI);
-    Value *Place = FieldPtr;
-    LoadInst *Prev = Builder.CreateLoad(NewVal->getType(), Place, "cj.store.prev");
-    Prev->setDebugLoc(DL);
-    Value *PrevI = Builder.CreatePtrToInt(Prev, I64, "cj.store.prev.i");
-    cast<Instruction>(PrevI)->setDebugLoc(DL);
+    B.SetInsertPoint(Fast);
+    Value *Data = nullptr;
+    Value *WordPtr = nullptr;
+    Value *Colored = storeBarrierFast(B, Place, NewVal, Medium, Store, Data, WordPtr);
+    B.CreateStore(Colored, WordPtr, true);
+    B.CreateBr(Done);
 
-    Constant *MaskGV = M->getOrInsertGlobal("g_cjStoreBadMask", I64);
-    Value *Mask = Builder.CreateLoad(I64, MaskGV, "cj.storebadmask");
-    cast<Instruction>(Mask)->setDebugLoc(DL);
-    Value *Bad = Builder.CreateAnd(PrevI, Mask, "cj.store.bad");
-    cast<Instruction>(Bad)->setDebugLoc(DL);
-    Value *ColourOk =
-        Builder.CreateICmpEQ(Bad, ConstantInt::get(I64, (uint64_t)0),
-                             "cj.store.colourok");
-    cast<Instruction>(ColourOk)->setDebugLoc(DL);
-    Value *Owner = Builder.CreatePtrToInt(getBaseObj(CI), I64);
-    Value *HeapOwner = Builder.CreateICmpUGT(Owner, Builder.getInt64(1), "cj.store.heap.owner");
-    ColourOk = Builder.CreateAnd(ColourOk, HeapOwner, "cj.store.heap.fast");
-    Value *PlaceI = Builder.CreatePtrToInt(Place, I64, "cj.store.place.i");
-    Value *InHeap = emitReservedHeapSlot(Builder, M, PlaceI, "cj.store.inheap");
-    ColourOk = Builder.CreateAnd(ColourOk, InHeap, "cj.store.heap.slot");
+    B.SetInsertPoint(Medium);
+    storeBarrierMedium(B, storeStrength(CI), Data, WordPtr, Slow, Store);
 
-    // Then = color_store_good + bare store; Else = MCC.
-    // Split at CI so the gcwrite starts Tail; move it into Else.
-    Instruction *ThenTerm = nullptr;
-    Instruction *ElseTerm = nullptr;
-    SplitBlockAndInsertIfThenElse(ColourOk, CI, &ThenTerm, &ElseTerm);
-    ThenTerm->setDebugLoc(DL);
-    ElseTerm->setDebugLoc(DL);
-    ThenTerm->getParent()->setName("storeFinish");
-    ElseTerm->getParent()->setName("gcStoreBad");
+    B.SetInsertPoint(Slow);
+    StringRef Name = storeStrength(CI) == GCWriteRef::NoKeepAlive
+        ? "CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive"
+        : "CJ_MCC_StoreBarrierOnHeapField";
+    FunctionType *SlowTy = FunctionType::get(B.getVoidTy(), {Place->getType()}, false);
+    B.CreateCall(M->getOrInsertFunction(Name, SlowTy), {Place});
+    B.CreateBr(Store);
 
-    // Copy oop bits to an early-clobber i64; peel+OR StoreGood on that
-    // i64 only (zAddress.inline.hpp:806). Do not ptrmask/ptrtoint NewVal.
-    IRBuilder<> FastBuilder(ThenTerm);
+  }
+
+private:
+  Value *storeBarrierFast(IRBuilder<> &B, Value *Place, Value *NewVal,
+                           BasicBlock *Medium, BasicBlock *Store,
+                           Value *&Data, Value *&WordPtr) {
+    Type *I64 = B.getInt64Ty();
+    Data = loadThreadGCData(B, M);
+    WordPtr = B.CreateBitCast(Place,
+        PointerType::get(I64, Place->getType()->getPointerAddressSpace()));
+    Value *LowPtr = B.CreateBitCast(Place,
+        PointerType::get(B.getInt16Ty(), Place->getType()->getPointerAddressSpace()));
+    Value *Prev = B.CreateZExt(B.CreateLoad(B.getInt16Ty(), LowPtr), I64,
+                              "cj.store.prev.low");
+    Value *Mask = loadThreadMask(B, M, Data, "g_cjStoreBadMaskOffset", "cj.storebadmask");
+    Value *Bad = B.CreateAnd(Prev, Mask, "cj.store.bad");
+    B.CreateCondBr(B.CreateICmpEQ(Bad, B.getInt64(0)), Store, Medium);
+
+    B.SetInsertPoint(Store);
     FunctionType *CopyTy = FunctionType::get(I64, {NewVal->getType()}, false);
-    InlineAsm *CopyAsm = InlineAsm::get(CopyTy, "movq $1, $0", "=&r,r",
-                                        /*hasSideEffects=*/false);
-    Value *NewBits =
-        FastBuilder.CreateCall(CopyAsm, NewVal, "cj.store.new.bits");
-    cast<CallInst>(NewBits)->setDebugLoc(DL);
-    Constant *ShiftGV = M->getOrInsertGlobal("g_cjLoadShift", I64);
-    Value *Shift = FastBuilder.CreateLoad(I64, ShiftGV, "cj.store.shift");
-    Value *NewI = FastBuilder.CreateShl(NewBits, Shift, "cj.store.new.i");
-    cast<Instruction>(NewI)->setDebugLoc(DL);
-    Constant *GoodGV = M->getOrInsertGlobal("g_cjStoreGoodMask", I64);
-    Value *GoodMask = FastBuilder.CreateLoad(I64, GoodGV, "cj.storegoodmask");
-    cast<Instruction>(GoodMask)->setDebugLoc(DL);
-    Value *ColoredI =
-        FastBuilder.CreateOr(NewI, GoodMask, "cj.store.colored.i");
-    cast<Instruction>(ColoredI)->setDebugLoc(DL);
-    // ZAddress::store_good, zAddress.inline.hpp:806-808: null is colored too.
-    Value *Word = ColoredI;
-    unsigned PlaceAS = Place->getType()->getPointerAddressSpace();
-    Value *PlaceI64 = FastBuilder.CreateBitCast(
-        Place, PointerType::get(I64, PlaceAS), "cj.store.place.i64");
-    if (auto *BC = dyn_cast<Instruction>(PlaceI64))
-      BC->setDebugLoc(DL);
-    StoreInst *St =
-        FastBuilder.CreateStore(Word, PlaceI64, /*isVolatile=*/true);
-    St->setDebugLoc(DL);
-    CI->moveBefore(ElseTerm);
+    const Triple TT(M->getTargetTriple());
+    InlineAsm *Copy = InlineAsm::get(CopyTy,
+        TT.isX86() ? "movq $1, $0" : "mov $0, $1", "=&r,r", false);
+    Value *NewBits = B.CreateCall(Copy, NewVal, "cj.store.new.bits");
+    Value *Shift = B.CreateLoad(I64, M->getOrInsertGlobal("g_cjLoadShift", I64), "cj.store.shift");
+    Value *Good = loadThreadMask(B, M, loadThreadGCData(B, M),
+                                "g_cjStoreGoodMaskOffset", "cj.storegoodmask");
+    Value *Colored = B.CreateOr(B.CreateShl(NewBits, Shift), Good, "cj.store.colored");
+    return Colored;
+  }
+
+  void storeBarrierMedium(IRBuilder<> &B, unsigned Strength, Value *Data,
+                           Value *WordPtr, BasicBlock *Slow, BasicBlock *Store) {
+    if (Strength == GCWriteRef::NoKeepAlive) {
+      B.CreateBr(Slow);
+      return;
+    }
+    storeBarrierBufferAdd(B, Data, WordPtr, Slow, Store);
+  }
+
+  void storeBarrierBufferAdd(IRBuilder<> &B, Value *Data, Value *Place,
+                             BasicBlock *Slow, BasicBlock *Store) {
+    Value *Buffer = B.CreateLoad(B.getInt8PtrTy(),
+        barrierField(B, M, Data, "g_cjStoreBarrierBufferOffset", B.getInt8PtrTy()),
+        "cj.store.buffer");
+    Value *CurrentPtr = barrierField(B, M, Buffer,
+        "g_cjStoreBarrierBufferCurrentOffset", B.getInt64Ty());
+    Value *Current = B.CreateLoad(B.getInt64Ty(), CurrentPtr, "cj.store.current");
+    BasicBlock *Append = BasicBlock::Create(C, "storeAppend", Slow->getParent(), Slow);
+    B.CreateCondBr(B.CreateICmpEQ(Current, B.getInt64(0)), Slow, Append);
+    B.SetInsertPoint(Append);
+    Value *Next = B.CreateSub(Current,
+        loadBarrierABI(B, M, "g_cjStoreBarrierEntrySize"), "cj.store.next");
+    B.CreateStore(Next, CurrentPtr);
+    Value *Entries = barrierField(B, M, Buffer,
+        "g_cjStoreBarrierBufferBufferOffset", B.getInt8Ty());
+    Value *Entry = B.CreateGEP(B.getInt8Ty(), Entries, Next, "cj.store.entry");
+    B.CreateStore(B.CreatePtrToInt(Place, B.getInt64Ty()),
+        barrierField(B, M, Entry, "g_cjStoreBarrierEntryPOffset", B.getInt64Ty()));
+    Value *Prev = B.CreateLoad(B.getInt64Ty(), Place, "cj.store.buffer.prev");
+    B.CreateStore(Prev,
+        barrierField(B, M, Entry, "g_cjStoreBarrierEntryPrevOffset", B.getInt64Ty()));
+    B.CreateBr(Store);
   }
 
   Module *M;
@@ -650,7 +717,8 @@ void CJBarrierLowering::writeBarrierFastPath(Function &F,
         continue;
       if (CI->getIntrinsicID() != Intrinsic::cj_gcwrite_ref)
         continue;
-      if (isa<ConstantPointerNull>(getBaseObj(CI)))
+      // Legacy and explicit unknown accesses use the runtime accessor.
+      if (storeStrength(CI) == GCWriteRef::Unknown)
         continue;
       WB.storeFastPath(CI);
     }
