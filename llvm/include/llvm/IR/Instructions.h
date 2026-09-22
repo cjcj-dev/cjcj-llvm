@@ -307,7 +307,7 @@ class StoreInst : public Instruction {
   // Semantic store decorator, like ZGC MemNode::_barrier_data. Unlike
   // metadata this participates in instruction identity and cannot be dropped.
   // 0 = unknown/legacy, 1 = strong, 2 = no-keep-alive.
-  unsigned CJStoreStrength = 0;
+  uint8_t CJStoreStrength = 0;
 
   void AssertOK();
 

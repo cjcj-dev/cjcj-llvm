@@ -58,9 +58,9 @@ end:
 }
 define void @mixed(i1 %c, i8 addrspace(1)* %v, i8 addrspace(1)* %w, i8 addrspace(1)* %base, i8 addrspace(1)* %slot.raw) gc "cangjie" {
 ; IR-LABEL: define void @mixed(
-; IR: br i1
 ; IR-DAG: @llvm.cj.gcwrite.ref({{.*}}i32 1)
 ; IR-DAG: @llvm.cj.gcwrite.ref({{.*}}i32 2)
+; IR-DAG: br i1
 ; IR: ret void
 ; ASM-LABEL: mixed:
 ; ASM-DAG: CJ_MCC_WriteRefField_Strong
