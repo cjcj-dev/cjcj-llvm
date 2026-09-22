@@ -4698,8 +4698,10 @@ LoadInst *LoadInst::cloneImpl() const {
 }
 
 StoreInst *StoreInst::cloneImpl() const {
-  return new StoreInst(getOperand(0), getOperand(1), isVolatile(), getAlign(),
-                       getOrdering(), getSyncScopeID());
+  auto *Result = new StoreInst(getOperand(0), getOperand(1), isVolatile(),
+                               getAlign(), getOrdering(), getSyncScopeID());
+  Result->setCJStoreStrength(getCJStoreStrength());
+  return Result;
 }
 
 AtomicCmpXchgInst *AtomicCmpXchgInst::cloneImpl() const {

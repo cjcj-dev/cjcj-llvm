@@ -1999,6 +1999,7 @@ class LoopPromoter : public LoadAndStorePromoter {
   AAMDNodes AATags;
   ICFLoopSafetyInfo &SafetyInfo;
   bool CanInsertStoresInExitBlocks;
+  unsigned CJStoreStrength;
 
   // We're about to add a use of V in a loop exit block.  Insert an LCSSA phi
   // (if legal) if doing so would add an out-of-loop use to an instruction
@@ -2026,14 +2027,15 @@ public:
                MemorySSAUpdater &MSSAU, LoopInfo &li, DebugLoc dl,
                Align Alignment, bool UnorderedAtomic, const AAMDNodes &AATags,
                ICFLoopSafetyInfo &SafetyInfo, bool CanInsertStoresInExitBlocks,
-               Value *BP = nullptr)
+               unsigned Strength, Value *BP = nullptr)
       : LoadAndStorePromoter(Insts, S), SomePtr(SP), BasePtr(BP),
         PointerMustAliases(PMA), LoopExitBlocks(LEB), LoopInsertPts(LIP),
         MSSAInsertPts(MSSAIP), PredCache(PIC), MSSAU(MSSAU), LI(li),
         DL(std::move(dl)), Alignment(Alignment),
         UnorderedAtomic(UnorderedAtomic), AATags(AATags),
         SafetyInfo(SafetyInfo),
-        CanInsertStoresInExitBlocks(CanInsertStoresInExitBlocks) {}
+        CanInsertStoresInExitBlocks(CanInsertStoresInExitBlocks),
+        CJStoreStrength(Strength) {}
 
   bool isInstInList(Instruction *I,
                     const SmallVectorImpl<Instruction *> &) const override {
@@ -2064,6 +2066,7 @@ public:
       MemoryAccess *NewMemAcc = nullptr;
       if (!BasePtr) {
         StoreInst *NewSI = new StoreInst(LiveInValue, Ptr, InsertPos);
+        NewSI->setCJStoreStrength(CJStoreStrength);
         if (UnorderedAtomic)
           NewSI->setOrdering(AtomicOrdering::Unordered);
         NewSI->setAlignment(Alignment);
@@ -2092,9 +2095,12 @@ public:
         }
         assert(isGCPointerType(BasePtr->getType()) &&
                "BasePtr should be gc pointer");
+        SmallVector<Value *, 4> Args{LiveInValue, LCSSABase, AS0ToAS1Ptr};
+        if (CJStoreStrength)
+          Args.push_back(ConstantInt::get(Type::getInt32Ty(ExitBlock->getContext()),
+                                          CJStoreStrength));
         CallInst *CI = CallInst::Create(CJGCwrite->getFunctionType(), CJGCwrite,
-                                        {LiveInValue, LCSSABase, AS0ToAS1Ptr},
-                                        "", InsertPos);
+                                        Args, "", InsertPos);
         CI->setDebugLoc(DL);
         if (AATags)
           CI->setAAMetadata(AATags);
@@ -2254,6 +2260,13 @@ bool llvm::promoteLoopAccessesToScalars(
   // We cannot (yet) promote a memory location that is loaded and stored in
   // different sizes.  While we are at it, collect alignment and AA info.
   Type *AccessTy = nullptr;
+  Optional<unsigned> CJStoreStrength;
+  auto AcceptStoreStrength = [&](unsigned Strength) {
+    if (CJStoreStrength && *CJStoreStrength != Strength)
+      return false;
+    CJStoreStrength = Strength;
+    return true;
+  };
   for (Value *ASIV : PointerMustAliases) {
     for (Use &U : ASIV->uses()) {
       // Ignore instructions that are outside the loop.
@@ -2290,7 +2303,8 @@ bool llvm::promoteLoopAccessesToScalars(
         // pointer.
         if (U.getOperandNo() != StoreInst::getPointerOperandIndex())
           continue;
-        if (!Store->isUnordered())
+        if (!Store->isUnordered() ||
+            !AcceptStoreStrength(Store->getCJStoreStrength()))
           return false;
 
         SawUnorderedAtomic |= Store->isAtomic();
@@ -2335,6 +2349,11 @@ bool llvm::promoteLoopAccessesToScalars(
       } else if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(UI);
                  II && II->getIntrinsicID() == Intrinsic::cj_gcwrite_ref &&
                  !LICMDisableBarrier) {
+        unsigned Strength = II->arg_size() == 4
+                                ? cast<ConstantInt>(II->getArgOperand(3))->getZExtValue()
+                                : 0;
+        if (!AcceptStoreStrength(Strength))
+          return false;
         SawUnorderedAtomic |= false;
         SawNotAtomic |= !SawUnorderedAtomic;
         bool GuaranteedToExecute =
@@ -2451,7 +2470,8 @@ bool llvm::promoteLoopAccessesToScalars(
   LoopPromoter Promoter(SomePtr, LoopUses, SSA, PointerMustAliases, ExitBlocks,
                         InsertPts, MSSAInsertPts, PIC, MSSAU, *LI, DL,
                         Alignment, SawUnorderedAtomic, AATags, *SafetyInfo,
-                        SafeToInsertStore, PointerMustAliasesPair.second);
+                        SafeToInsertStore, CJStoreStrength.getValueOr(0),
+                        PointerMustAliasesPair.second);
 
   // Set up the preheader to have a definition of the value.  It is the live-out
   // value from the preheader that uses in the loop will use.

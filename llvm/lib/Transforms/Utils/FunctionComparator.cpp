@@ -582,6 +582,9 @@ int FunctionComparator::cmpOperations(const Instruction *L,
         cast<LoadInst>(R)->getMetadata(LLVMContext::MD_range));
   }
   if (const StoreInst *SI = dyn_cast<StoreInst>(L)) {
+    if (int Res = cmpNumbers(SI->getCJStoreStrength(),
+                             cast<StoreInst>(R)->getCJStoreStrength()))
+      return Res;
     if (int Res =
             cmpNumbers(SI->isVolatile(), cast<StoreInst>(R)->isVolatile()))
       return Res;

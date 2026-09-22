@@ -495,6 +495,7 @@ static StoreInst *combineStoreToNewValue(InstCombinerImpl &IC, StoreInst &SI,
       V, IC.Builder.CreateBitCast(Ptr, V->getType()->getPointerTo(AS)),
       SI.getAlign(), SI.isVolatile());
   NewStore->setAtomic(SI.getOrdering(), SI.getSyncScopeID());
+  NewStore->setCJStoreStrength(SI.getCJStoreStrength());
   for (const auto &MDPair : MD) {
     unsigned ID = MDPair.first;
     MDNode *N = MDPair.second;
@@ -1550,6 +1551,7 @@ bool InstCombinerImpl::mergeStoreIntoSuccessor(StoreInst &SI) {
   StoreInst *NewSI =
       new StoreInst(MergedVal, SI.getOperand(1), SI.isVolatile(), SI.getAlign(),
                     SI.getOrdering(), SI.getSyncScopeID());
+  NewSI->setCJStoreStrength(SI.getCJStoreStrength());
   InsertNewInstBefore(NewSI, *BBI);
   NewSI->setDebugLoc(MergedLoc);
 

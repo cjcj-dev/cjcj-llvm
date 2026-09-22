@@ -10108,8 +10108,8 @@ Syntax:
 
 ::
 
-      store [volatile] <ty> <value>, ptr <pointer>[, align <alignment>][, !nontemporal !<nontemp_node>][, !invariant.group !<empty_node>]        ; yields void
-      store atomic [volatile] <ty> <value>, ptr <pointer> [syncscope("<target-scope>")] <ordering>, align <alignment> [, !invariant.group !<empty_node>] ; yields void
+      store [volatile] [cj_strength(<strength>)] <ty> <value>, ptr <pointer>[, align <alignment>][, !nontemporal !<nontemp_node>][, !invariant.group !<empty_node>]        ; yields void
+      store atomic [volatile] [cj_strength(<strength>)] <ty> <value>, ptr <pointer> [syncscope("<target-scope>")] <ordering>, align <alignment> [, !invariant.group !<empty_node>] ; yields void
       !<nontemp_node> = !{ i32 1 }
       !<empty_node> = !{}
 
@@ -10117,6 +10117,15 @@ Overview:
 """""""""
 
 The '``store``' instruction is used to write to memory.
+
+In the Cangjie GC pipeline, ``cj_strength`` carries the store barrier's
+semantic access decorator: 0 (or absent) means unknown, 1 means strong,
+and 2 means no-keep-alive. It is instruction state, not optional metadata.
+Cloning or rebuilding a store preserves it; merging stores requires equal
+decorators. The GC instruction replacement pass transfers the explicit
+``llvm.cj.gcwrite.ref`` strength to this field and the restoration pass
+transfers it back before barrier lowering. It does not change volatility,
+atomic ordering, or the memory value written by the store.
 
 Arguments:
 """"""""""

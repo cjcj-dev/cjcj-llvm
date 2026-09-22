@@ -304,6 +304,11 @@ class StoreInst : public Instruction {
       Bitfield::areContiguous<VolatileField, AlignmentField, OrderingField>(),
       "Bitfields must be contiguous");
 
+  // Semantic store decorator, like ZGC MemNode::_barrier_data. Unlike
+  // metadata this participates in instruction identity and cannot be dropped.
+  // 0 = unknown/legacy, 1 = strong, 2 = no-keep-alive.
+  unsigned CJStoreStrength = 0;
+
   void AssertOK();
 
 protected:
@@ -313,6 +318,12 @@ protected:
   StoreInst *cloneImpl() const;
 
 public:
+  unsigned getCJStoreStrength() const { return CJStoreStrength; }
+  void setCJStoreStrength(unsigned Strength) {
+    assert(Strength <= 2 && "invalid Cangjie store strength");
+    CJStoreStrength = Strength;
+  }
+
   StoreInst(Value *Val, Value *Ptr, Instruction *InsertBefore);
   StoreInst(Value *Val, Value *Ptr, BasicBlock *InsertAtEnd);
   StoreInst(Value *Val, Value *Ptr, bool isVolatile, Instruction *InsertBefore);

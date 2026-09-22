@@ -90,6 +90,7 @@ enum Kind {
   kw_unwind,
   kw_datalayout,
   kw_volatile,
+  kw_cj_strength,
   kw_atomic,
   kw_unordered,
   kw_monotonic,

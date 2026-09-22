@@ -2616,6 +2616,7 @@ static Value *isSafeToSpeculateStore(Instruction *I, BasicBlock *BrBB,
       // simple, to avoid introducing a spurious non-atomic write after an
       // atomic write.
       if (SI->getPointerOperand() == StorePtr &&
+          SI->getCJStoreStrength() == StoreToHoist->getCJStoreStrength() &&
           SI->getValueOperand()->getType() == StoreTy && SI->isSimple())
         // Found the previous store, return its value operand.
         return SI->getValueOperand();
@@ -3757,7 +3758,8 @@ static bool mergeConditionalStoreToAddress(
     return false;
 
   // Now check the stores are compatible.
-  if (!QStore->isUnordered() || !PStore->isUnordered() ||
+  if (QStore->getCJStoreStrength() != PStore->getCJStoreStrength() ||
+      !QStore->isUnordered() || !PStore->isUnordered() ||
       PStore->getValueOperand()->getType() !=
           QStore->getValueOperand()->getType())
     return false;
@@ -3872,6 +3874,7 @@ static bool mergeConditionalStoreToAddress(
                                       /*BranchWeights=*/nullptr, DTU);
   QB.SetInsertPoint(T);
   StoreInst *SI = cast<StoreInst>(QB.CreateStore(QPHI, Address));
+  SI->setCJStoreStrength(PStore->getCJStoreStrength());
   SI->setAAMetadata(PStore->getAAMetadata().merge(QStore->getAAMetadata()));
   // Choose the minimum alignment. If we could prove both stores execute, we
   // could use biggest one.  In this case, though, we only know that one of the

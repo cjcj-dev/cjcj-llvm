@@ -573,8 +573,9 @@ enum FunctionCodes {
   FUNC_CODE_INST_STOREATOMIC_OLD = 42, // STORE: [ptrty,ptr,val, align, vol
                                        //         ordering, synchscope]
   FUNC_CODE_INST_GEP = 43,             // GEP:  [inbounds, n x operands]
-  FUNC_CODE_INST_STORE = 44,       // STORE: [ptrty,ptr,valty,val, align, vol]
-  FUNC_CODE_INST_STOREATOMIC = 45, // STORE: [ptrty,ptr,val, align, vol
+  FUNC_CODE_INST_STORE = 44,       // STORE: [ptrty,ptr,valty,val,align,vol,strength?]
+  FUNC_CODE_INST_STOREATOMIC = 45, // STORE: [ptrty,ptr,valty,val,align,vol,
+                                 //         ordering,synchscope,strength?]
   FUNC_CODE_INST_CMPXCHG = 46,     // CMPXCHG: [ptrty, ptr, cmp, val, vol,
                                    //           success_ordering, synchscope,
                                    //           failure_ordering, weak]

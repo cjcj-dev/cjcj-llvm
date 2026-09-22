@@ -448,7 +448,8 @@ static bool haveSameSpecialState(const Instruction *I1, const Instruction *I2,
            LI->getOrdering() == cast<LoadInst>(I2)->getOrdering() &&
            LI->getSyncScopeID() == cast<LoadInst>(I2)->getSyncScopeID();
   if (const StoreInst *SI = dyn_cast<StoreInst>(I1))
-    return SI->isVolatile() == cast<StoreInst>(I2)->isVolatile() &&
+    return SI->getCJStoreStrength() == cast<StoreInst>(I2)->getCJStoreStrength() &&
+           SI->isVolatile() == cast<StoreInst>(I2)->isVolatile() &&
            (SI->getAlign() == cast<StoreInst>(I2)->getAlign() ||
             IgnoreAlignment) &&
            SI->getOrdering() == cast<StoreInst>(I2)->getOrdering() &&
