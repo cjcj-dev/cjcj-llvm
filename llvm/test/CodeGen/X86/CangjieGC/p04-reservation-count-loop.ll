@@ -55,8 +55,10 @@ define void @p04_write(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
 ; CHECK: unreachable
 ; CHECK: cj.read.inheap.done:
 ; CHECK: %cj.read.inheap.result = phi i1
-; CHECK: %cj.read.heap.slot = and i1 %cj.read.heap.fast, %cj.read.inheap.result
-; CHECK: br i1 %cj.read.heap.slot, label %gcNoMarked, label %gcMarked
+; CHECK: br i1 %cj.read.inheap.result, label %loadFast, label %gcMarked
+; CHECK: loadFast:
+; CHECK: and i64 {{.*}}, %cj.loadbadmask
+; CHECK: br i1 {{.*}}, label %gcNoMarked, label %gcMarked
 
 define i8 addrspace(1)* @p04_read(i8 addrspace(1)* %base,
                                  i8 addrspace(1)* addrspace(1)* %slot) gc "cangjie" {

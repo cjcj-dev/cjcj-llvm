@@ -26,11 +26,11 @@ define void @p01_write(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
 define i8 addrspace(1)* @p01_read(i8 addrspace(1)* %base,
                                  i8 addrspace(1)* addrspace(1)* %slot) gc "cangjie" {
 ; CHECK-LABEL: define i8 addrspace(1)* @p01_read(
-; CHECK: [[READBASE:%.*]] = ptrtoint i8 addrspace(1)* %base to i64
-; CHECK: [[READHEAP:%.*]] = icmp ugt i64 [[READBASE]], 1
-; CHECK: [[READFAST:%.*]] = and i1 {{%.*}}, [[READHEAP]]
-; CHECK: %cj.read.heap.slot = and i1 [[READFAST]], %cj.read.inheap.result
-; CHECK: br i1 %cj.read.heap.slot, label %gcNoMarked, label %gcMarked
+; CHECK: %cj.read.inheap.result = phi i1
+; CHECK: br i1 %cj.read.inheap.result, label %loadFast, label %gcMarked
+; CHECK: loadFast:
+; CHECK: and i64 {{.*}}, %cj.loadbadmask
+; CHECK: br i1 {{.*}}, label %gcNoMarked, label %gcMarked
 ; CHECK: gcNoMarked:
 ; CHECK-NEXT: [[READSHIFT:%.*]] = load i64, i64* @g_cjLoadShift
 ; CHECK-NEXT: [[READADDR:%.*]] = lshr i64 {{%.*}}, [[READSHIFT]]

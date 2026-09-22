@@ -413,28 +413,25 @@ public:
   void readFastPath(CallInst *ReadBarrier, Value *RefFieldPtr,
                     uint64_t Order = 0) {
     setBarrier(ReadBarrier);
-    // %0 = load i8 addrspace1*, i8 addrspace1* addrspace1* %3
-    // %1 = ptrtoint i8 addrspace1* %0 to i64
     IRBuilder<> Builder(ReadInst);
-    // Place may carry colour (same as createStoreOrMems write places).
-    LoadInst *Load =
-        loadTaggedPointer(Builder, RefFieldPtr, Order);
+    BasicBlock *Domain = nullptr;
+    Value *InHeap = nullptr;
+    if (ReadBarrier->getIntrinsicID() == Intrinsic::cj_gcread_ref) {
+      // Value-type storage can be plain. Route it to the accessor before
+      // entering the heap fast path, whose only predicate is the mask test.
+      Value *PlaceI = Builder.CreatePtrToInt(RefFieldPtr, Builder.getInt64Ty(),
+                                             "cj.read.place.i");
+      InHeap = emitReservedHeapSlot(Builder, M, PlaceI, "cj.read.inheap");
+      Domain = ReadInst->getParent();
+      Domain->splitBasicBlock(ReadInst, "loadFast");
+      Builder.SetInsertPoint(ReadInst);
+    }
+    LoadInst *Load = loadTaggedPointer(Builder, RefFieldPtr, Order);
     Instruction *PtrToInt =
         cast<Instruction>(Builder.CreatePtrToInt(Load, Type::getInt64Ty(C)));
     PtrToInt->setDebugLoc(*Loc);
     Value *CmpEQ = cmpTaggedPointer(PtrToInt, Builder);
-    if (ReadBarrier->getIntrinsicID() == Intrinsic::cj_gcread_ref) {
-      // A value-type constructor can receive stack ($BP=0), global ($BP=1),
-      // or heap storage. Only the heap owner uses this inline heap fast path.
-      Value *Owner = Builder.CreatePtrToInt(getBaseObj(ReadBarrier), Type::getInt64Ty(C));
-      Value *HeapOwner = Builder.CreateICmpUGT(Owner, Builder.getInt64(1), "cj.read.heap.owner");
-      CmpEQ = Builder.CreateAnd(CmpEQ, HeapOwner, "cj.read.heap.fast");
-      Type *I64Ty = Type::getInt64Ty(C);
-      Value *PlaceI = Builder.CreatePtrToInt(RefFieldPtr, I64Ty, "cj.read.place.i");
-      Value *InHeap = emitReservedHeapSlot(Builder, M, PlaceI, "cj.read.inheap");
-      CmpEQ = Builder.CreateAnd(CmpEQ, InHeap, "cj.read.heap.slot");
-    }
-    splitFastPathAndSlowPath(ReadInst->getParent(), CmpEQ, PtrToInt);
+    splitFastPathAndSlowPath(ReadInst->getParent(), CmpEQ, PtrToInt, Domain, InHeap);
   }
 
   // insert a load from RefFieldPtr:
@@ -477,8 +474,15 @@ public:
   // loadFinish:
   //   %val = phi [%val1, gcNoMarked], [%val2, gcMarked]
   void splitFastPathAndSlowPath(BasicBlock *SplitBB, Value *Condition,
-                                Instruction *PtrToInt) {
+                                Instruction *PtrToInt, BasicBlock *Domain,
+                                Value *InHeap) {
     BasicBlock *FalseBranch = SplitBB->splitBasicBlock(ReadInst, "gcMarked");
+    if (Domain) {
+      Instruction *OldBranch = Domain->getTerminator();
+      IRBuilder<> DomainBuilder(OldBranch);
+      DomainBuilder.CreateCondBr(InHeap, SplitBB, FalseBranch);
+      OldBranch->eraseFromParent();
+    }
     BasicBlock *Succ =
         FalseBranch->splitBasicBlock(ReadInst->getNextNode(), "loadFinish");
     BasicBlock *TrueBranch =
