@@ -167,3 +167,204 @@ b:
 end:
  ret void
 }
+
+; Two stores share one modelled value PHI, making sinking profitable.
+; The pass materializes a PHI for each store; each must retain its decorator.
+
+define void @phi_0_0(i1 %c, i8 addrspace(1)* %v, i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, i8 addrspace(1)* addrspace(1)* %q) {
+; CHECK-LABEL: define void @phi_0_0(
+; CHECK: [[VALUE:%.*]] = phi i8 addrspace(1)* [ %v, %a ], [ %w, %b ]
+; CHECK: [[VALUE2:%.*]] = phi i8 addrspace(1)* [ %v, %a ], [ %w, %b ]
+; CHECK: store i8 addrspace(1)* [[VALUE]], i8 addrspace(1)* addrspace(1)* %p, align 8{{ *$}}
+; CHECK: store i8 addrspace(1)* [[VALUE2]], i8 addrspace(1)* addrspace(1)* %q, align 8{{ *$}}
+; CHECK-NOT: store
+; CHECK: ret void
+entry:
+ br i1 %c, label %a, label %b
+a:
+ store i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+b:
+ store i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+end:
+ ret void
+}
+
+define void @phi_1_1(i1 %c, i8 addrspace(1)* %v, i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, i8 addrspace(1)* addrspace(1)* %q) {
+; CHECK-LABEL: define void @phi_1_1(
+; CHECK: [[VALUE:%.*]] = phi i8 addrspace(1)* [ %v, %a ], [ %w, %b ]
+; CHECK: [[VALUE2:%.*]] = phi i8 addrspace(1)* [ %v, %a ], [ %w, %b ]
+; CHECK: store cj_strength(1) i8 addrspace(1)* [[VALUE]], i8 addrspace(1)* addrspace(1)* %p, align 8{{ *$}}
+; CHECK: store cj_strength(1) i8 addrspace(1)* [[VALUE2]], i8 addrspace(1)* addrspace(1)* %q, align 8{{ *$}}
+; CHECK-NOT: store
+; CHECK: ret void
+entry:
+ br i1 %c, label %a, label %b
+a:
+ store cj_strength(1) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store cj_strength(1) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+b:
+ store cj_strength(1) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store cj_strength(1) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+end:
+ ret void
+}
+
+define void @phi_2_2(i1 %c, i8 addrspace(1)* %v, i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, i8 addrspace(1)* addrspace(1)* %q) {
+; CHECK-LABEL: define void @phi_2_2(
+; CHECK: [[VALUE:%.*]] = phi i8 addrspace(1)* [ %v, %a ], [ %w, %b ]
+; CHECK: [[VALUE2:%.*]] = phi i8 addrspace(1)* [ %v, %a ], [ %w, %b ]
+; CHECK: store cj_strength(2) i8 addrspace(1)* [[VALUE]], i8 addrspace(1)* addrspace(1)* %p, align 8{{ *$}}
+; CHECK: store cj_strength(2) i8 addrspace(1)* [[VALUE2]], i8 addrspace(1)* addrspace(1)* %q, align 8{{ *$}}
+; CHECK-NOT: store
+; CHECK: ret void
+entry:
+ br i1 %c, label %a, label %b
+a:
+ store cj_strength(2) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store cj_strength(2) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+b:
+ store cj_strength(2) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store cj_strength(2) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+end:
+ ret void
+}
+
+define void @phi_0_1(i1 %c, i8 addrspace(1)* %v, i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, i8 addrspace(1)* addrspace(1)* %q) {
+; CHECK-LABEL: define void @phi_0_1(
+; CHECK: store i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %p, align 8{{ *$}}
+; CHECK: store i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %q, align 8{{ *$}}
+; CHECK: store cj_strength(1) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, align 8{{ *$}}
+; CHECK: store cj_strength(1) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %q, align 8{{ *$}}
+; CHECK-NOT: store
+; CHECK: ret void
+entry:
+ br i1 %c, label %a, label %b
+a:
+ store i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+b:
+ store cj_strength(1) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store cj_strength(1) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+end:
+ ret void
+}
+
+define void @phi_0_2(i1 %c, i8 addrspace(1)* %v, i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, i8 addrspace(1)* addrspace(1)* %q) {
+; CHECK-LABEL: define void @phi_0_2(
+; CHECK: store i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %p, align 8{{ *$}}
+; CHECK: store i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %q, align 8{{ *$}}
+; CHECK: store cj_strength(2) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, align 8{{ *$}}
+; CHECK: store cj_strength(2) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %q, align 8{{ *$}}
+; CHECK-NOT: store
+; CHECK: ret void
+entry:
+ br i1 %c, label %a, label %b
+a:
+ store i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+b:
+ store cj_strength(2) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store cj_strength(2) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+end:
+ ret void
+}
+
+define void @phi_1_2(i1 %c, i8 addrspace(1)* %v, i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, i8 addrspace(1)* addrspace(1)* %q) {
+; CHECK-LABEL: define void @phi_1_2(
+; CHECK: store cj_strength(1) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %p, align 8{{ *$}}
+; CHECK: store cj_strength(1) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %q, align 8{{ *$}}
+; CHECK: store cj_strength(2) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, align 8{{ *$}}
+; CHECK: store cj_strength(2) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %q, align 8{{ *$}}
+; CHECK-NOT: store
+; CHECK: ret void
+entry:
+ br i1 %c, label %a, label %b
+a:
+ store cj_strength(1) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store cj_strength(1) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+b:
+ store cj_strength(2) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store cj_strength(2) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+end:
+ ret void
+}
+
+define void @phi_2_1(i1 %c, i8 addrspace(1)* %v, i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, i8 addrspace(1)* addrspace(1)* %q) {
+; CHECK-LABEL: define void @phi_2_1(
+; CHECK: store cj_strength(2) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %p, align 8{{ *$}}
+; CHECK: store cj_strength(2) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %q, align 8{{ *$}}
+; CHECK: store cj_strength(1) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, align 8{{ *$}}
+; CHECK: store cj_strength(1) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %q, align 8{{ *$}}
+; CHECK-NOT: store
+; CHECK: ret void
+entry:
+ br i1 %c, label %a, label %b
+a:
+ store cj_strength(2) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store cj_strength(2) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+b:
+ store cj_strength(1) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store cj_strength(1) i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+end:
+ ret void
+}
+
+define void @phi_1_0(i1 %c, i8 addrspace(1)* %v, i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, i8 addrspace(1)* addrspace(1)* %q) {
+; CHECK-LABEL: define void @phi_1_0(
+; CHECK: store cj_strength(1) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %p, align 8{{ *$}}
+; CHECK: store cj_strength(1) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %q, align 8{{ *$}}
+; CHECK: store i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, align 8{{ *$}}
+; CHECK: store i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %q, align 8{{ *$}}
+; CHECK-NOT: store
+; CHECK: ret void
+entry:
+ br i1 %c, label %a, label %b
+a:
+ store cj_strength(1) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store cj_strength(1) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+b:
+ store i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+end:
+ ret void
+}
+
+define void @phi_2_0(i1 %c, i8 addrspace(1)* %v, i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, i8 addrspace(1)* addrspace(1)* %q) {
+; CHECK-LABEL: define void @phi_2_0(
+; CHECK: store cj_strength(2) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %p, align 8{{ *$}}
+; CHECK: store cj_strength(2) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %q, align 8{{ *$}}
+; CHECK: store i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, align 8{{ *$}}
+; CHECK: store i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %q, align 8{{ *$}}
+; CHECK-NOT: store
+; CHECK: ret void
+entry:
+ br i1 %c, label %a, label %b
+a:
+ store cj_strength(2) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store cj_strength(2) i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+b:
+ store i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %p, align 8
+ store i8 addrspace(1)* %w, i8 addrspace(1)* addrspace(1)* %q, align 8
+ br label %end
+end:
+ ret void
+}
