@@ -123,8 +123,9 @@ using HoistingPointInfo = std::pair<BasicBlock *, SmallVecInsn>;
 
 using HoistingPointList = SmallVector<HoistingPointInfo, 4>;
 
-// A map from a pair of VNs to all the instructions with those VNs.
-using VNType = std::pair<unsigned, uintptr_t>;
+// Store barrier strength is semantic node state, not discardable metadata.
+// Keep it in the equivalence key alongside the address and value numbers.
+using VNType = std::tuple<unsigned, uintptr_t, unsigned>;
 
 using VNtoInsns = DenseMap<VNType, SmallVector<Instruction *, 4>>;
 
@@ -170,7 +171,7 @@ public:
   void insert(Instruction *I, GVNPass::ValueTable &VN) {
     // Scalar instruction.
     unsigned V = VN.lookupOrAdd(I);
-    VNtoScalars[{V, InvalidVN}].push_back(I);
+    VNtoScalars[{V, InvalidVN, 0}].push_back(I);
   }
 
   const VNtoInsns &getVNTable() const { return VNtoScalars; }
@@ -187,7 +188,7 @@ public:
       unsigned V = VN.lookupOrAdd(Load->getPointerOperand());
       // With opaque pointers we may have loads from the same pointer with
       // different result types, which should be disambiguated.
-      VNtoLoads[{V, (uintptr_t)Load->getType()}].push_back(Load);
+      VNtoLoads[{V, (uintptr_t)Load->getType(), 0}].push_back(Load);
     }
   }
 
@@ -207,7 +208,8 @@ public:
     // Hash the store address and the stored value.
     Value *Ptr = Store->getPointerOperand();
     Value *Val = Store->getValueOperand();
-    VNtoStores[{VN.lookupOrAdd(Ptr), VN.lookupOrAdd(Val)}].push_back(Store);
+    VNtoStores[{VN.lookupOrAdd(Ptr), VN.lookupOrAdd(Val),
+                Store->getCJStoreStrength()}].push_back(Store);
   }
 
   const VNtoInsns &getVNTable() const { return VNtoStores; }
@@ -226,7 +228,7 @@ public:
     // onlyReadsMemory will be handled as a Load instruction,
     // all other calls will be handled as stores.
     unsigned V = VN.lookupOrAdd(Call);
-    auto Entry = std::make_pair(V, InvalidVN);
+    VNType Entry{V, InvalidVN, 0};
 
     if (Call->doesNotAccessMemory())
       VNtoCallsScalars[Entry].push_back(Call);
@@ -865,7 +867,8 @@ void GVNHoist::fillChiArgs(BasicBlock *BB, OutValuesType &CHIBBs,
           C.I = si->second.pop_back_val(); // Assign the argument
           LLVM_DEBUG(dbgs()
                      << "\nCHI Inserted in BB: " << C.Dest->getName() << *C.I
-                     << ", VN: " << C.VN.first << ", " << C.VN.second);
+                     << ", VN: " << std::get<0>(C.VN) << ", "
+                     << std::get<1>(C.VN) << ", " << std::get<2>(C.VN));
         }
         // Move to next CHI of a different value
         It = std::find_if(It, VCHI.end(), [It](CHIArg &A) { return A != *It; });

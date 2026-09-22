@@ -1,6 +1,12 @@
 ; RUN: opt --cangjie-pipeline -S -passes='default<O2>' %s -o %t
 ; RUN: FileCheck %s --check-prefix=IR < %t
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 %t -o - | FileCheck %s --check-prefix=ASM
+; RUN: opt --cangjie-pipeline -S -passes='default<O2>' -enable-gvn-hoist %s -o %t.hoist
+; RUN: FileCheck %s --check-prefix=IR < %t.hoist
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 %t.hoist -o - | FileCheck %s --check-prefix=ASM
+; RUN: opt --cangjie-pipeline -S -passes='default<O2>' -enable-gvn-sink %s -o %t.sink
+; RUN: FileCheck %s --check-prefix=IR < %t.sink
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 %t.sink -o - | FileCheck %s --check-prefix=ASM
 ; ZGC memnode.hpp:48 and zBarrierSetC2.cpp:342-373: the store decorator
 ; is semantic node state, preserved across the actual optimizing pipeline.
 ; Equal-strength stores may fold; different strengths remain distinct.
