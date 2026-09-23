@@ -19,7 +19,8 @@
 
 ; ELF: Symbol table
 ; ELF-NOT: g_cjLoadBadMaskOffset
-; ELF: CJ_MCC_ReadRefField
+; ELF-DAG: CJ_MCC_LoadBarrierOnOopFieldPreloaded
+; ELF-DAG: CJ_MCC_ReadRefField
 ; ELF-NOT: g_cjLoadBadMaskOffset
 
 define i8 addrspace(1)* @read_ref(i8 addrspace(1)* %obj,

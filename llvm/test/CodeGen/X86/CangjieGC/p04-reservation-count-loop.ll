@@ -55,7 +55,7 @@ define void @p04_write(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
 ; CHECK: unreachable
 ; CHECK: cj.read.inheap.done:
 ; CHECK: %cj.read.inheap.result = phi i1
-; CHECK: br i1 %cj.read.inheap.result, label %loadFast, label %gcMarked
+; CHECK: br i1 %cj.read.inheap.result, label %loadFast, label %loadAccessor
 ; CHECK: loadFast:
 ; CHECK: and i64 {{.*}}, %cj.loadbadmask
 ; CHECK: br i1 {{.*}}, label %gcNoMarked, label %gcMarked
