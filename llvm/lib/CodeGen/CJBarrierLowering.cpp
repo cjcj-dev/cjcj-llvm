@@ -12,6 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/CJIntrinsics.h"
 #include "llvm/IR/Constants.h"
@@ -377,6 +379,18 @@ private:
 // contract, not the collection phase, determines whether a barrier is needed.
 // Preserve P01's proof for plain stack/value storage. A null owner alone is
 // not sufficient: an unknown AS1 slot must retain its runtime barrier.
+static bool hasProvenNonHeapDestination(Value *Dst) {
+  auto *DstTy = dyn_cast<PointerType>(Dst->getType());
+  if (DstTy && DstTy->getAddressSpace() == 0)
+    return true;
+
+  Value *Base = findMemoryBasePointer(Dst);
+  if (isa<AllocaInst>(Base))
+    return true;
+  auto *BaseTy = dyn_cast<PointerType>(Base->getType());
+  return BaseTy && BaseTy->getAddressSpace() == 0;
+}
+
 static bool hasProvenNonHeapDestination(CallBase *CI) {
   Value *Dst = nullptr;
   switch (CI->getIntrinsicID()) {
@@ -390,15 +404,69 @@ static bool hasProvenNonHeapDestination(CallBase *CI) {
     return false;
   }
 
-  auto *DstTy = dyn_cast<PointerType>(Dst->getType());
-  if (DstTy && DstTy->getAddressSpace() == 0)
-    return true;
+  return hasProvenNonHeapDestination(Dst);
+}
 
-  Value *Base = findMemoryBasePointer(Dst);
-  if (isa<AllocaInst>(Base))
-    return true;
-  auto *BaseTy = dyn_cast<PointerType>(Base->getType());
-  return BaseTy && BaseTy->getAddressSpace() == 0;
+// ZBarrierSetC2::set_barrier_data (zBarrierSetC2.cpp:341-364) determines
+// the storage domain before emitting the barrier. Cangjie also has stack
+// objects and headerless value storage in AS1: AS1 alone is not a proof.
+// Inspect the final allocation statepoint, after partial escape analysis.
+static bool hasHeapAllocationOrigin(Value *Ptr,
+                                    SmallPtrSetImpl<Value *> &Active,
+                                    DenseMap<Value *, bool> &Known) {
+  auto It = Known.find(Ptr);
+  if (It != Known.end())
+    return It->second;
+  if (!Ptr->getType()->isPointerTy() ||
+      Ptr->getType()->getPointerAddressSpace() != 1 ||
+      Active.size() == 64 || !Active.insert(Ptr).second)
+    return false;
+
+  bool Proven = [&]() {
+    if (auto *Result = dyn_cast<GCResultInst>(Ptr)) {
+      auto *SP = dyn_cast<GCStatepointInst>(Result->getStatepoint());
+      const Function *Callee = SP ? SP->getActualCalledFunction() : nullptr;
+      if (!Callee)
+        return false;
+      StringRef Name = Callee->getName();
+      return Name.isCangjieNewObjFunction() || Name == NewObjFastStr ||
+             Name == NewObjFinalizerFastStr || Name == "CJ_MCC_NewPinnedObject" ||
+             Name == "CJ_MCC_NewArray" || Name == "CJ_MCC_NewArray8" ||
+             Name == "CJ_MCC_NewArray16" || Name == "CJ_MCC_NewArray32" ||
+             Name == "CJ_MCC_NewArray64" || Name == "CJ_MCC_NewObjArray";
+    }
+    if (auto *Relocate = dyn_cast<GCRelocateInst>(Ptr))
+      return hasHeapAllocationOrigin(Relocate->getDerivedPtr(), Active, Known);
+    if (auto *GEP = dyn_cast<GEPOperator>(Ptr))
+      return GEP->isInBounds() &&
+             hasHeapAllocationOrigin(GEP->getPointerOperand(), Active, Known);
+    if (auto *Op = dyn_cast<Operator>(Ptr))
+      if (Op->getOpcode() == Instruction::BitCast ||
+          Op->getOpcode() == Instruction::AddrSpaceCast)
+        return hasHeapAllocationOrigin(Op->getOperand(0), Active, Known);
+    if (auto *Phi = dyn_cast<PHINode>(Ptr)) {
+      for (Value *Incoming : Phi->incoming_values())
+        if (!hasHeapAllocationOrigin(Incoming, Active, Known))
+          return false;
+      return Phi->getNumIncomingValues() != 0;
+    }
+    if (auto *Select = dyn_cast<SelectInst>(Ptr))
+      return hasHeapAllocationOrigin(Select->getTrueValue(), Active, Known) &&
+             hasHeapAllocationOrigin(Select->getFalseValue(), Active, Known);
+    return false;
+  }();
+  Active.erase(Ptr);
+  Known[Ptr] = Proven;
+  return Proven;
+}
+
+static bool hasProvenHeapDestination(Value *Dst) {
+  SmallPtrSet<Value *, 16> Active;
+  DenseMap<Value *, bool> Known;
+  bool Proven = hasHeapAllocationOrigin(Dst, Active, Known);
+  if (Proven && hasProvenNonHeapDestination(Dst))
+    report_fatal_error("conflicting heap and non-heap destination proofs");
+  return Proven;
 }
 
 class ReadBarrier {
@@ -416,7 +484,8 @@ public:
     IRBuilder<> Builder(ReadInst);
     BasicBlock *Domain = nullptr;
     Value *InHeap = nullptr;
-    if (ReadBarrier->getIntrinsicID() == Intrinsic::cj_gcread_ref) {
+    if (ReadBarrier->getIntrinsicID() == Intrinsic::cj_gcread_ref &&
+        !hasProvenHeapDestination(RefFieldPtr)) {
       // Value-type storage can be plain. Route it to the accessor before
       // entering the heap fast path, whose only predicate is the mask test.
       Value *PlaceI = Builder.CreatePtrToInt(RefFieldPtr, Builder.getInt64Ty(),
@@ -559,8 +628,10 @@ public:
     // before entering the heap barrier, as the runtime accessor does.
     B.CreateBr(Done);
     B.SetInsertPoint(Entry->getTerminator());
-    Value *InHeap = emitReservedHeapSlot(B, M, B.CreatePtrToInt(Place, I64),
-                                        "cj.store.inheap");
+    Value *InHeap = hasProvenHeapDestination(Place)
+        ? B.getTrue()
+        : emitReservedHeapSlot(B, M, B.CreatePtrToInt(Place, I64),
+                               "cj.store.inheap");
     Instruction *OldBranch = B.GetInsertBlock()->getTerminator();
     B.CreateCondBr(InHeap, Fast, Native);
     OldBranch->eraseFromParent();
