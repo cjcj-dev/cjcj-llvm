@@ -15,11 +15,11 @@ define void @foo1(i8 addrspace(1)* %arg0, i64 %arg1, i8 addrspace(1)* %arg2) gc 
 ; CHECK-LABEL: define void @foo1
 ; CHECK-NOT: .pin
 ; CHECK-NOT: gcNoRunning
-; CHECK: load i64, i64* @g_cjStoreBadMaskOffset
+; CHECK: getelementptr i8, i8* %cj.gcdata{{[0-9]*}}, i64 32
 ; CHECK: storeSlow:
 ; CHECK: call void @CJ_MCC_StoreBarrierOnHeapField
 ; CHECK: storeFinish:
-; CHECK: load i64, i64* @g_cjStoreGoodMaskOffset
+; CHECK: getelementptr i8, i8* %cj.gcdata{{[0-9]*}}, i64 24
 ; CHECK: ret void
 
 entry:

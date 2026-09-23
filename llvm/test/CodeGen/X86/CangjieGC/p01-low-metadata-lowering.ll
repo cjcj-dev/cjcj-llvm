@@ -8,14 +8,14 @@ define void @p01_write(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
 ; CHECK: br i1 %cj.store.inheap.result, label %storeFast, label %storeAccessor
 ; CHECK: storeFast:
 ; CHECK: load i16
-; CHECK: load i64, i64* @g_cjStoreBadMaskOffset
+; CHECK: getelementptr i8, i8* %cj.gcdata{{[0-9]*}}, i64 32
 ; CHECK: %cj.store.bad = and i64
 ; CHECK: storeSlow:
 ; CHECK: call void @CJ_MCC_StoreBarrierOnHeapField
 ; CHECK: storeFinish:
 ; CHECK: [[VALUE:%.*]] = call i64 asm "movq $1, $0", "=&r,r"(i8 addrspace(1)* %value)
 ; CHECK: [[SHIFT:%.*]] = load i64, i64* @g_cjLoadShift
-; CHECK: load i64, i64* @g_cjStoreGoodMaskOffset
+; CHECK: getelementptr i8, i8* %cj.gcdata{{[0-9]*}}, i64 24
 ; CHECK: [[ADDRESS:%.*]] = shl i64 [[VALUE]], [[SHIFT]]
 ; CHECK: [[WORD:%.*]] = or i64 [[ADDRESS]], %cj.storegoodmask
 ; CHECK: store volatile i64 [[WORD]]

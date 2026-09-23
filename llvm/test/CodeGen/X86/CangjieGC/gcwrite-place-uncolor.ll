@@ -9,11 +9,11 @@ define void @write_ref_place(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
 ; CHECK: storeFast:
 ; CHECK: bitcast i8 addrspace(1)* addrspace(1)* %field to i16 addrspace(1)*
 ; CHECK: load i16
-; CHECK: load i64, i64* @g_cjStoreBadMaskOffset
+; CHECK: getelementptr i8, i8* %cj.gcdata{{[0-9]*}}, i64 32
 ; CHECK: storeSlow:
 ; CHECK: call void @CJ_MCC_StoreBarrierOnHeapField
 ; CHECK: storeFinish:
-; CHECK: load i64, i64* @g_cjStoreGoodMaskOffset
+; CHECK: getelementptr i8, i8* %cj.gcdata{{[0-9]*}}, i64 24
 entry:
   call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %val, i8 addrspace(1)* %base,
                                  i8 addrspace(1)* addrspace(1)* %field, i32 1)

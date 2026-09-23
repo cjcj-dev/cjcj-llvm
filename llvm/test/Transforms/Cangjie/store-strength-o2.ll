@@ -19,9 +19,9 @@ define void @strong(i1 %c, i8 addrspace(1)* %v, i8 addrspace(1)* %w, i8 addrspac
 ; IR-NOT: @llvm.cj.gcwrite.ref(
 ; IR: ret void
 ; ASM-LABEL: strong:
-; ASM-DAG: g_cjThreadGCDataOffset
-; ASM-DAG: g_cjStoreBadMaskOffset
-; ASM-DAG: g_cjStoreBarrierBufferOffset
+; ASM-DAG: movq 96(
+; ASM-DAG: test{{[lq]}} {{.*}}32(
+; ASM-DAG: movq 40(
 ; ASM-DAG: g_cjStoreBarrierBufferCurrentOffset
 ; ASM-DAG: g_cjStoreBarrierEntryPOffset
 ; ASM-DAG: g_cjStoreBarrierEntryPrevOffset
@@ -46,8 +46,8 @@ define void @weak(i1 %c, i8 addrspace(1)* %v, i8 addrspace(1)* %w, i8 addrspace(
 ; IR-NOT: @llvm.cj.gcwrite.ref(
 ; IR: ret void
 ; ASM-LABEL: weak:
-; ASM-DAG: g_cjThreadGCDataOffset
-; ASM-DAG: g_cjStoreBadMaskOffset
+; ASM-DAG: movq 96(
+; ASM-DAG: test{{[lq]}} {{.*}}32(
 ; ASM-DAG: CJ_MCC_WriteRefField_Weak
 ; ASM-DAG: CJ_MCC_StoreBarrierOnHeapFieldNoKeepAlive
 entry:

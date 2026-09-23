@@ -59,7 +59,22 @@ constexpr StringRef SafepointStub = "CJ_Safepoint_Stub";
 constexpr unsigned kCjHeapRangeCap = 100;
 
 // ZGC non-nmethod barriers use the current thread, never patched nmethod masks.
-// These layout symbols are provided by the matching runtime ABI (#856).
+// Fixed 64-bit target ABI from runtime/src/Heap/z/zThreadLocalDataABI.hpp
+// (runtime #944, f51bbe7e8e75830dcc0c5f69d1f48ec01e5d86c4). The runtime
+// statically asserts these offsets against its actual layouts. Do not use the
+// compiler host's layout: both x86_64 and AArch64 targets use this table.
+// Unlike HotSpot's Thread, an M:N carrier points to the logical thread's inline
+// GC data. Preserve that one indirection (ZGC zThreadLocalData.hpp:115-133).
+namespace ThreadGCDataABI {
+constexpr uint64_t GCDataPointer = 96;
+constexpr uint64_t LoadBadMask = 8;
+constexpr uint64_t StoreGoodMask = 24;
+constexpr uint64_t StoreBadMask = 32;
+constexpr uint64_t StoreBarrierBuffer = 40;
+} // namespace ThreadGCDataABI
+
+// Buffer-internal layout is outside the fixed thread ABI (in particular its
+// mutex is platform-dependent). Continue to obtain those offsets at runtime.
 static Value *loadBarrierABI(IRBuilder<> &B, Module *M, StringRef Symbol) {
   return B.CreateLoad(B.getInt64Ty(), M->getOrInsertGlobal(Symbol, B.getInt64Ty()),
                       Symbol.drop_front(2));
@@ -72,21 +87,28 @@ static Value *barrierField(IRBuilder<> &B, Module *M, Value *Base,
   return B.CreateBitCast(Address, FieldTy->getPointerTo());
 }
 
-static Value *loadThreadGCData(IRBuilder<> &B, Module *M) {
-  const Triple TT(M->getTargetTriple());
-  FunctionType *Ty = FunctionType::get(B.getInt8PtrTy(), false);
-  const char *Asm = TT.isX86() ? "movq %r15, $0" : "mov $0, x28";
-  Value *TLS = B.CreateCall(InlineAsm::get(Ty, Asm, "=r,~{memory}", true), {},
-                            "cj.tls");
-  return B.CreateLoad(B.getInt8PtrTy(),
-      barrierField(B, M, TLS, "g_cjThreadGCDataOffset", B.getInt8PtrTy()),
-      "cj.gcdata");
+static Value *threadGCField(IRBuilder<> &B, Value *Base, uint64_t Offset,
+                            Type *FieldTy) {
+  Value *Bytes = B.CreateBitCast(Base, B.getInt8PtrTy());
+  Value *Address = B.CreateGEP(B.getInt8Ty(), Bytes, B.getInt64(Offset));
+  return B.CreateBitCast(Address, FieldTy->getPointerTo());
 }
 
-static Value *loadThreadMask(IRBuilder<> &B, Module *M, Value *Data,
-                             StringRef Offset, StringRef Name) {
+static Value *loadThreadGCData(IRBuilder<> &B, Module *M) {
+  const Triple TT(M->getTargetTriple());
+  FunctionType *Ty = FunctionType::get(B.getInt8PtrTy(), {B.getInt64Ty()}, false);
+  // Read the carrier slot directly from the reserved thread register. A plain
+  // register-copy asm followed by an IR load would materialize an extra move.
+  const char *Asm = TT.isX86() ? "movq ${1:c}(%r15), $0"
+                              : "ldr $0, [x28, $1]";
+  return B.CreateCall(InlineAsm::get(Ty, Asm, "=r,i,~{memory}", true),
+                      {B.getInt64(ThreadGCDataABI::GCDataPointer)}, "cj.gcdata");
+}
+
+static Value *loadThreadMask(IRBuilder<> &B, Value *Data,
+                             uint64_t Offset, StringRef Name) {
   return B.CreateLoad(B.getInt64Ty(),
-                     barrierField(B, M, Data, Offset, B.getInt64Ty()), Name);
+                     threadGCField(B, Data, Offset, B.getInt64Ty()), Name);
 }
 
 static unsigned storeStrength(const CallInst *CI) {
@@ -530,8 +552,8 @@ public:
   // ZGC x86 load_at: test the current thread load-bad mask.
   Value *cmpTaggedPointer(Value *TagPtr, IRBuilder<> &Builder) {
     Type *I64 = Type::getInt64Ty(C);
-    Value *Mask = loadThreadMask(Builder, M, loadThreadGCData(Builder, M),
-                                "g_cjLoadBadMaskOffset", "cj.loadbadmask");
+    Value *Mask = loadThreadMask(Builder, loadThreadGCData(Builder, M),
+                                ThreadGCDataABI::LoadBadMask, "cj.loadbadmask");
     cast<Instruction>(Mask)->setDebugLoc(*Loc);
     Value *Bad = Builder.CreateAnd(TagPtr, Mask);
     cast<Instruction>(Bad)->setDebugLoc(*Loc);
@@ -634,8 +656,8 @@ public:
       Value *Colored;
       if (isa<ConstantPointerNull>(NewVal)) {
         // zStorePNull, z_x86_64.ad:180-185, stores a colored null directly.
-        Colored = loadThreadMask(B, M, loadThreadGCData(B, M),
-                                 "g_cjStoreGoodMaskOffset", "cj.storegoodmask");
+        Colored = loadThreadMask(B, loadThreadGCData(B, M),
+                                 ThreadGCDataABI::StoreGoodMask, "cj.storegoodmask");
       } else {
         Colored = color(B, NewVal);
       }
@@ -702,7 +724,7 @@ private:
         PointerType::get(B.getInt16Ty(), Place->getType()->getPointerAddressSpace()));
     Value *Prev = B.CreateZExt(B.CreateLoad(B.getInt16Ty(), LowPtr), I64,
                               "cj.store.prev.low");
-    Value *Mask = loadThreadMask(B, M, Data, "g_cjStoreBadMaskOffset", "cj.storebadmask");
+    Value *Mask = loadThreadMask(B, Data, ThreadGCDataABI::StoreBadMask, "cj.storebadmask");
     Value *Bad = B.CreateAnd(Prev, Mask, "cj.store.bad");
     B.CreateCondBr(B.CreateICmpEQ(Bad, B.getInt64(0)), Store, Medium);
 
@@ -718,8 +740,8 @@ private:
         TT.isX86() ? "movq $1, $0" : "mov $0, $1", "=&r,r", false);
     Value *NewBits = B.CreateCall(Copy, NewVal, "cj.store.new.bits");
     Value *Shift = B.CreateLoad(I64, M->getOrInsertGlobal("g_cjLoadShift", I64), "cj.store.shift");
-    Value *Good = loadThreadMask(B, M, loadThreadGCData(B, M),
-                                "g_cjStoreGoodMaskOffset", "cj.storegoodmask");
+    Value *Good = loadThreadMask(B, loadThreadGCData(B, M),
+                                ThreadGCDataABI::StoreGoodMask, "cj.storegoodmask");
     Value *Colored = B.CreateOr(B.CreateShl(NewBits, Shift), Good, "cj.store.colored");
     return Colored;
   }
@@ -736,7 +758,7 @@ private:
   void storeBarrierBufferAdd(IRBuilder<> &B, Value *Data, Value *Place,
                              BasicBlock *Slow, BasicBlock *Store) {
     Value *Buffer = B.CreateLoad(B.getInt8PtrTy(),
-        barrierField(B, M, Data, "g_cjStoreBarrierBufferOffset", B.getInt8PtrTy()),
+        threadGCField(B, Data, ThreadGCDataABI::StoreBarrierBuffer, B.getInt8PtrTy()),
         "cj.store.buffer");
     Value *CurrentPtr = barrierField(B, M, Buffer,
         "g_cjStoreBarrierBufferCurrentOffset", B.getInt64Ty());

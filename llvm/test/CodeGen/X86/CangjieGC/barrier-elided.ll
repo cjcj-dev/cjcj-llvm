@@ -2,6 +2,7 @@
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O0 -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O2 -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
 ; ZGC zBarrierSetC2.hpp:37, z_x86_64.ad:61-99,180-185.
+; Fixed ABI: ZGC zBarrierSetAssembler_x86.cpp:455-469; runtime #944 ABI table.
 ; B0 consumes an existing proof, without introducing a producer.
 
 define void @elided_store(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
@@ -9,10 +10,13 @@ define void @elided_store(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
   %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define void @elided_store(
 ; CHECK-NOT: g_cjStoreBadMaskOffset
+; CHECK-NOT: cj.storebadmask
 ; CHECK-NOT: CJ_MCC_
 ; CHECK: %cj.store.new.bits = call i64 asm
 ; CHECK: load i64, i64* @g_cjLoadShift
-; CHECK: load i64, i64* @g_cjStoreGoodMaskOffset
+; CHECK: call i8* asm sideeffect "movq ${1:c}(%r15), $0", "=r,i,~{memory}"(i64 96)
+; CHECK: getelementptr i8, i8* %cj.gcdata{{[0-9]*}}, i64 24
+; CHECK: %cj.storegoodmask = load i64
 ; CHECK: shl i64 %cj.store.new.bits, %cj.store.shift
 ; CHECK: %cj.store.colored = or i64 {{.*}}, %cj.storegoodmask
 ; CHECK: store volatile i64 %cj.store.colored
@@ -26,10 +30,13 @@ define void @elided_unknown_store(i8 addrspace(1)* %value, i8 addrspace(1)* %bas
   %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define void @elided_unknown_store(
 ; CHECK-NOT: g_cjStoreBadMaskOffset
+; CHECK-NOT: cj.storebadmask
 ; CHECK-NOT: CJ_MCC_
 ; CHECK: %cj.store.new.bits = call i64 asm
 ; CHECK: load i64, i64* @g_cjLoadShift
-; CHECK: load i64, i64* @g_cjStoreGoodMaskOffset
+; CHECK: call i8* asm sideeffect "movq ${1:c}(%r15), $0", "=r,i,~{memory}"(i64 96)
+; CHECK: getelementptr i8, i8* %cj.gcdata{{[0-9]*}}, i64 24
+; CHECK: %cj.storegoodmask = load i64
 ; CHECK: shl i64 %cj.store.new.bits, %cj.store.shift
 ; CHECK: %cj.store.colored = or i64 {{.*}}, %cj.storegoodmask
 ; CHECK: store volatile i64 %cj.store.colored
@@ -42,10 +49,14 @@ define void @ordinary_store(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
                           i8 addrspace(1)* %slot.address) gc "cangjie" {
   %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define void @ordinary_store(
-; CHECK: load i64, i64* @g_cjStoreBadMaskOffset
+; CHECK: call i8* asm sideeffect "movq ${1:c}(%r15), $0", "=r,i,~{memory}"(i64 96)
+; CHECK: getelementptr i8, i8* %cj.gcdata{{[0-9]*}}, i64 32
+; CHECK: %cj.storebadmask = load i64
 ; CHECK: load i64, i64* @g_cjStoreBarrierBufferCurrentOffset
 ; CHECK: call void @CJ_MCC_StoreBarrierOnHeapField(
-; CHECK: load i64, i64* @g_cjStoreGoodMaskOffset
+; CHECK: call i8* asm sideeffect "movq ${1:c}(%r15), $0", "=r,i,~{memory}"(i64 96)
+; CHECK: getelementptr i8, i8* %cj.gcdata{{[0-9]*}}, i64 24
+; CHECK: %cj.storegoodmask = load i64
 ; CHECK: store volatile i64 %cj.store.colored
   call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %value, i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %slot, i32 1)
   ret void
@@ -55,9 +66,12 @@ define void @elided_null(i8 addrspace(1)* %base, i8 addrspace(1)* %slot.address)
   %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define void @elided_null(
 ; CHECK-NOT: g_cjStoreBadMaskOffset
+; CHECK-NOT: cj.storebadmask
 ; CHECK-NOT: cj.store.new.bits
 ; CHECK-NOT: g_cjLoadShift
-; CHECK: load i64, i64* @g_cjStoreGoodMaskOffset
+; CHECK: call i8* asm sideeffect "movq ${1:c}(%r15), $0", "=r,i,~{memory}"(i64 96)
+; CHECK: getelementptr i8, i8* %cj.gcdata{{[0-9]*}}, i64 24
+; CHECK: %cj.storegoodmask = load i64
 ; CHECK: store volatile i64 %cj.storegoodmask
 ; CHECK-NEXT: ret void
   call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* null, i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %slot, i32 1), !cj.barrier.elided !0
@@ -81,7 +95,9 @@ define i8 addrspace(1)* @elided_load(i8 addrspace(1)* %base, i8 addrspace(1)* %s
 define i8 addrspace(1)* @ordinary_load(i8 addrspace(1)* %base, i8 addrspace(1)* %slot.address) gc "cangjie" {
   %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define i8 addrspace(1)* @ordinary_load(
-; CHECK: load i64, i64* @g_cjLoadBadMaskOffset
+; CHECK: call i8* asm sideeffect "movq ${1:c}(%r15), $0", "=r,i,~{memory}"(i64 96)
+; CHECK: getelementptr i8, i8* %cj.gcdata{{[0-9]*}}, i64 8
+; CHECK: %cj.loadbadmask = load i64
 ; CHECK: call i8 addrspace(1)* @CJ_MCC_ReadRefField(
 ; CHECK: lshr i64
   %value = call i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %slot)
