@@ -22,6 +22,12 @@ using namespace llvm;
 
 namespace cangjie {
 
+// ZBarrierElided (zBarrierSetC2.hpp:37): the access remains a GC intrinsic
+// until emission. Producers may attach this only after proving that the heap
+// access needs no barrier check; its value still needs coloring/uncoloring.
+constexpr StringLiteral BarrierElidedMD = "cj.barrier.elided";
+
+
 struct GCReadRef {
   enum { BaseObj, FieldPtr };
 };
