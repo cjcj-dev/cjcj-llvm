@@ -1,0 +1,9 @@
+{
+  "rc": 0,
+  "before": "d0b946e5c218fb90baa7013d493bb2130d5e5aa84b74d68622c2bbeb60b6b452",
+  "after": "d0b946e5c218fb90baa7013d493bb2130d5e5aa84b74d68622c2bbeb60b6b452",
+  "identical": true,
+  "object_sha256": "0346bb7c74cb69bb86c00f6f38ae2146f803801bb781b6b2098a019185182117",
+  "object_nm_rc": 0,
+  "elf_nm_rc": 0
+}
