@@ -59,5 +59,29 @@ define void @store_fixed(i8 addrspace(1)* %value, i8 addrspace(1)* %base, i8 add
   ret void
 }
 
+; zStorePNull (z_x86_64.ad:180-185) must store the current good mask itself.
+; IR-LABEL: define void @elided_null_fixed(
+; IR: %cj.gcdata = call i8* asm sideeffect {{.*}}(i64 96)
+; IR-NEXT: [[NULLADDR:%.*]] = getelementptr i8, i8* %cj.gcdata, i64 24
+; IR-NEXT: [[NULLPTR:%.*]] = bitcast i8* [[NULLADDR]] to i64*
+; IR-NEXT: %cj.storegoodmask = load i64, i64* [[NULLPTR]]
+; IR: store volatile i64 %cj.storegoodmask
+; IR-NEXT: ret void
+; X86-LABEL: elided_null_fixed:
+; X86: movq 96(%r15), [[GC:%r[a-z0-9]+]]
+; X86: movq 24([[GC]]), [[GOOD:%r[a-z0-9]+]]
+; X86: movq [[GOOD]], (
+; X86: retq
+; A64-LABEL: elided_null_fixed:
+; A64: ldr [[GC:x[0-9]+]], [x28, #96]
+; A64: ldr [[GOOD:x[0-9]+]], {{\[}}[[GC]], #24]
+; A64: str [[GOOD]], [
+; A64: ret
+define void @elided_null_fixed(i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %slot) gc "cangjie" {
+  call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* null, i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %slot, i32 1), !cj.barrier.elided !0
+  ret void
+}
+!0 = !{}
+
 declare i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*)
 declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...)

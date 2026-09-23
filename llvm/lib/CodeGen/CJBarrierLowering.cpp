@@ -656,8 +656,8 @@ public:
       Value *Colored;
       if (isa<ConstantPointerNull>(NewVal)) {
         // zStorePNull, z_x86_64.ad:180-185, stores a colored null directly.
-        Colored = loadThreadMask(B, M, loadThreadGCData(B, M),
-                                 "g_cjStoreGoodMaskOffset", "cj.storegoodmask");
+        Colored = loadThreadMask(B, loadThreadGCData(B, M),
+                                 ThreadGCDataABI::StoreGoodMask, "cj.storegoodmask");
       } else {
         Colored = color(B, NewVal);
       }
