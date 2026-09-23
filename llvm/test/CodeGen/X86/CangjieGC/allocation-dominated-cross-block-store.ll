@@ -11,7 +11,7 @@ entry:
   %heap = call i8 addrspace(1)* @llvm.cj.gc.result(token %token)
   br label %access
 access:
-  %field = getelementptr i8, i8 addrspace(1)* %heap, i64 8
+  %field = getelementptr inbounds i8, i8 addrspace(1)* %heap, i64 8
   %slot = bitcast i8 addrspace(1)* %field to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define i8 addrspace(1)* @probe(
 ; CHECK-NOT: cj.store.prev.low

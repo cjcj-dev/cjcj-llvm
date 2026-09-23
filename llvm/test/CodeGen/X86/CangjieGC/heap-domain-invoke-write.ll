@@ -13,6 +13,8 @@ entry:
   %token = invoke token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, i8 addrspace(1)* (i8*, i32)* @CJ_MCC_NewObject, i32 2, i32 0, i8* %type, i32 64) to label %normal unwind label %exception
 normal:
   %heap = call i8 addrspace(1)* @llvm.cj.gc.result(token %token)
+  ; End allocation dominance while preserving the proven heap domain.
+  %allocation.boundary = call token (...) @llvm.cj.gc.statepoint(i64 101, i32 0, void ()* @safepoint, i32 0, i32 0)
   %field = getelementptr inbounds i8, i8 addrspace(1)* %heap, i64 8
   %slot = bitcast i8 addrspace(1)* %field to i8 addrspace(1)* addrspace(1)*
   call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %value, i8 addrspace(1)* %heap, i8 addrspace(1)* addrspace(1)* %slot, i32 1)

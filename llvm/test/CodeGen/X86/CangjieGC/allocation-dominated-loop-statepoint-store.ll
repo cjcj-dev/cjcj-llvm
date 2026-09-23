@@ -14,7 +14,7 @@ loop:
   %point = call token (...) @llvm.cj.gc.statepoint(i64 1, i32 0, void ()* @safepoint, i32 0, i32 0)
   br i1 %again, label %loop, label %access
 access:
-  %field = getelementptr i8, i8 addrspace(1)* %heap, i64 8
+  %field = getelementptr inbounds i8, i8 addrspace(1)* %heap, i64 8
   %slot = bitcast i8 addrspace(1)* %field to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define i8 addrspace(1)* @probe(
 ; CHECK: cj.store.prev.low

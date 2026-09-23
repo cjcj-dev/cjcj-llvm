@@ -547,7 +547,9 @@ static bool isAllocation(CallInst *CI, bool &IsArray) {
   // Segmented initialization can yield after allocating, so exclude arrays
   // unless the entire allocation fits within its first 64 KiB segment.
   const DataLayout &DL = CI->getModule()->getDataLayout();
-  if (SP->actual_arg_size() != 2)
+  // CJRuntimeLowering also passes an optional third fast-path size hint.
+  // It can be poison; derive the bound from the runtime's length and layout.
+  if (SP->actual_arg_size() < 2)
     return false;
   uint64_t ElementBytes = 0;
   if (Name == "CJ_MCC_NewArray8") ElementBytes = 1;

@@ -9,7 +9,7 @@ define i8 addrspace(1)* @probe(i8* %type, i8 addrspace(1)* %value, i64 %index, i
 entry:
   %token = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, i8 addrspace(1)* (i8*, i64)* @CJ_MCC_NewObject, i32 2, i32 0, i8* %type, i64 64)
   %heap = call i8 addrspace(1)* @llvm.cj.gc.result(token %token)
-  %field = getelementptr i8, i8 addrspace(1)* %heap, i64 %index
+  %field = getelementptr inbounds i8, i8 addrspace(1)* %heap, i64 %index
   %slot = bitcast i8 addrspace(1)* %field to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define i8 addrspace(1)* @probe(
 ; CHECK: cj.store.prev.low
