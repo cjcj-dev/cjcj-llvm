@@ -69,6 +69,7 @@ constexpr unsigned kCjHeapRangeCap = 100;
 namespace ThreadGCDataABI {
 constexpr uint64_t GCDataPointer = 96;
 constexpr uint64_t LoadBadMask = 8;
+constexpr uint64_t MarkBadMask = 16;
 constexpr uint64_t StoreGoodMask = 24;
 constexpr uint64_t StoreBadMask = 32;
 constexpr uint64_t StoreBarrierBuffer = 40;
@@ -670,7 +671,8 @@ public:
     }
     BasicBlock *Domain = nullptr;
     Value *InHeap = nullptr;
-    if (ReadBarrier->getIntrinsicID() == Intrinsic::cj_gcread_ref &&
+    if ((ReadBarrier->getIntrinsicID() == Intrinsic::cj_gcread_ref ||
+         ReadBarrier->getIntrinsicID() == Intrinsic::cj_gcread_weakref) &&
         !hasProvenHeapDestination(RefFieldPtr)) {
       // Value-type storage can be plain. Route it to the accessor before
       // entering the heap fast path, whose only predicate is the mask test.
@@ -686,8 +688,8 @@ public:
         cast<Instruction>(Builder.CreatePtrToInt(Load, Type::getInt64Ty(C)));
     PtrToInt->setDebugLoc(*Loc);
     Value *CmpEQ = cmpTaggedPointer(PtrToInt, Builder);
-    splitFastPathAndSlowPath(ReadInst->getParent(), CmpEQ, PtrToInt, Domain, InHeap);
-    return false;
+    return splitFastPathAndSlowPath(ReadInst->getParent(), CmpEQ, PtrToInt,
+                                    RefFieldPtr, Domain, InHeap);
   }
 
   // insert a load from RefFieldPtr:
@@ -704,11 +706,14 @@ public:
     return Load;
   }
 
-  // ZGC x86 load_at: test the current thread load-bad mask.
+  // ZGC x86 load_at: weak references test mark-bad, strong test load-bad.
   Value *cmpTaggedPointer(Value *TagPtr, IRBuilder<> &Builder) {
     Type *I64 = Type::getInt64Ty(C);
+    const bool Weak = ReadInst->getIntrinsicID() == Intrinsic::cj_gcread_weakref;
     Value *Mask = loadThreadMask(Builder, loadThreadGCData(Builder, M),
-                                ThreadGCDataABI::LoadBadMask, "cj.loadbadmask");
+                                Weak ? ThreadGCDataABI::MarkBadMask
+                                     : ThreadGCDataABI::LoadBadMask,
+                                Weak ? "cj.markbadmask" : "cj.loadbadmask");
     cast<Instruction>(Mask)->setDebugLoc(*Loc);
     Value *Bad = Builder.CreateAnd(TagPtr, Mask);
     cast<Instruction>(Bad)->setDebugLoc(*Loc);
@@ -717,43 +722,63 @@ public:
     return CmpEQ;
   }
 
-  // preBB:
-  //   %Cond = icmp eq i64 %tag, 0
-  //   br i1 %Cond, label %gcNoMarked label %gcMarked
-  // gcNoMarked:
-  //   %address = lshr i64 %PtrToInt, @g_cjLoadShift
-  //   %val1 = inttoptr i64 %address to i8 addrspace(1)*
-  //   br label %loadFinish
-  // gcMarked:
-  //   %val2 = call @llvm.cj.gcread.ref
-  //   br label %loadFinish
-  // loadFinish:
-  //   %val = phi [%val1, gcNoMarked], [%val2, gcMarked]
-  void splitFastPathAndSlowPath(BasicBlock *SplitBB, Value *Condition,
-                                Instruction *PtrToInt, BasicBlock *Domain,
-                                Value *InHeap) {
-    BasicBlock *FalseBranch = SplitBB->splitBasicBlock(ReadInst, "gcMarked");
-    if (Domain) {
-      Instruction *OldBranch = Domain->getTerminator();
-      IRBuilder<> DomainBuilder(OldBranch);
-      DomainBuilder.CreateCondBr(InHeap, SplitBB, FalseBranch);
-      OldBranch->eraseFromParent();
-    }
+  // ZGC x86 load_at: the slow stub receives the value tested by the fast
+  // path and its slot address. Plain Cangjie value-type storage instead uses
+  // the accessor, before any colored load or mask test.
+  bool splitFastPathAndSlowPath(BasicBlock *SplitBB, Value *Condition,
+                                Instruction *PtrToInt, Value *RefFieldPtr,
+                                BasicBlock *Domain, Value *InHeap) {
+    const bool HeapField =
+        ReadInst->getIntrinsicID() == Intrinsic::cj_gcread_ref ||
+        ReadInst->getIntrinsicID() == Intrinsic::cj_gcread_weakref;
+    BasicBlock *Slow = SplitBB->splitBasicBlock(ReadInst, "gcMarked");
     BasicBlock *Succ =
-        FalseBranch->splitBasicBlock(ReadInst->getNextNode(), "loadFinish");
-    BasicBlock *TrueBranch =
+        Slow->splitBasicBlock(ReadInst->getNextNode(), "loadFinish");
+    BasicBlock *Fast =
         BasicBlock::Create(C, "gcNoMarked", SplitBB->getParent(), Succ);
-    BranchInst::Create(Succ, TrueBranch);
-    IRBuilder<> Builder(TrueBranch->getTerminator());
-    Value *Uncolored = uncolor(Builder, PtrToInt);
-    Instruction *OriginBr = SplitBB->getTerminator();
-    IRBuilder<> BuilderBr(OriginBr);
-    BuilderBr.CreateCondBr(Condition, TrueBranch, FalseBranch);
-    OriginBr->eraseFromParent();
-    TrueBranch->getTerminator()->setDebugLoc(*Loc);
-    FalseBranch->getTerminator()->setDebugLoc(*Loc);
-    handleSuccPhi(FalseBranch, Uncolored, TrueBranch, Succ);
-    return;
+    BranchInst::Create(Succ, Fast);
+    IRBuilder<> B(Fast->getTerminator());
+    B.SetCurrentDebugLocation(*Loc);
+    Value *Uncolored = uncolor(B, PtrToInt);
+    Instruction *OldBranch = SplitBB->getTerminator();
+    B.SetInsertPoint(OldBranch);
+    B.CreateCondBr(Condition, Fast, Slow);
+    OldBranch->eraseFromParent();
+
+    Value *SlowValue = ReadInst;
+    BasicBlock *Accessor = nullptr;
+    if (HeapField) {
+      B.SetInsertPoint(ReadInst);
+      StringRef Name = ReadInst->getIntrinsicID() == Intrinsic::cj_gcread_weakref
+          ? "CJ_MCC_LoadBarrierOnWeakOopFieldPreloaded"
+          : "CJ_MCC_LoadBarrierOnOopFieldPreloaded";
+      Value *Loaded = PtrToInt->getOperand(0);
+      FunctionType *Ty = FunctionType::get(
+          DstTy, {Loaded->getType(), RefFieldPtr->getType()}, false);
+      SlowValue = B.CreateCall(M->getOrInsertFunction(Name, Ty),
+                               {Loaded, RefFieldPtr});
+      if (Domain) {
+        Accessor = BasicBlock::Create(C, "loadAccessor", SplitBB->getParent(), Succ);
+        BranchInst::Create(Succ, Accessor);
+        ReadInst->moveBefore(Accessor->getTerminator());
+        OldBranch = Domain->getTerminator();
+        B.SetInsertPoint(OldBranch);
+        B.CreateCondBr(InHeap, SplitBB, Accessor);
+        OldBranch->eraseFromParent();
+      }
+    }
+    B.SetInsertPoint(Succ->getFirstNonPHI());
+    PHINode *Phi = B.CreatePHI(DstTy, Accessor ? 3 : 2);
+    ReadInst->replaceAllUsesWith(Phi);
+    Phi->addIncoming(Uncolored, Fast);
+    Phi->addIncoming(SlowValue, Slow);
+    if (Accessor)
+      Phi->addIncoming(ReadInst, Accessor);
+    if (HeapField && !Accessor) {
+      ReadInst->eraseFromParent();
+      return true;
+    }
+    return false;
   }
 
   Value *uncolor(IRBuilder<> &Builder, Value *PtrToInt) {
@@ -768,16 +793,6 @@ public:
         cast<Instruction>(Builder.CreateIntToPtr(Address, DstTy));
     Uncolored->setDebugLoc(*Loc);
     return Uncolored;
-  }
-
-  PHINode *handleSuccPhi(BasicBlock *FalseBranch, Value *FastInst,
-                         BasicBlock *TrueBranch, BasicBlock *Succ) {
-    IRBuilder<> Builder(Succ->getFirstNonPHI());
-    PHINode *Phi = Builder.CreatePHI(DstTy, 2);
-    ReadInst->replaceAllUsesWith(Phi);
-    Phi->addIncoming(ReadInst, FalseBranch);
-    Phi->addIncoming(FastInst, TrueBranch);
-    return Phi;
   }
 
   void setBarrier(CallInst *CI) {
@@ -1045,14 +1060,14 @@ void CJBarrierLowering::writeBarrierFastPath(Function &F,
 // =====>
 //   %0 = load i8 addrspace1*, i8 addrspace1* addrspace1* %RefFieldPtr
 //   %1 = ptrtoint i8 addrspace1* %0 to i64
-//   %2 = and i64 %1, @g_cjLoadBadMask   (phase B; was `lshr i64 %1, 48`)
+//   %2 = and i64 %1, %thread.load_bad (weak uses thread.mark_bad)
 //   %3 = icmp eq i64 %2, 0
 //   br i1 %3, label %gcNoMarked label %gcMarked
 // gcNoMarked:
 //   %val1 = lshr %0, @g_cjLoadShift
 //   br label %loadFinish
 // gcMarked:
-//   %val2 = call @llvm.cj.gcread.ref
+//   %val2 = call @CJ_MCC_LoadBarrierOnOopFieldPreloaded(%0, %slot)
 //   br label %loadFinish
 // loadFinish:
 //   %val = phi [%val1, gcNoMarked], [%val2, gcMarked]
@@ -1068,8 +1083,11 @@ void CJBarrierLowering::readBarrierFastPath(Function &F,
       continue;
     unsigned ID = CI->getIntrinsicID();
     if (ID == Intrinsic::cj_gcread_ref ||
+        ID == Intrinsic::cj_gcread_weakref ||
         ID == Intrinsic::cj_gcread_static_ref) {
-      if (RB.readFastPath(CI, getPointerArg(CI)))
+      Value *Slot = ID == Intrinsic::cj_gcread_weakref
+          ? CI->getArgOperand(GCReadRef::FieldPtr) : getPointerArg(CI);
+      if (RB.readFastPath(CI, Slot))
         Elided.push_back(CI);
       continue;
     }
