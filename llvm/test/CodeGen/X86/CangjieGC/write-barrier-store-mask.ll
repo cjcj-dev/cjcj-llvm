@@ -5,7 +5,7 @@
 ; CHECK-LABEL: define void @write_ref(
 ; CHECK: storeFast:
 ; CHECK: load i16
-; CHECK: load i64, i64* @g_cjStoreBadMaskOffset
+; CHECK: getelementptr i8, i8* %cj.gcdata{{[0-9]*}}, i64 32
 ; CHECK: %cj.store.bad = and i64
 ; CHECK: br i1 {{.*}}, label %storeFinish, label %storeMedium
 ; CHECK: storeSlow:
@@ -13,7 +13,7 @@
 ; CHECK: storeFinish:
 ; CHECK: [[BITS:%.*]] = call i64 asm "movq $1, $0", "=&r,r"(i8 addrspace(1)* %val)
 ; CHECK: [[SHIFT:%.*]] = load i64, i64* @g_cjLoadShift
-; CHECK: load i64, i64* @g_cjStoreGoodMaskOffset
+; CHECK: getelementptr i8, i8* %cj.gcdata{{[0-9]*}}, i64 24
 ; CHECK: [[NEW:%.*]] = shl i64 [[BITS]], [[SHIFT]]
 ; CHECK: [[WORD:%.*]] = or i64 [[NEW]], %cj.storegoodmask
 ; CHECK: store volatile i64 [[WORD]]
@@ -21,7 +21,7 @@
 ; CHECK-LABEL: define void @write_ref_null_val(
 ; CHECK: storeFinish:
 ; CHECK: call i64 asm "movq $1, $0", "=&r,r"(i8 addrspace(1)* null)
-; CHECK: load i64, i64* @g_cjStoreGoodMaskOffset
+; CHECK: getelementptr i8, i8* %cj.gcdata{{[0-9]*}}, i64 24
 ; CHECK: or i64 {{.*}}, %cj.storegoodmask
 ; CHECK-NOT: select i1
 ; CHECK: store volatile i64
