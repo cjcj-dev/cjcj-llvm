@@ -1,0 +1,10 @@
+--- a/llvm/lib/CodeGen/CJBarrierLowering.cpp
++++ b/llvm/lib/CodeGen/CJBarrierLowering.cpp
+@@ -798 +798,2 @@
+-      WB.storeFastPath(CI);
++      if (!hasProvenHeapDestination(getPointerArg(CI)))
++        WB.storeFastPath(CI);
+@@ -853 +854,2 @@
+-      RB.readFastPath(CI, getPointerArg(CI));
++      if (!hasProvenHeapDestination(getPointerArg(CI)))
++        RB.readFastPath(CI, getPointerArg(CI));

@@ -1,0 +1,9 @@
+--- a/llvm/lib/CodeGen/CJBarrierLowering.cpp
++++ b/llvm/lib/CodeGen/CJBarrierLowering.cpp
+@@ -449,3 +449,3 @@
+-        if (!hasHeapAllocationOrigin(Incoming, Active, Known))
+-          return false;
+-      return Phi->getNumIncomingValues() != 0;
++        if (hasHeapAllocationOrigin(Incoming, Active, Known))
++          return true;
++      return false;

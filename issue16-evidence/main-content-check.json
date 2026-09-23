@@ -1,0 +1,83 @@
+[
+  {
+    "command": [
+      "git",
+      "rev-parse",
+      "cjcjdev/main"
+    ],
+    "rc": 0,
+    "stdout": "5fc812a1d014deaf660d704a15dc0dc0a091788b\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "merge-base",
+      "HEAD",
+      "cjcjdev/main"
+    ],
+    "rc": 0,
+    "stdout": "5fc812a1d014deaf660d704a15dc0dc0a091788b\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "grep",
+      "-c",
+      "getCJStoreStrength",
+      "cjcjdev/main",
+      "--",
+      "llvm/lib/Transforms/Scalar/GVNHoist.cpp",
+      "llvm/lib/Transforms/Scalar/GVNSink.cpp"
+    ],
+    "rc": 0,
+    "stdout": "cjcjdev/main:llvm/lib/Transforms/Scalar/GVNHoist.cpp:1\ncjcjdev/main:llvm/lib/Transforms/Scalar/GVNSink.cpp:3\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "grep",
+      "-c",
+      "setCJStoreStrength",
+      "cjcjdev/main",
+      "--",
+      "llvm/lib/Transforms/Scalar/GVNHoist.cpp",
+      "llvm/lib/Transforms/Scalar/GVNSink.cpp"
+    ],
+    "rc": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "grep",
+      "-c",
+      "getCJStoreStrength",
+      "HEAD",
+      "--",
+      "llvm/lib/Transforms/Scalar/GVNHoist.cpp",
+      "llvm/lib/Transforms/Scalar/GVNSink.cpp"
+    ],
+    "rc": 0,
+    "stdout": "HEAD:llvm/lib/Transforms/Scalar/GVNHoist.cpp:1\nHEAD:llvm/lib/Transforms/Scalar/GVNSink.cpp:3\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "git",
+      "grep",
+      "-c",
+      "setCJStoreStrength",
+      "HEAD",
+      "--",
+      "llvm/lib/Transforms/Scalar/GVNHoist.cpp",
+      "llvm/lib/Transforms/Scalar/GVNSink.cpp"
+    ],
+    "rc": 1,
+    "stdout": "",
+    "stderr": ""
+  }
+]

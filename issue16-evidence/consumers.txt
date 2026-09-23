@@ -1,0 +1,23 @@
+COMMAND: git grep -n emitReservedHeapSlot HEAD -- llvm/lib/CodeGen/CJBarrierLowering.cpp
+rc=0
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:99:static Value *emitReservedHeapSlot(IRBuilder<> &Builder, Module *M, Value *PlaceI,
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:493:      InHeap = emitReservedHeapSlot(Builder, M, PlaceI, "cj.read.inheap");
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:633:        : emitReservedHeapSlot(B, M, B.CreatePtrToInt(Place, I64),
+
+COMMAND: git grep -n hasProvenHeapDestination HEAD -- llvm/lib/CodeGen/CJBarrierLowering.cpp
+rc=0
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:463:static bool hasProvenHeapDestination(Value *Dst) {
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:488:        !hasProvenHeapDestination(RefFieldPtr)) {
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:631:    Value *InHeap = hasProvenHeapDestination(Place)
+
+COMMAND: git grep -n readBarrierFastPath\|writeBarrierFastPath\|RB.readFastPath\|WB.storeFastPath HEAD -- llvm/lib/CodeGen/CJBarrierLowering.cpp
+rc=0
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:743:  void writeBarrierFastPath(Function &F, SetVector<CallInst *> &Barriers);
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:744:  void readBarrierFastPath(Function &F, SetVector<CallInst *> &Barriers);
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:786:void CJBarrierLowering::writeBarrierFastPath(Function &F,
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:798:      WB.storeFastPath(CI);
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:841:void CJBarrierLowering::readBarrierFastPath(Function &F,
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:853:      RB.readFastPath(CI, getPointerArg(CI));
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:858:        RB.readFastPath(CI, CI->getArgOperand(AtomicLoad::Field),
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:1067:  readBarrierFastPath(F, Barriers);
+HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:1068:  writeBarrierFastPath(F, Barriers);
