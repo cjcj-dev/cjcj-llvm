@@ -1,0 +1,29 @@
+; RUN: opt -passes=cj-ir-verifier -disable-output < %s
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O0 -enable-gc-fast-path=false -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O2 -enable-gc-fast-path=false -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
+; RUN: llc --cangjie-pipeline -mtriple=aarch64 -O2 -enable-gc-fast-path=false -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O2 -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
+; ZGC zBarrierSetC2.cpp:498-508; barrierSetC2.cpp:1089-1102.
+target datalayout = "e-m:e-p:64:64-p1:64:64-i64:64-n8:16:32:64-S128"
+define i8 addrspace(1)* @probe(i8* %type, i8 addrspace(1)* %value, i64 %index, i64 %length, i1 %again) gc "cangjie" {
+entry:
+  %token = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, i8 addrspace(1)* (i8*, i64, i64)* @CJ_MCC_NewArray, i32 3, i32 0, i8* bitcast ({ i8*, i8, i8, i16, i32, i8*, i64, i8, i8, i16, i8*, i8*, i8*, i8*, i8* }* @array_ti to i8*), i64 8190, i64 poison)
+  %heap = call i8 addrspace(1)* @llvm.cj.gc.result(token %token)
+  %field = getelementptr inbounds i8, i8 addrspace(1)* %heap, i64 %index
+  %slot = bitcast i8 addrspace(1)* %field to i8 addrspace(1)* addrspace(1)*
+; CHECK-LABEL: define i8 addrspace(1)* @probe(
+; CHECK-NOT: cj.store.prev.low
+; CHECK-NOT: CJ_MCC_StoreBarrierOnHeapField
+; CHECK: store volatile i64 %cj.store.colored
+; CHECK: ret i8 addrspace(1)* %value
+  call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %value, i8 addrspace(1)* %heap, i8 addrspace(1)* addrspace(1)* %slot, i32 1)
+  ret i8 addrspace(1)* %value
+}
+declare i8 addrspace(1)* @CJ_MCC_NewArray(i8*, i64, i64)
+declare token @llvm.cj.gc.statepoint(...)
+declare i8 addrspace(1)* @llvm.cj.gc.result(token)
+declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...)
+declare i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*)
+declare void @safepoint()
+@component_ti = constant { i8*, i8, i8, i16, i32 } { i8* null, i8 -128, i8 0, i16 0, i32 64 }
+@array_ti = constant { i8*, i8, i8, i16, i32, i8*, i64, i8, i8, i16, i8*, i8*, i8*, i8*, i8* } { i8* null, i8 -126, i8 0, i16 0, i32 0, i8* null, i64 0, i8 0, i8 0, i16 0, i8* null, i8* null, i8* null, i8* null, i8* bitcast ({ i8*, i8, i8, i16, i32 }* @component_ti to i8*) }

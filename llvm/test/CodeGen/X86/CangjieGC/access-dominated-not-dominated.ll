@@ -9,6 +9,8 @@ define i8 addrspace(1)* @probe(i8* %type, i8 addrspace(1)* %value, i64* %alias, 
 entry:
   %token = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, i8 addrspace(1)* (i8*, i32)* @CJ_MCC_NewObject, i32 2, i32 0, i8* %type, i32 64)
   %heap = call i8 addrspace(1)* @llvm.cj.gc.result(token %token)
+  ; End allocation dominance so this fixture isolates access dominance.
+  %allocation.boundary1 = call token (...) @llvm.cj.gc.statepoint(i64 101, i32 0, void ()* @allocation_boundary, i32 0, i32 0)
   %field = getelementptr inbounds i8, i8 addrspace(1)* %heap, i64 8
   %slot = bitcast i8 addrspace(1)* %field to i8 addrspace(1)* addrspace(1)*
   br i1 %cond, label %dom, label %use
@@ -30,3 +32,4 @@ declare token @llvm.cj.gc.statepoint(...)
 declare i8 addrspace(1)* @llvm.cj.gc.result(token)
 declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...)
 declare i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*)
+declare void @allocation_boundary()

@@ -31,6 +31,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Scalar/CJFillMetadata.h"
 
 #include <unordered_map>
 
@@ -509,21 +510,99 @@ static Value *getAccessAddress(CallInst *Access) {
   }
 }
 
-static Value *getBaseAndOffset(CallInst *Access, APInt &Offset) {
+static Value *getBaseAndOffset(CallInst *Access, APInt &Offset,
+                               bool &UnknownOffset) {
+  UnknownOffset = false;
   Value *Base = getAccessAddress(Access);
   const DataLayout &DL = Access->getModule()->getDataLayout();
   Offset = APInt(DL.getIndexTypeSizeInBits(Base->getType()), 0);
   for (;;) {
     if (auto *GEP = dyn_cast<GEPOperator>(Base)) {
       if (!GEP->accumulateConstantOffset(DL, Offset))
-        return nullptr;
+        UnknownOffset = true;
       Base = GEP->getPointerOperand();
     } else if (auto *Cast = dyn_cast<BitCastOperator>(Base)) {
       Base = Cast->getOperand(0);
     } else {
-      return Offset.isNegative() ? nullptr : Base;
+      return !UnknownOffset && Offset.isNegative() ? nullptr : Base;
     }
   }
+}
+
+// ZGC barrierSetC2.cpp:1005-1038: classify the allocation separately from
+// the address offset. Cangjie encodes the array kind in its allocation entry,
+// rather than in a Java array CheckCastPP following the allocation phi.
+static bool isArrayAllocation(CallInst *CI) {
+  auto *Result = dyn_cast<GCResultInst>(CI);
+  auto *SP = Result ? dyn_cast<GCStatepointInst>(Result->getStatepoint()) : nullptr;
+  Function *Callee = SP ? SP->getActualCalledFunction() : nullptr;
+  if (!Callee)
+    return false;
+  StringRef Name = Callee->getName();
+  return Name == "CJ_MCC_NewArray" || Name == "CJ_MCC_NewObjArray" ||
+         Name == "CJ_MCC_NewArray8" || Name == "CJ_MCC_NewArray16" ||
+         Name == "CJ_MCC_NewArray32" || Name == "CJ_MCC_NewArray64";
+}
+
+// ZGC barrierSetC2.cpp:1041-1064. At this pipeline point the allocation
+// result has not yet been expanded to a fast/slow-path merge phi. Only runtime
+// entries covered by on_slowpath_allocation_exit may promise raw-null storage.
+static bool isAllocation(CallInst *CI) {
+  auto *Result = dyn_cast<GCResultInst>(CI);
+  auto *SP = Result ? dyn_cast<GCStatepointInst>(Result->getStatepoint()) : nullptr;
+  Function *Callee = SP ? SP->getActualCalledFunction() : nullptr;
+  if (!Callee)
+    return false;
+  StringRef Name = Callee->getName();
+  if (Name.isCangjieNewObjFunction() || Name == "CJ_MCC_NewPinnedObject")
+    return true;
+
+  // AOT has no deoptimization at the slow-path exit (zBarrierSet.cpp:275-301).
+  // Segmented initialization can yield after allocating, so exclude arrays
+  // unless the entire allocation fits within its first 64 KiB segment.
+  const DataLayout &DL = CI->getModule()->getDataLayout();
+  // CJRuntimeLowering also passes an optional third fast-path size hint.
+  // It can be poison; derive the bound from the runtime's length and layout.
+  if (SP->actual_arg_size() < 2)
+    return false;
+  uint64_t ElementBytes = 0;
+  if (Name == "CJ_MCC_NewArray8") ElementBytes = 1;
+  else if (Name == "CJ_MCC_NewArray16") ElementBytes = 2;
+  else if (Name == "CJ_MCC_NewArray32") ElementBytes = 4;
+  else if (Name == "CJ_MCC_NewArray64") ElementBytes = 8;
+  else if (Name == "CJ_MCC_NewObjArray") ElementBytes = DL.getPointerSize(1);
+  else if (Name == "CJ_MCC_NewArray") {
+    auto *ArrayTI = dyn_cast<GlobalVariable>(
+        SP->actual_arg_begin()->get()->stripPointerCasts());
+    auto *ArrayData = ArrayTI && ArrayTI->hasInitializer()
+                          ? dyn_cast<ConstantStruct>(ArrayTI->getInitializer())
+                          : nullptr;
+    if (!ArrayData || ArrayData->getNumOperands() <= CIT_SUPER)
+      return false;
+    auto *ComponentTI = dyn_cast<GlobalVariable>(
+        ArrayData->getOperand(CIT_SUPER)->stripPointerCasts());
+    auto *ComponentData = ComponentTI && ComponentTI->hasInitializer()
+                             ? dyn_cast<ConstantStruct>(ComponentTI->getInitializer())
+                             : nullptr;
+    if (!ComponentData || ComponentData->getNumOperands() <= CIT_SIZE)
+      return false;
+    auto *Kind = dyn_cast<ConstantInt>(ComponentData->getOperand(CIT_TYPE));
+    auto *Size = dyn_cast<ConstantInt>(ComponentData->getOperand(CIT_SIZE));
+    if (!Kind || !Size || Kind->getSExtValue() == TK_GENERIC ||
+        Kind->getSExtValue() == TK_GENERIC_CUSTOM)
+      return false;
+    ElementBytes = Kind->isNegative() ? DL.getPointerSize(1)
+                                    : Size->getZExtValue();
+  }
+  if (!ElementBytes)
+    return false;
+  auto *Length = dyn_cast<ConstantInt>((SP->actual_arg_begin() + 1)->get());
+  // MArray consists of the type pointer and the pointer-sized MIndex length.
+  const uint64_t HeaderBytes = 2 * DL.getPointerSize(1);
+  if (!Length || Length->isNegative() ||
+      Length->getValue().ugt((64 * 1024 - HeaderBytes) / ElementBytes))
+    return false;
+  return true;
 }
 
 // ZGC barrierSetC2.cpp:905-918: all statepoints, not just polling stubs.
@@ -555,26 +634,37 @@ static void elideDominatedBarrier(CallInst *Access) {
   Access->setMetadata(BarrierElidedMD, MDNode::get(Access->getContext(), {}));
 }
 
-// ZGC barrierSetC2.cpp:1066-1159, access arm. Keep the same-block interval
+// ZGC barrierSetC2.cpp:1066-1159. Keep the same-block interval
 // check and the deliberately whole-block predecessor walk as separate arms.
 static void elideDominatedBarriers(ArrayRef<CallInst *> Accesses,
                                    ArrayRef<CallInst *> Dominators,
                                    DominatorTree &DT) {
   for (CallInst *Access : Accesses) {
     APInt AccessOffset;
-    Value *AccessBase = getBaseAndOffset(Access, AccessOffset);
+    bool AccessUnknown;
+    Value *AccessBase = getBaseAndOffset(Access, AccessOffset, AccessUnknown);
     if (!AccessBase)
       continue;
     BasicBlock *AccessBlock = Access->getParent();
     for (CallInst *Mem : Dominators) {
-      APInt MemOffset;
-      Value *MemBase = getBaseAndOffset(Mem, MemOffset);
-      if (!MemBase || MemBase != AccessBase || MemOffset != AccessOffset)
-        continue;
-      BasicBlock *MemBlock = Mem->getParent();
+      bool Allocation = isAllocation(Mem);
+      Instruction *MemInst = Mem;
+      if (Allocation) {
+        MemInst = cast<Instruction>(Mem->getArgOperand(0));
+        if (Mem != AccessBase || (AccessUnknown && !isArrayAllocation(Mem)))
+          continue;
+      } else {
+        APInt MemOffset;
+        bool MemUnknown;
+        Value *MemBase = getBaseAndOffset(Mem, MemOffset, MemUnknown);
+        if (!MemBase || AccessUnknown || MemUnknown ||
+            MemBase != AccessBase || MemOffset != AccessOffset)
+          continue;
+      }
+      BasicBlock *MemBlock = MemInst->getParent();
       if (MemBlock == AccessBlock) {
-        if (Mem != Access && Mem->comesBefore(Access) &&
-            !blockHasSafepoint(std::next(Mem->getIterator()),
+        if (MemInst != Access && MemInst->comesBefore(Access) &&
+            !blockHasSafepoint(std::next(MemInst->getIterator()),
                               Access->getIterator()))
           elideDominatedBarrier(Access);
       } else if (DT.dominates(MemBlock, AccessBlock)) {
@@ -585,7 +675,13 @@ static void elideDominatedBarriers(ArrayRef<CallInst *> Accesses,
           BasicBlock *BB = Stack.pop_back_val();
           if (!Visited.insert(BB).second)
             continue;
-          if (blockHasSafepoint(BB)) {
+          // C2's allocation phi is in the successor of the slow call.
+          // Here the allocation statepoint itself defines that boundary.
+          bool HasSafepoint = Allocation && BB == MemBlock
+                                  ? blockHasSafepoint(std::next(MemInst->getIterator()),
+                                                      BB->end())
+                                  : blockHasSafepoint(BB);
+          if (HasSafepoint) {
             SafepointFound = true;
             break;
           }
@@ -601,7 +697,7 @@ static void elideDominatedBarriers(ArrayRef<CallInst *> Accesses,
 }
 
 // ZGC zBarrierSetC2.cpp:480-552: first collect three access/dominator lists,
-// then apply the common proof. B2 can add allocations to load/store dominators.
+// then apply the common proof. Allocations only join load/store dominators.
 static void analyzeDominatingBarriers(Function &F) {
   SmallVector<CallInst *, 16> Loads, LoadDominators;
   SmallVector<CallInst *, 16> Stores, StoreDominators;
@@ -610,6 +706,12 @@ static void analyzeDominatingBarriers(Function &F) {
     auto *CI = dyn_cast<CallInst>(&I);
     if (!CI)
       continue;
+    if (isAllocation(CI)) {
+      LoadDominators.push_back(CI);
+      StoreDominators.push_back(CI);
+      // Raw-null allocation storage is not store-good for atomic RMWs.
+      continue;
+    }
     switch (CI->getIntrinsicID()) {
     case Intrinsic::cj_gcread_ref:
     case Intrinsic::cj_atomic_load:
