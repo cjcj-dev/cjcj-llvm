@@ -59,7 +59,7 @@ for kind in ['allocation','array','heap-phi','heap-select','mixed-phi','mixed-se
    body+='  %safepoint = call token (...) @llvm.cj.gc.statepoint(i64 1, i32 0, void ()* @safepoint, i32 0, i32 0) [ "gc-live"(i8 addrspace(1)* %heap, i8 addrspace(1)* '+derived+') ]\n  %relocated = call i8 addrspace(1)* @llvm.cj.gc.relocate.p1i8(token %safepoint, i32 0, i32 1)\n'
    origin='%relocated'
   if kind=='cycle':
-   body+='  br label %loop\nloop:\n  %iteration = phi i8 addrspace(1)* [ %heap, %entry ], [ %iteration, %loop ]\n  br i1 %cond, label %loop, label %exit\nexit:\n'
+   body+='  br label %loop\nloop:\n  %iteration = phi i8 addrspace(1)* [ %iteration, %loop ], [ %arg, %entry ]\n  br i1 %cond, label %loop, label %exit\nexit:\n'
    origin='%iteration'
   if kind=='as0-roundtrip':
    body+='  %plain = addrspacecast i8 addrspace(1)* %heap to i8*\n  %managed = addrspacecast i8* %plain to i8 addrspace(1)*\n'

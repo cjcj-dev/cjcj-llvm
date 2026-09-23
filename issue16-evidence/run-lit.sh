@@ -2,6 +2,7 @@
 set -u
 ulimit -c 0
 cd /root/sym_cjcj_llvm_16_implement_r5788821149 || exit 2
+export PYTHONPATH="$PWD/python-deps${PYTHONPATH:+:$PYTHONPATH}"
 for arm in "$@"; do
  (
   start=$SECONDS

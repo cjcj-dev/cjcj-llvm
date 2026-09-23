@@ -1,0 +1,22 @@
+--- a/llvm/lib/CodeGen/CJBarrierLowering.cpp
++++ b/llvm/lib/CodeGen/CJBarrierLowering.cpp
+@@ -795,7 +795,8 @@
+       // Legacy and explicit unknown accesses use the runtime accessor.
+       if (storeStrength(CI) == GCWriteRef::Unknown)
+         continue;
+-      WB.storeFastPath(CI);
++      if (!hasProvenHeapDestination(getPointerArg(CI)))
++        WB.storeFastPath(CI);
+     }
+   }
+ 
+@@ -850,7 +851,8 @@
+     unsigned ID = CI->getIntrinsicID();
+     if (ID == Intrinsic::cj_gcread_ref ||
+         ID == Intrinsic::cj_gcread_static_ref) {
+-      RB.readFastPath(CI, getPointerArg(CI));
++      if (!hasProvenHeapDestination(getPointerArg(CI)))
++        RB.readFastPath(CI, getPointerArg(CI));
+       continue;
+     }
+     if (ID == Intrinsic::cj_atomic_load) {

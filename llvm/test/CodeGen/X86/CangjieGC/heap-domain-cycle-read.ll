@@ -13,7 +13,7 @@ entry:
   %heap = call i8 addrspace(1)* @llvm.cj.gc.result(token %token)
   br label %loop
 loop:
-  %iteration = phi i8 addrspace(1)* [ %heap, %entry ], [ %iteration, %loop ]
+  %iteration = phi i8 addrspace(1)* [ %iteration, %loop ], [ %arg, %entry ]
   br i1 %cond, label %loop, label %exit
 exit:
   %field = getelementptr inbounds i8, i8 addrspace(1)* %iteration, i64 8

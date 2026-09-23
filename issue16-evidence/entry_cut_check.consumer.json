@@ -1,0 +1,52 @@
+{
+ "repo": "/root/cj_build/llvm_rebase_wt/sym_cjcj_llvm_16_implement_r5788821149",
+ "base": "5fc812a1d014deaf660d704a15dc0dc0a091788b",
+ "head": "HEAD",
+ "mode": "product",
+ "ok": true,
+ "verdicts": [
+  {
+   "cut": "issue16-evidence/consumer.diff",
+   "file": "llvm/lib/CodeGen/CJBarrierLowering.cpp",
+   "checks": [
+    {
+     "name": "产品树文件",
+     "ok": true,
+     "detail": "llvm/lib/CodeGen/CJBarrierLowering.cpp"
+    },
+    {
+     "name": "文件在基线存在",
+     "ok": true,
+     "detail": "5fc812a1d014deaf660d704a15dc0dc0a091788b:llvm/lib/CodeGen/CJBarrierLowering.cpp"
+    },
+    {
+     "name": "被断开的行在基线逐字存在",
+     "ok": true,
+     "detail": "2 行全在基线"
+    },
+    {
+     "name": "没有断在候选自己新增的行上",
+     "ok": true,
+     "detail": "无"
+    }
+   ],
+   "phase_hits": [
+    "readFastPath",
+    "storeFastPath"
+   ],
+   "ok": true
+  },
+  {
+   "cut": "*",
+   "file": "*",
+   "checks": [
+    {
+     "name": "至少一处断线落在真实相位入口函数",
+     "ok": true,
+     "detail": "llvm/lib/CodeGen/CJBarrierLowering.cpp:SplitFastPathAndSlowPath, llvm/lib/CodeGen/CJBarrierLowering.cpp:createFastInstr, llvm/lib/CodeGen/CJBarrierLowering.cpp:replaceBarrier, llvm/lib/CodeGen/CJBarrierLowering.cpp:fastBarrierInline, llvm/lib/CodeGen/CJBarrierLowering.cpp:replaceInstWithBarrier, llvm/lib/CodeGen/CJBarrierLowering.cpp:replaceCallInst, llvm/lib/CodeGen/CJBarrierLowering.cpp:readFastPath, llvm/lib/CodeGen/CJBarrierLowering.cpp:storeFastPath"
+    }
+   ],
+   "ok": true
+  }
+ ]
+}
