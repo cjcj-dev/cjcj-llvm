@@ -17,6 +17,7 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/IR/CJIntrinsics.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
@@ -467,6 +468,160 @@ static bool hasProvenHeapDestination(Value *Dst) {
   if (Proven && hasProvenNonHeapDestination(Dst))
     report_fatal_error("conflicting heap and non-heap destination proofs");
   return Proven;
+}
+
+// ZGC barrierSetC2.cpp:973-999. Unknown (including dynamic) offsets must not
+// become a new base with an apparently concrete zero displacement.
+static Value *getAccessAddress(CallInst *Access) {
+  switch (Access->getIntrinsicID()) {
+  case Intrinsic::cj_atomic_load:
+    return Access->getArgOperand(AtomicLoad::Field);
+  case Intrinsic::cj_atomic_store:
+    return Access->getArgOperand(AtomicStore::Field);
+  case Intrinsic::cj_atomic_swap:
+    return Access->getArgOperand(AtomicSwap::Field);
+  case Intrinsic::cj_atomic_compare_swap:
+    return Access->getArgOperand(AtomicCompareSwap::Field);
+  default:
+    return getPointerArg(Access);
+  }
+}
+
+static Value *getBaseAndOffset(CallInst *Access, APInt &Offset) {
+  Value *Base = getAccessAddress(Access);
+  const DataLayout &DL = Access->getModule()->getDataLayout();
+  Offset = APInt(DL.getIndexTypeSizeInBits(Base->getType()), 0);
+  for (;;) {
+    if (auto *GEP = dyn_cast<GEPOperator>(Base)) {
+      if (!GEP->accumulateConstantOffset(DL, Offset))
+        return nullptr;
+      Base = GEP->getPointerOperand();
+    } else if (auto *Cast = dyn_cast<BitCastOperator>(Base)) {
+      Base = Cast->getOperand(0);
+    } else {
+      return Offset.isNegative() ? nullptr : Base;
+    }
+  }
+}
+
+// ZGC barrierSetC2.cpp:905-918: all statepoints, not just polling stubs.
+static bool blockHasSafepoint(BasicBlock::iterator From,
+                              BasicBlock::iterator To) {
+  return llvm::any_of(make_range(From, To), [](Instruction &I) {
+    return isa<GCStatepointInst>(&I);
+  });
+}
+
+static bool blockHasSafepoint(BasicBlock *BB) {
+  return blockHasSafepoint(BB->begin(), BB->end());
+}
+
+// ZGC zBarrierSetC2.cpp:476-478. Atomic writes/RMWs currently use the runtime
+// Access API (A6), with no inline elided consumer. Never attach a dead proof.
+static void elideDominatedBarrier(CallInst *Access) {
+  switch (Access->getIntrinsicID()) {
+  case Intrinsic::cj_gcread_ref:
+  case Intrinsic::cj_gcwrite_ref:
+    break;
+  case Intrinsic::cj_atomic_load:
+    if (isa<ConstantInt>(getAtomicOrder(Access)))
+      break;
+    return;
+  default:
+    return;
+  }
+  Access->setMetadata(BarrierElidedMD, MDNode::get(Access->getContext(), {}));
+}
+
+// ZGC barrierSetC2.cpp:1066-1159, access arm. Keep the same-block interval
+// check and the deliberately whole-block predecessor walk as separate arms.
+static void elideDominatedBarriers(ArrayRef<CallInst *> Accesses,
+                                   ArrayRef<CallInst *> Dominators,
+                                   DominatorTree &DT) {
+  for (CallInst *Access : Accesses) {
+    APInt AccessOffset;
+    Value *AccessBase = getBaseAndOffset(Access, AccessOffset);
+    if (!AccessBase)
+      continue;
+    BasicBlock *AccessBlock = Access->getParent();
+    for (CallInst *Mem : Dominators) {
+      APInt MemOffset;
+      Value *MemBase = getBaseAndOffset(Mem, MemOffset);
+      if (!MemBase || MemBase != AccessBase || MemOffset != AccessOffset)
+        continue;
+      BasicBlock *MemBlock = Mem->getParent();
+      if (MemBlock == AccessBlock) {
+        if (Mem != Access && Mem->comesBefore(Access) &&
+            !blockHasSafepoint(std::next(Mem->getIterator()),
+                              Access->getIterator()))
+          elideDominatedBarrier(Access);
+      } else if (DT.dominates(MemBlock, AccessBlock)) {
+        SmallVector<BasicBlock *, 16> Stack{AccessBlock};
+        SmallPtrSet<BasicBlock *, 16> Visited;
+        bool SafepointFound = blockHasSafepoint(AccessBlock);
+        while (!SafepointFound && !Stack.empty()) {
+          BasicBlock *BB = Stack.pop_back_val();
+          if (!Visited.insert(BB).second)
+            continue;
+          if (blockHasSafepoint(BB)) {
+            SafepointFound = true;
+            break;
+          }
+          if (BB == MemBlock)
+            continue;
+          llvm::append_range(Stack, predecessors(BB));
+        }
+        if (!SafepointFound)
+          elideDominatedBarrier(Access);
+      }
+    }
+  }
+}
+
+// ZGC zBarrierSetC2.cpp:480-552: first collect three access/dominator lists,
+// then apply the common proof. B2 can add allocations to load/store dominators.
+static void analyzeDominatingBarriers(Function &F) {
+  SmallVector<CallInst *, 16> Loads, LoadDominators;
+  SmallVector<CallInst *, 16> Stores, StoreDominators;
+  SmallVector<CallInst *, 16> Atomics, AtomicDominators;
+  for (Instruction &I : instructions(F)) {
+    auto *CI = dyn_cast<CallInst>(&I);
+    if (!CI)
+      continue;
+    switch (CI->getIntrinsicID()) {
+    case Intrinsic::cj_gcread_ref:
+    case Intrinsic::cj_atomic_load:
+      if (hasProvenHeapDestination(getAccessAddress(CI))) {
+        Loads.push_back(CI);
+        LoadDominators.push_back(CI);
+      }
+      break;
+    case Intrinsic::cj_gcwrite_ref:
+    case Intrinsic::cj_atomic_store:
+      if (hasProvenHeapDestination(getAccessAddress(CI))) {
+        Stores.push_back(CI);
+        LoadDominators.push_back(CI);
+        StoreDominators.push_back(CI);
+        AtomicDominators.push_back(CI);
+      }
+      break;
+    case Intrinsic::cj_atomic_swap:
+    case Intrinsic::cj_atomic_compare_swap:
+      if (hasProvenHeapDestination(getAccessAddress(CI))) {
+        Atomics.push_back(CI);
+        LoadDominators.push_back(CI);
+        StoreDominators.push_back(CI);
+        AtomicDominators.push_back(CI);
+      }
+      break;
+    default:
+      break;
+    }
+  }
+  DominatorTree DT(F);
+  elideDominatedBarriers(Loads, LoadDominators, DT);
+  elideDominatedBarriers(Stores, StoreDominators, DT);
+  elideDominatedBarriers(Atomics, AtomicDominators, DT);
 }
 
 class ReadBarrier {
@@ -1092,6 +1247,10 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
         Safepoints.insert(cast<GCStatepointInst>(&I));
     }
   }
+
+  // Analyze the final statepoints before allocation expansion changes the CFG.
+  if (EnableTaggedPointer && !CangjieJIT)
+    analyzeDominatingBarriers(F);
 
   if (!News.empty()) {
     Changed = doNewFastPath(F, News);
