@@ -1,6 +1,7 @@
 ; RUN: opt -passes=cj-ir-verifier -disable-output < %s
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O0 -enable-gc-fast-path=false -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O2 -enable-gc-fast-path=false -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
+; RUN: llc --cangjie-pipeline -mtriple=aarch64 -O2 -enable-gc-fast-path=false -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
 ; ZGC zBarrierSetC2.cpp:514-545; barrierSetC2.cpp:1106-1156.
 ; Preserve the access across a potentially aliasing primitive write; only its
 ; barrier may disappear. No pre-attached elision metadata supplies the proof.

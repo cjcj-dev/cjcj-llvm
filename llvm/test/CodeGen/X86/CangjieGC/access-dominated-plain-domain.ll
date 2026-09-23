@@ -5,15 +5,12 @@
 ; Preserve the access across a potentially aliasing primitive write; only its
 ; barrier may disappear. No pre-attached elision metadata supplies the proof.
 target datalayout = "e-m:e-p:64:64-p1:64:64-i64:64-n8:16:32:64-S128"
-%Plain = type { i8 addrspace(1)* }
 define i8 addrspace(1)* @probe(i8* %type, i8 addrspace(1)* %value, i64* %alias, i64 %word) gc "cangjie" {
 entry:
   %token = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, i8 addrspace(1)* (i8*, i32)* @CJ_MCC_NewObject, i32 2, i32 0, i8* %type, i32 64)
   %heap = call i8 addrspace(1)* @llvm.cj.gc.result(token %token)
-  %plain = alloca %Plain
-  %init = bitcast %Plain* %plain to i8*
-  call void @llvm.cj.memset(i8* %init, i8 0, i64 8, i1 false)
-  %slot = addrspacecast %Plain* %plain to i8 addrspace(1)* addrspace(1)*
+  %plain = alloca [8 x i8], align 8
+  %slot = addrspacecast [8 x i8]* %plain to i8 addrspace(1)* addrspace(1)*
   call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %value, i8 addrspace(1)* %heap, i8 addrspace(1)* addrspace(1)* %slot, i32 1)
 ; CHECK-LABEL: define i8 addrspace(1)* @probe(
 ; CHECK: store volatile i64 %word, i64* %alias
@@ -29,5 +26,3 @@ declare token @llvm.cj.gc.statepoint(...)
 declare i8 addrspace(1)* @llvm.cj.gc.result(token)
 declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...)
 declare i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*)
-
-declare void @llvm.cj.memset(i8*, i8, i64, i1)

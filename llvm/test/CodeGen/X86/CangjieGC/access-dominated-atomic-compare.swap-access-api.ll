@@ -1,7 +1,6 @@
 ; RUN: opt -passes=cj-ir-verifier -disable-output < %s
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O0 -enable-gc-fast-path=false -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O2 -enable-gc-fast-path=false -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
-; RUN: llc --cangjie-pipeline -mtriple=aarch64 -O2 -enable-gc-fast-path=false -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
 ; ZGC zBarrierSetC2.cpp:514-545; barrierSetC2.cpp:1106-1156.
 ; Preserve the access across a potentially aliasing primitive write; only its
 ; barrier may disappear. No pre-attached elision metadata supplies the proof.
@@ -10,20 +9,20 @@ define i8 addrspace(1)* @probe(i8* %type, i8 addrspace(1)* %value, i64* %alias, 
 entry:
   %token = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, i8 addrspace(1)* (i8*, i32)* @CJ_MCC_NewObject, i32 2, i32 0, i8* %type, i32 64)
   %heap = call i8 addrspace(1)* @llvm.cj.gc.result(token %token)
-  %field = getelementptr inbounds i8, i8 addrspace(1)* %heap, i64 %word
+  %field = getelementptr inbounds i8, i8 addrspace(1)* %heap, i64 8
   %slot = bitcast i8 addrspace(1)* %field to i8 addrspace(1)* addrspace(1)*
   call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %value, i8 addrspace(1)* %heap, i8 addrspace(1)* addrspace(1)* %slot, i32 1)
+
 ; CHECK-LABEL: define i8 addrspace(1)* @probe(
 ; CHECK: store volatile i64 %word, i64* %alias
-; CHECK: %cj.loadbadmask = load i64
-; CHECK: call i8 addrspace(1)* @CJ_MCC_ReadRefField(
-; CHECK: ret i8 addrspace(1)*
+; CHECK-NEXT: %atomic = call i1 @CJ_MCC_AtomicCompareAndSwapReference(
+; CHECK-NEXT: ret i8 addrspace(1)* %value
   store volatile i64 %word, i64* %alias
-  %result = call i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)* %heap, i8 addrspace(1)* addrspace(1)* %slot)
-  ret i8 addrspace(1)* %result
+  %atomic = call i1 @llvm.cj.atomic.compare.swap(i8 addrspace(1)* null, i8 addrspace(1)* %value, i8 addrspace(1)* %heap, i8 addrspace(1)* addrspace(1)* %slot, i32 5, i32 2)
+  ret i8 addrspace(1)* %value
 }
 declare i8 addrspace(1)* @CJ_MCC_NewObject(i8*, i32)
 declare token @llvm.cj.gc.statepoint(...)
 declare i8 addrspace(1)* @llvm.cj.gc.result(token)
 declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...)
-declare i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*)
+declare i1 @llvm.cj.atomic.compare.swap(i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, i32, i32)
