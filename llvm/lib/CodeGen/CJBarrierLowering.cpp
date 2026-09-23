@@ -529,11 +529,25 @@ static Value *getBaseAndOffset(CallInst *Access, APInt &Offset,
   }
 }
 
+// ZGC barrierSetC2.cpp:1005-1038: classify the allocation separately from
+// the address offset. Cangjie encodes the array kind in its allocation entry,
+// rather than in a Java array CheckCastPP following the allocation phi.
+static bool isArrayAllocation(CallInst *CI) {
+  auto *Result = dyn_cast<GCResultInst>(CI);
+  auto *SP = Result ? dyn_cast<GCStatepointInst>(Result->getStatepoint()) : nullptr;
+  Function *Callee = SP ? SP->getActualCalledFunction() : nullptr;
+  if (!Callee)
+    return false;
+  StringRef Name = Callee->getName();
+  return Name == "CJ_MCC_NewArray" || Name == "CJ_MCC_NewObjArray" ||
+         Name == "CJ_MCC_NewArray8" || Name == "CJ_MCC_NewArray16" ||
+         Name == "CJ_MCC_NewArray32" || Name == "CJ_MCC_NewArray64";
+}
+
 // ZGC barrierSetC2.cpp:1041-1064. At this pipeline point the allocation
 // result has not yet been expanded to a fast/slow-path merge phi. Only runtime
 // entries covered by on_slowpath_allocation_exit may promise raw-null storage.
-static bool isAllocation(CallInst *CI, bool &IsArray) {
-  IsArray = false;
+static bool isAllocation(CallInst *CI) {
   auto *Result = dyn_cast<GCResultInst>(CI);
   auto *SP = Result ? dyn_cast<GCStatepointInst>(Result->getStatepoint()) : nullptr;
   Function *Callee = SP ? SP->getActualCalledFunction() : nullptr;
@@ -588,7 +602,6 @@ static bool isAllocation(CallInst *CI, bool &IsArray) {
   if (!Length || Length->isNegative() ||
       Length->getValue().ugt((64 * 1024 - HeaderBytes) / ElementBytes))
     return false;
-  IsArray = true;
   return true;
 }
 
@@ -634,12 +647,11 @@ static void elideDominatedBarriers(ArrayRef<CallInst *> Accesses,
       continue;
     BasicBlock *AccessBlock = Access->getParent();
     for (CallInst *Mem : Dominators) {
-      bool IsArray;
-      bool Allocation = isAllocation(Mem, IsArray);
+      bool Allocation = isAllocation(Mem);
       Instruction *MemInst = Mem;
       if (Allocation) {
         MemInst = cast<Instruction>(Mem->getArgOperand(0));
-        if (Mem != AccessBase || (AccessUnknown && !IsArray))
+        if (Mem != AccessBase || (AccessUnknown && !isArrayAllocation(Mem)))
           continue;
       } else {
         APInt MemOffset;
@@ -694,8 +706,7 @@ static void analyzeDominatingBarriers(Function &F) {
     auto *CI = dyn_cast<CallInst>(&I);
     if (!CI)
       continue;
-    bool IsArray;
-    if (isAllocation(CI, IsArray)) {
+    if (isAllocation(CI)) {
       LoadDominators.push_back(CI);
       StoreDominators.push_back(CI);
       // Raw-null allocation storage is not store-good for atomic RMWs.
