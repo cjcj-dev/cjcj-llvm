@@ -66,8 +66,7 @@ define void @unknown(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
 declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...)
 
 ; ASM-LABEL: strong:
-; ASM: %r15
-; ASM: movq 96(
+; ASM: movq 96(%r15)
 ; ASM: test{{[lq]}} {{.*}}32(
 ; ASM: g_cjStoreBarrierBufferCurrentOffset
 ; ASM: g_cjStoreBarrierEntrySize
