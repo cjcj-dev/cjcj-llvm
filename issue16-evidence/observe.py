@@ -17,7 +17,7 @@ def run(job):
     return {'arm':arm,'name':src.name,'level':level,'llc_rc':p.returncode,'check_rc':q.returncode,'range_loads':sum('load i64, i64* @g_cjHeapRangeCount' in line for line in probe.splitlines()),'mask_reads':sum(('cj.storebadmask = load' in line or 'cj.loadbadmask = load' in line) for line in probe.splitlines()),'wall':time.monotonic()-start}
 jobs=[]
 for arm in sys.argv[1:]:
-    tool=r/({'consumer':'candidate','restored':'candidate'}.get(arm,arm))/'bin/llc'
+    tool=r/({'restored':'candidate'}.get(arm,arm))/'bin/llc'
     folder=out/arm;folder.mkdir(exist_ok=True)
     (folder/'uptime-before.txt').write_bytes(subprocess.check_output(['uptime']))
     ident={'llc_sha256':sha(tool),'filecheck_sha256':sha(fc),'input_sha256':{s.name:sha(s) for s in sources},'jobs':os.cpu_count()}

@@ -10,6 +10,7 @@ decl='''
 declare i8 addrspace(1)* @CJ_MCC_NewObject(i8*, i32)
 declare i8 addrspace(1)* @CJ_MCC_NewArray(i8*, i64, i64)
 declare i8 addrspace(1)* @unknown_allocator(i8*, i32)
+declare i32 @__gxx_personality_v0(...)
 declare void @safepoint()
 declare i8 addrspace(1)* @llvm.cj.gc.relocate.p1i8(token, i32 immarg, i32 immarg)
 declare token @llvm.cj.gc.statepoint(...)
@@ -24,9 +25,9 @@ stack='''  %storage = alloca [64 x i8], align 8
   %bytes = bitcast [64 x i8]* %storage to i8*
   %stack = addrspacecast i8* %bytes to i8 addrspace(1)*
 '''
-for kind in ['allocation','array','heap-phi','heap-select','mixed-phi','mixed-select','unknown','unknown-result','unbounded-gep','stack','owner-only','relocated','relocated-unknown','cycle','as0-roundtrip']:
+for kind in ['allocation','invoke','array','heap-phi','heap-select','mixed-phi','mixed-select','unknown','unknown-result','unbounded-gep','stack','owner-only','relocated','relocated-unknown','cycle','as0-roundtrip']:
  for mode in ['write','read']:
-  proven=kind in ['allocation','array','heap-phi','heap-select','relocated']
+  proven=kind in ['allocation','invoke','array','heap-phi','heap-select','relocated']
   checks='; CHECK-LABEL: define '+('void' if mode=='write' else 'i8 addrspace(1)*')+' @probe(\n'
   if proven:
    checks+='; CHECK-NOT: g_cjHeapRangeCount\n'
@@ -68,5 +69,9 @@ for kind in ['allocation','array','heap-phi','heap-select','mixed-phi','mixed-se
   owner='%heap' if kind=='owner-only' else origin
   if mode=='write': body+='  call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %value, i8 addrspace(1)* '+owner+', i8 addrspace(1)* addrspace(1)* %slot, i32 1)\n  ret void\n'
   else: body+='  %value = call i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)* '+owner+', i8 addrspace(1)* addrspace(1)* %slot)\n  ret i8 addrspace(1)* %value\n'
+  if kind=='invoke':
+   body=body.replace('%token = call token', '%token = invoke token').replace('i8* %type, i32 64)\n', 'i8* %type, i32 64) to label %normal unwind label %exception\nnormal:\n')
+   body+='exception:\n  %exception.value = landingpad { i8*, i32 } cleanup\n  resume { i8*, i32 } %exception.value\n'
   signature='define '+('void' if mode=='write' else 'i8 addrspace(1)*')+' @probe(i8* %type, i8 addrspace(1)* %arg, i1 %cond, i64 %index'+(', i8 addrspace(1)* %value' if mode=='write' else '')+') gc "cangjie" {\n'
+  if kind=='invoke': signature=signature.replace('gc "cangjie" {', 'gc "cangjie" personality i32 (...)* @__gxx_personality_v0 {')
   (root/('heap-domain-'+kind+'-'+mode+'.ll')).write_text(header+checks+signature+body+'}\n'+decl)

@@ -22,6 +22,7 @@ entry:
 declare i8 addrspace(1)* @CJ_MCC_NewObject(i8*, i32)
 declare i8 addrspace(1)* @CJ_MCC_NewArray(i8*, i64, i64)
 declare i8 addrspace(1)* @unknown_allocator(i8*, i32)
+declare i32 @__gxx_personality_v0(...)
 declare void @safepoint()
 declare i8 addrspace(1)* @llvm.cj.gc.relocate.p1i8(token, i32 immarg, i32 immarg)
 declare token @llvm.cj.gc.statepoint(...)

@@ -4,21 +4,22 @@
 ; Storage domain must be proved from the final slot, after escape analysis.
 target datalayout = "e-m:e-p:64:64-p1:64:64-i64:64-n8:16:32:64-S128"
 ; CHECK-LABEL: define i8 addrspace(1)* @probe(
-; CHECK: load i64, i64* @g_cjHeapRangeCount
+; CHECK-NOT: g_cjHeapRangeCount
 ; CHECK: cj.loadbadmask
+; CHECK-NOT: g_cjHeapRangeCount
 ; CHECK: ret i8 addrspace(1)*
-define i8 addrspace(1)* @probe(i8* %type, i8 addrspace(1)* %arg, i1 %cond, i64 %index) gc "cangjie" {
+define i8 addrspace(1)* @probe(i8* %type, i8 addrspace(1)* %arg, i1 %cond, i64 %index) gc "cangjie" personality i32 (...)* @__gxx_personality_v0 {
 entry:
-  %token = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, i8 addrspace(1)* (i8*, i32)* @CJ_MCC_NewObject, i32 2, i32 0, i8* %type, i32 64)
+  %token = invoke token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, i8 addrspace(1)* (i8*, i32)* @CJ_MCC_NewObject, i32 2, i32 0, i8* %type, i32 64) to label %normal unwind label %exception
+normal:
   %heap = call i8 addrspace(1)* @llvm.cj.gc.result(token %token)
-  %storage = alloca [64 x i8], align 8
-  %bytes = bitcast [64 x i8]* %storage to i8*
-  %stack = addrspacecast i8* %bytes to i8 addrspace(1)*
-  %merged = select i1 %cond, i8 addrspace(1)* %heap, i8 addrspace(1)* %stack
-  %field = getelementptr inbounds i8, i8 addrspace(1)* %merged, i64 8
+  %field = getelementptr inbounds i8, i8 addrspace(1)* %heap, i64 8
   %slot = bitcast i8 addrspace(1)* %field to i8 addrspace(1)* addrspace(1)*
-  %value = call i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)* %merged, i8 addrspace(1)* addrspace(1)* %slot)
+  %value = call i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)* %heap, i8 addrspace(1)* addrspace(1)* %slot)
   ret i8 addrspace(1)* %value
+exception:
+  %exception.value = landingpad { i8*, i32 } cleanup
+  resume { i8*, i32 } %exception.value
 }
 
 declare i8 addrspace(1)* @CJ_MCC_NewObject(i8*, i32)

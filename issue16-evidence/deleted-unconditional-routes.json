@@ -1,0 +1,58 @@
+[
+  {
+    "command": [
+      "git",
+      "grep",
+      "-F",
+      "-c",
+      "if (ReadBarrier->getIntrinsicID() == Intrinsic::cj_gcread_ref) {",
+      "5fc812a1d014deaf660d704a15dc0dc0a091788b",
+      "--",
+      "llvm/lib/CodeGen/CJBarrierLowering.cpp"
+    ],
+    "rc": 0,
+    "output": "5fc812a1d014deaf660d704a15dc0dc0a091788b:llvm/lib/CodeGen/CJBarrierLowering.cpp:1\n"
+  },
+  {
+    "command": [
+      "git",
+      "grep",
+      "-F",
+      "-c",
+      "if (ReadBarrier->getIntrinsicID() == Intrinsic::cj_gcread_ref) {",
+      "HEAD",
+      "--",
+      "llvm/lib/CodeGen/CJBarrierLowering.cpp"
+    ],
+    "rc": 1,
+    "output": ""
+  },
+  {
+    "command": [
+      "git",
+      "grep",
+      "-F",
+      "-c",
+      "Value *InHeap = emitReservedHeapSlot(B, M, B.CreatePtrToInt(Place, I64),",
+      "5fc812a1d014deaf660d704a15dc0dc0a091788b",
+      "--",
+      "llvm/lib/CodeGen/CJBarrierLowering.cpp"
+    ],
+    "rc": 0,
+    "output": "5fc812a1d014deaf660d704a15dc0dc0a091788b:llvm/lib/CodeGen/CJBarrierLowering.cpp:1\n"
+  },
+  {
+    "command": [
+      "git",
+      "grep",
+      "-F",
+      "-c",
+      "Value *InHeap = emitReservedHeapSlot(B, M, B.CreatePtrToInt(Place, I64),",
+      "HEAD",
+      "--",
+      "llvm/lib/CodeGen/CJBarrierLowering.cpp"
+    ],
+    "rc": 1,
+    "output": ""
+  }
+]

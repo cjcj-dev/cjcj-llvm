@@ -1,0 +1,181 @@
+{
+  "baseline": {
+    "PASS": 137,
+    "FAIL": 20,
+    "XFAIL": 2,
+    "UNSUPPORTED": 1
+  },
+  "green": {
+    "PASS": 149,
+    "FAIL": 8,
+    "XFAIL": 2,
+    "UNSUPPORTED": 1
+  },
+  "same_input_names": true,
+  "candidate_only": [],
+  "baseline_only": [
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-relocated-write.ll",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-relocated-read.ll",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-heap-select-write.ll",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-heap-select-read.ll",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-allocation-read.ll",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-heap-phi-read.ll",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-array-read.ll",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-array-write.ll",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-heap-phi-write.ll",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-allocation-write.ll",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-invoke-read.ll",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-invoke-write.ll"
+  ],
+  "new_tests": {
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-unbounded-gep-read.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-mixed-select-read.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-mixed-phi-read.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-stack-write.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-as0-roundtrip-read.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-mixed-select-write.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-heap-phi-write.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-array-read.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-unknown-result-write.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-unbounded-gep-write.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-owner-only-write.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-as0-roundtrip-write.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-relocated-write.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-cycle-read.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-owner-only-read.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-mixed-phi-write.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-relocated-unknown-read.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-heap-select-write.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-heap-phi-read.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-unknown-write.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-unknown-result-read.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-allocation-write.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-stack-read.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-cycle-write.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-array-write.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-allocation-read.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-unknown-read.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-relocated-unknown-write.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-heap-select-read.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-relocated-read.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-invoke-read.ll": "PASS",
+    "LLVM :: CodeGen/X86/CangjieGC/heap-domain-invoke-write.ll": "PASS"
+  },
+  "common_failures": [
+    "LLVM :: Transforms/CJIRVerifier/ptrmask-uncolour-array-payload.ll",
+    "LLVM :: Transforms/CJBarrierOpt/barrierarray5.ll",
+    "LLVM :: Transforms/CJBarrierSplit/nested-array.ll",
+    "LLVM :: CodeGen/X86/CangjieGC/generic-payload-lowering.ll",
+    "LLVM :: CodeGen/X86/CangjieGC/read-barrier-load-mask.ll",
+    "LLVM :: CodeGen/X86/CangjieGC/nonheap-ref-uncolor.ll",
+    "LLVM :: CodeGen/X86/CangjieGC/memmove-uncolor.ll",
+    "LLVM :: Transforms/CJBarrierSplit/split-read-struct-one-ref.ll"
+  ],
+  "consumer": {
+    "counts": {
+      "PASS": 137,
+      "FAIL": 20,
+      "XFAIL": 2,
+      "UNSUPPORTED": 1
+    },
+    "same_test_names": true,
+    "new_failures": [
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-array-write.ll",
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-heap-select-read.ll",
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-array-read.ll",
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-relocated-write.ll",
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-relocated-read.ll",
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-allocation-write.ll",
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-heap-phi-read.ll",
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-heap-select-write.ll",
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-allocation-read.ll",
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-heap-phi-write.ll",
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-invoke-write.ll",
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-invoke-read.ll"
+    ],
+    "changed_status": {
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-array-write.ll": [
+        "PASS",
+        "FAIL"
+      ],
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-heap-select-read.ll": [
+        "PASS",
+        "FAIL"
+      ],
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-array-read.ll": [
+        "PASS",
+        "FAIL"
+      ],
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-relocated-write.ll": [
+        "PASS",
+        "FAIL"
+      ],
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-relocated-read.ll": [
+        "PASS",
+        "FAIL"
+      ],
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-allocation-write.ll": [
+        "PASS",
+        "FAIL"
+      ],
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-heap-phi-read.ll": [
+        "PASS",
+        "FAIL"
+      ],
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-heap-select-write.ll": [
+        "PASS",
+        "FAIL"
+      ],
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-allocation-read.ll": [
+        "PASS",
+        "FAIL"
+      ],
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-heap-phi-write.ll": [
+        "PASS",
+        "FAIL"
+      ],
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-invoke-write.ll": [
+        "PASS",
+        "FAIL"
+      ],
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-invoke-read.ll": [
+        "PASS",
+        "FAIL"
+      ]
+    }
+  },
+  "producer": {
+    "counts": {
+      "PASS": 147,
+      "FAIL": 10,
+      "XFAIL": 2,
+      "UNSUPPORTED": 1
+    },
+    "same_test_names": true,
+    "new_failures": [
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-mixed-phi-read.ll",
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-mixed-phi-write.ll"
+    ],
+    "changed_status": {
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-mixed-phi-read.ll": [
+        "PASS",
+        "FAIL"
+      ],
+      "LLVM :: CodeGen/X86/CangjieGC/heap-domain-mixed-phi-write.ll": [
+        "PASS",
+        "FAIL"
+      ]
+    }
+  },
+  "restored": {
+    "counts": {
+      "PASS": 149,
+      "FAIL": 8,
+      "XFAIL": 2,
+      "UNSUPPORTED": 1
+    },
+    "same_test_names": true,
+    "new_failures": [],
+    "changed_status": {}
+  }
+}
