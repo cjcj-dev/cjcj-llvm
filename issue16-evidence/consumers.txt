@@ -21,4 +21,3 @@ HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:853:      RB.readFastPath(CI, getPoi
 HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:858:        RB.readFastPath(CI, CI->getArgOperand(AtomicLoad::Field),
 HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:1067:  readBarrierFastPath(F, Barriers);
 HEAD:llvm/lib/CodeGen/CJBarrierLowering.cpp:1068:  writeBarrierFastPath(F, Barriers);
-

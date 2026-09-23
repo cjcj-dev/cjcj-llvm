@@ -20,4 +20,4 @@ assert s.count(old)==1
 producer=s.replace(old,new)
 out=Path('issue16-evidence')
 for arm,value in [('consumer',consumer),('producer',producer)]:
-    (out/(arm+'.diff')).write_text(''.join(difflib.unified_diff(s.splitlines(True),value.splitlines(True),fromfile='a/'+str(p),tofile='b/'+str(p))))
+    (out/(arm+'.diff')).write_text(''.join(difflib.unified_diff(s.splitlines(True),value.splitlines(True),fromfile='a/'+str(p),tofile='b/'+str(p),n=0)))

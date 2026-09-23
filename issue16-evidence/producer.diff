@@ -1,15 +1,9 @@
 --- a/llvm/lib/CodeGen/CJBarrierLowering.cpp
 +++ b/llvm/lib/CodeGen/CJBarrierLowering.cpp
-@@ -446,9 +446,9 @@
-         return hasHeapAllocationOrigin(Op->getOperand(0), Active, Known);
-     if (auto *Phi = dyn_cast<PHINode>(Ptr)) {
-       for (Value *Incoming : Phi->incoming_values())
+@@ -449,3 +449,3 @@
 -        if (!hasHeapAllocationOrigin(Incoming, Active, Known))
 -          return false;
 -      return Phi->getNumIncomingValues() != 0;
 +        if (hasHeapAllocationOrigin(Incoming, Active, Known))
 +          return true;
 +      return false;
-     }
-     if (auto *Select = dyn_cast<SelectInst>(Ptr))
-       return hasHeapAllocationOrigin(Select->getTrueValue(), Active, Known) &&
