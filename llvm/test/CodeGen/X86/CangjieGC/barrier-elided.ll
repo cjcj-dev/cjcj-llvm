@@ -5,7 +5,8 @@
 ; B0 consumes an existing proof, without introducing a producer.
 
 define void @elided_store(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
-                          i8 addrspace(1)* addrspace(1)* %slot) gc "cangjie" {
+                          i8 addrspace(1)* %slot.address) gc "cangjie" {
+  %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define void @elided_store(
 ; CHECK-NOT: g_cjStoreBadMaskOffset
 ; CHECK-NOT: CJ_MCC_
@@ -21,7 +22,8 @@ define void @elided_store(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
 }
 
 define void @elided_unknown_store(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
-                          i8 addrspace(1)* addrspace(1)* %slot) gc "cangjie" {
+                          i8 addrspace(1)* %slot.address) gc "cangjie" {
+  %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define void @elided_unknown_store(
 ; CHECK-NOT: g_cjStoreBadMaskOffset
 ; CHECK-NOT: CJ_MCC_
@@ -37,7 +39,8 @@ define void @elided_unknown_store(i8 addrspace(1)* %value, i8 addrspace(1)* %bas
 }
 
 define void @ordinary_store(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
-                          i8 addrspace(1)* addrspace(1)* %slot) gc "cangjie" {
+                          i8 addrspace(1)* %slot.address) gc "cangjie" {
+  %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define void @ordinary_store(
 ; CHECK: load i64, i64* @g_cjStoreBadMaskOffset
 ; CHECK: load i64, i64* @g_cjStoreBarrierBufferCurrentOffset
@@ -48,7 +51,8 @@ define void @ordinary_store(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
   ret void
 }
 
-define void @elided_null(i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %slot) gc "cangjie" {
+define void @elided_null(i8 addrspace(1)* %base, i8 addrspace(1)* %slot.address) gc "cangjie" {
+  %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define void @elided_null(
 ; CHECK-NOT: g_cjStoreBadMaskOffset
 ; CHECK-NOT: cj.store.new.bits
@@ -60,8 +64,10 @@ define void @elided_null(i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* 
   ret void
 }
 
-define i8 addrspace(1)* @elided_load(i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %slot) gc "cangjie" {
+define i8 addrspace(1)* @elided_load(i8 addrspace(1)* %base, i8 addrspace(1)* %slot.address) gc "cangjie" {
+  %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define i8 addrspace(1)* @elided_load(
+; CHECK-NEXT: %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-NEXT: [[LOAD:%.*]] = load i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)* %slot, {{.*}}!cj.colored.value
 ; CHECK-NEXT: [[BITS:%.*]] = ptrtoint i8 addrspace(1)* [[LOAD]] to i64
 ; CHECK-NEXT: %cj.load.shift = load i64, i64* @g_cjLoadShift
@@ -72,7 +78,8 @@ define i8 addrspace(1)* @elided_load(i8 addrspace(1)* %base, i8 addrspace(1)* ad
   ret i8 addrspace(1)* %value
 }
 
-define i8 addrspace(1)* @ordinary_load(i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %slot) gc "cangjie" {
+define i8 addrspace(1)* @ordinary_load(i8 addrspace(1)* %base, i8 addrspace(1)* %slot.address) gc "cangjie" {
+  %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define i8 addrspace(1)* @ordinary_load(
 ; CHECK: load i64, i64* @g_cjLoadBadMaskOffset
 ; CHECK: call i8 addrspace(1)* @CJ_MCC_ReadRefField(
@@ -81,20 +88,24 @@ define i8 addrspace(1)* @ordinary_load(i8 addrspace(1)* %base, i8 addrspace(1)* 
   ret i8 addrspace(1)* %value
 }
 
-define i8 addrspace(1)* @elided_static_load(i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %slot) gc "cangjie" {
+@static_slot = global i8 addrspace(1)* null
+
+define i8 addrspace(1)* @elided_static_load() gc "cangjie" {
 ; CHECK-LABEL: define i8 addrspace(1)* @elided_static_load(
-; CHECK-NEXT: [[LOAD:%.*]] = load i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)* %slot{{.*}}!cj.colored.value
+; CHECK-NEXT: [[LOAD:%.*]] = load i8 addrspace(1)*, i8 addrspace(1)** @static_slot{{.*}}!cj.colored.value
 ; CHECK-NEXT: [[BITS:%.*]] = ptrtoint i8 addrspace(1)* [[LOAD]] to i64
 ; CHECK-NEXT: %cj.load.shift = load i64, i64* @g_cjLoadShift
 ; CHECK-NEXT: %cj.load.address = lshr i64 [[BITS]], %cj.load.shift
 ; CHECK-NEXT: [[VALUE:%.*]] = inttoptr i64 %cj.load.address to i8 addrspace(1)*
 ; CHECK-NEXT: ret i8 addrspace(1)* [[VALUE]]
-  %value = call i8 addrspace(1)* @llvm.cj.gcread.static.ref(i8 addrspace(1)* addrspace(1)* %slot), !cj.barrier.elided !0
+  %value = call i8 addrspace(1)* @llvm.cj.gcread.static.ref(i8 addrspace(1)** @static_slot), !cj.barrier.elided !0
   ret i8 addrspace(1)* %value
 }
 
-define i8 addrspace(1)* @elided_atomic_load(i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %slot) gc "cangjie" {
+define i8 addrspace(1)* @elided_atomic_load(i8 addrspace(1)* %base, i8 addrspace(1)* %slot.address) gc "cangjie" {
+  %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define i8 addrspace(1)* @elided_atomic_load(
+; CHECK-NEXT: %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-NEXT: [[LOAD:%.*]] = load atomic i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)* %slot{{.*}}!cj.colored.value
 ; CHECK-NEXT: [[BITS:%.*]] = ptrtoint i8 addrspace(1)* [[LOAD]] to i64
 ; CHECK-NEXT: %cj.load.shift = load i64, i64* @g_cjLoadShift
@@ -109,5 +120,5 @@ declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspa
 declare i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*)
 !0 = !{}
 
-declare i8 addrspace(1)* @llvm.cj.gcread.static.ref(i8 addrspace(1)* addrspace(1)*)
+declare i8 addrspace(1)* @llvm.cj.gcread.static.ref(i8 addrspace(1)**)
 declare i8 addrspace(1)* @llvm.cj.atomic.load(i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, i32)
