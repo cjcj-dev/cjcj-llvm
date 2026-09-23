@@ -478,10 +478,19 @@ public:
 
   ~ReadBarrier() = default;
 
-  void readFastPath(CallInst *ReadBarrier, Value *RefFieldPtr,
+  bool readFastPath(CallInst *ReadBarrier, Value *RefFieldPtr,
                     uint64_t Order = 0) {
     setBarrier(ReadBarrier);
     IRBuilder<> Builder(ReadInst);
+    // z_x86_64.ad:61-82: an elided heap load still uncolors its loaded value.
+    if (ReadInst->getMetadata(BarrierElidedMD)) {
+      LoadInst *Load = loadTaggedPointer(Builder, RefFieldPtr, Order);
+      Value *Bits = Builder.CreatePtrToInt(Load, Builder.getInt64Ty());
+      Value *Uncolored = uncolor(Builder, Bits);
+      ReadInst->replaceAllUsesWith(Uncolored);
+      ReadInst->eraseFromParent();
+      return true;
+    }
     BasicBlock *Domain = nullptr;
     Value *InHeap = nullptr;
     if (ReadBarrier->getIntrinsicID() == Intrinsic::cj_gcread_ref &&
@@ -501,6 +510,7 @@ public:
     PtrToInt->setDebugLoc(*Loc);
     Value *CmpEQ = cmpTaggedPointer(PtrToInt, Builder);
     splitFastPathAndSlowPath(ReadInst->getParent(), CmpEQ, PtrToInt, Domain, InHeap);
+    return false;
   }
 
   // insert a load from RefFieldPtr:
@@ -558,6 +568,18 @@ public:
         BasicBlock::Create(C, "gcNoMarked", SplitBB->getParent(), Succ);
     BranchInst::Create(Succ, TrueBranch);
     IRBuilder<> Builder(TrueBranch->getTerminator());
+    Value *Uncolored = uncolor(Builder, PtrToInt);
+    Instruction *OriginBr = SplitBB->getTerminator();
+    IRBuilder<> BuilderBr(OriginBr);
+    BuilderBr.CreateCondBr(Condition, TrueBranch, FalseBranch);
+    OriginBr->eraseFromParent();
+    TrueBranch->getTerminator()->setDebugLoc(*Loc);
+    FalseBranch->getTerminator()->setDebugLoc(*Loc);
+    handleSuccPhi(FalseBranch, Uncolored, TrueBranch, Succ);
+    return;
+  }
+
+  Value *uncolor(IRBuilder<> &Builder, Value *PtrToInt) {
     // ZPointer::uncolor, zAddress.inline.hpp:609-614. The fast path has
     // established the current remap epoch, so use its published load shift.
     Type *I64 = Type::getInt64Ty(C);
@@ -568,14 +590,7 @@ public:
     Instruction *Uncolored =
         cast<Instruction>(Builder.CreateIntToPtr(Address, DstTy));
     Uncolored->setDebugLoc(*Loc);
-    Instruction *OriginBr = SplitBB->getTerminator();
-    IRBuilder<> BuilderBr(OriginBr);
-    BuilderBr.CreateCondBr(Condition, TrueBranch, FalseBranch);
-    OriginBr->eraseFromParent();
-    TrueBranch->getTerminator()->setDebugLoc(*Loc);
-    FalseBranch->getTerminator()->setDebugLoc(*Loc);
-    handleSuccPhi(FalseBranch, Uncolored, TrueBranch, Succ);
-    return;
+    return Uncolored;
   }
 
   PHINode *handleSuccPhi(BasicBlock *FalseBranch, Value *FastInst,
@@ -608,12 +623,28 @@ class WriteBarrier {
 public:
   explicit WriteBarrier(Function &F) : M(F.getParent()), C(F.getContext()) {}
 
-  void storeFastPath(CallInst *CI) {
+  bool storeFastPath(CallInst *CI) {
     IRBuilder<> B(CI);
     B.SetCurrentDebugLocation(CI->getDebugLoc());
     Value *Place = getPointerArg(CI);
     Value *NewVal = getValueArg(CI);
     Type *I64 = B.getInt64Ty();
+    // z_x86_64.ad:84-99: route before constructing checks or registering stubs.
+    if (CI->getMetadata(BarrierElidedMD)) {
+      Value *Colored;
+      if (isa<ConstantPointerNull>(NewVal)) {
+        // zStorePNull, z_x86_64.ad:180-185, stores a colored null directly.
+        Colored = loadThreadMask(B, M, loadThreadGCData(B, M),
+                                 "g_cjStoreGoodMaskOffset", "cj.storegoodmask");
+      } else {
+        Colored = color(B, NewVal);
+      }
+      Value *WordPtr = B.CreateBitCast(Place,
+          PointerType::get(I64, Place->getType()->getPointerAddressSpace()));
+      B.CreateStore(Colored, WordPtr, true);
+      CI->eraseFromParent();
+      return true;
+    }
     Function *F = CI->getFunction();
     BasicBlock *Entry = CI->getParent();
     BasicBlock *Done = Entry->splitBasicBlock(CI, "storeDone");
@@ -656,7 +687,7 @@ public:
     FunctionType *SlowTy = FunctionType::get(B.getVoidTy(), {Place->getType()}, false);
     B.CreateCall(M->getOrInsertFunction(Name, SlowTy), {Place});
     B.CreateBr(Store);
-
+    return false;
   }
 
 private:
@@ -676,6 +707,11 @@ private:
     B.CreateCondBr(B.CreateICmpEQ(Bad, B.getInt64(0)), Store, Medium);
 
     B.SetInsertPoint(Store);
+    return color(B, NewVal);
+  }
+
+  Value *color(IRBuilder<> &B, Value *NewVal) {
+    Type *I64 = B.getInt64Ty();
     FunctionType *CopyTy = FunctionType::get(I64, {NewVal->getType()}, false);
     const Triple TT(M->getTargetTriple());
     InlineAsm *Copy = InlineAsm::get(CopyTy,
@@ -787,16 +823,21 @@ void CJBarrierLowering::writeBarrierFastPath(Function &F,
                                              SetVector<CallInst *> &Barriers) {
   if (EnableTaggedPointer && !CangjieJIT) {
     WriteBarrier WB(F);
+    SmallVector<CallInst *, 8> Elided;
     for (CallInst *CI : Barriers) {
       if (!CI->getParent())
         continue;
       if (CI->getIntrinsicID() != Intrinsic::cj_gcwrite_ref)
         continue;
-      // Legacy and explicit unknown accesses use the runtime accessor.
-      if (storeStrength(CI) == GCWriteRef::Unknown)
+      // Without an elision proof, unknown accesses use the runtime accessor.
+      if (storeStrength(CI) == GCWriteRef::Unknown &&
+          !CI->getMetadata(BarrierElidedMD))
         continue;
-      WB.storeFastPath(CI);
+      if (WB.storeFastPath(CI))
+        Elided.push_back(CI);
     }
+    for (CallInst *CI : Elided)
+      Barriers.remove(CI);
   }
 
   if (CangjieJIT)
@@ -844,22 +885,27 @@ void CJBarrierLowering::readBarrierFastPath(Function &F,
     return;
 
   ReadBarrier RB(F);
+  SmallVector<CallInst *, 8> Elided;
   for (CallInst *CI : Barriers) {
     if (!CI->getParent())
       continue;
     unsigned ID = CI->getIntrinsicID();
     if (ID == Intrinsic::cj_gcread_ref ||
         ID == Intrinsic::cj_gcread_static_ref) {
-      RB.readFastPath(CI, getPointerArg(CI));
+      if (RB.readFastPath(CI, getPointerArg(CI)))
+        Elided.push_back(CI);
       continue;
     }
     if (ID == Intrinsic::cj_atomic_load) {
       if (auto AO = dyn_cast<ConstantInt>(getAtomicOrder(CI))) {
-        RB.readFastPath(CI, CI->getArgOperand(AtomicLoad::Field),
-                        AO->getZExtValue());
+        if (RB.readFastPath(CI, CI->getArgOperand(AtomicLoad::Field),
+                            AO->getZExtValue()))
+          Elided.push_back(CI);
       }
     }
   }
+  for (CallInst *CI : Elided)
+    Barriers.remove(CI);
 }
 
 void CJBarrierLowering::doLowering(Function &F) {
