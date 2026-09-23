@@ -10,6 +10,7 @@ define void @elided_store(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
   %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define void @elided_store(
 ; CHECK-NOT: g_cjStoreBadMaskOffset
+; CHECK-NOT: cj.storebadmask
 ; CHECK-NOT: CJ_MCC_
 ; CHECK: %cj.store.new.bits = call i64 asm
 ; CHECK: load i64, i64* @g_cjLoadShift
@@ -29,6 +30,7 @@ define void @elided_unknown_store(i8 addrspace(1)* %value, i8 addrspace(1)* %bas
   %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define void @elided_unknown_store(
 ; CHECK-NOT: g_cjStoreBadMaskOffset
+; CHECK-NOT: cj.storebadmask
 ; CHECK-NOT: CJ_MCC_
 ; CHECK: %cj.store.new.bits = call i64 asm
 ; CHECK: load i64, i64* @g_cjLoadShift
@@ -64,6 +66,7 @@ define void @elided_null(i8 addrspace(1)* %base, i8 addrspace(1)* %slot.address)
   %slot = bitcast i8 addrspace(1)* %slot.address to i8 addrspace(1)* addrspace(1)*
 ; CHECK-LABEL: define void @elided_null(
 ; CHECK-NOT: g_cjStoreBadMaskOffset
+; CHECK-NOT: cj.storebadmask
 ; CHECK-NOT: cj.store.new.bits
 ; CHECK-NOT: g_cjLoadShift
 ; CHECK: call i8* asm sideeffect "movq ${1:c}(%r15), $0", "=r,i,~{memory}"(i64 96)
