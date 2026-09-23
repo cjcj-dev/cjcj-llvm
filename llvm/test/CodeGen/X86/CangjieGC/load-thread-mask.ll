@@ -1,3 +1,4 @@
+; Heap slow entry: ZGC zBarrierSetAssembler_x86.cpp:305-331 (o,p).
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
 ; ZGC zBarrierSetAssembler_x86.cpp:274-331: non-nmethod mask test.
 define i8 addrspace(1)* @read(i8 addrspace(1)* %base,
@@ -9,7 +10,7 @@ define i8 addrspace(1)* @read(i8 addrspace(1)* %base,
 ; CHECK: %cj.loadbadmask = load i64
 ; CHECK: and i64 [[RAW]], %cj.loadbadmask
 ; CHECK: gcMarked:
-; CHECK: call i8 addrspace(1)* @CJ_MCC_ReadRefField
+; CHECK: call i8 addrspace(1)* @CJ_MCC_LoadBarrierOnOopFieldPreloaded
   %value = call i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %slot)
   ret i8 addrspace(1)* %value
 }

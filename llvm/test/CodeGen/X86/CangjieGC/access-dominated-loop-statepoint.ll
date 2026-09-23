@@ -1,3 +1,4 @@
+; Heap slow entry: ZGC zBarrierSetAssembler_x86.cpp:305-331 (o,p).
 ; RUN: opt -passes=cj-ir-verifier -disable-output < %s
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O0 -enable-gc-fast-path=false -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O2 -enable-gc-fast-path=false -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
@@ -19,7 +20,7 @@ dom:
 ; CHECK-LABEL: define i8 addrspace(1)* @probe(
 ; CHECK: store volatile i64 %word, i64* %alias
 ; CHECK: %cj.loadbadmask = load i64
-; CHECK: call i8 addrspace(1)* @CJ_MCC_ReadRefField(
+; CHECK: call i8 addrspace(1)* @CJ_MCC_LoadBarrierOnOopFieldPreloaded(
 ; CHECK: ret i8 addrspace(1)*
   br label %loop
 loop:

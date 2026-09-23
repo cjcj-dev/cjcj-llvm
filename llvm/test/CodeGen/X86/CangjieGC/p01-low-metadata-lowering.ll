@@ -27,7 +27,7 @@ define i8 addrspace(1)* @p01_read(i8 addrspace(1)* %base,
                                  i8 addrspace(1)* addrspace(1)* %slot) gc "cangjie" {
 ; CHECK-LABEL: define i8 addrspace(1)* @p01_read(
 ; CHECK: %cj.read.inheap.result = phi i1
-; CHECK: br i1 %cj.read.inheap.result, label %loadFast, label %gcMarked
+; CHECK: br i1 %cj.read.inheap.result, label %loadFast, label %loadAccessor
 ; CHECK: loadFast:
 ; CHECK: and i64 {{.*}}, %cj.loadbadmask
 ; CHECK: br i1 {{.*}}, label %gcNoMarked, label %gcMarked
