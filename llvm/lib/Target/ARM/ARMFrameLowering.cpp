@@ -1703,31 +1703,47 @@ void ARMFrameLowering::emitPopInst(MachineBasicBlock &MBB,
         // 4: size of pc
         emitSPUpdate(!AFI->isThumbFunction(), MBB, MI, DL, *STI.getInstrInfo(),
                      4, MachineInstr::FrameDestroy);
+        // MIB2 holds LR or PC, so it is MIB2 that performs the return once the
+        // return instruction is folded into the pop.
         auto MIB2 = BuildMI(MBB, MI, DL, TII.get(LdmOpc), ARM::SP)
                         .addReg(ARM::SP)
                         .add(predOps(ARMCC::AL))
                         .setMIFlags(MachineInstr::FrameDestroy);
+        bool AnyLowReg = false;
         for (unsigned i = 0, e = Regs.size(); i < e; ++i)
           if (TRI.getEncodingValue(Regs[i]) <
-              TRI.getEncodingValue(TRI.getFrameRegister(*MF)))
-            // r11, lr
+              TRI.getEncodingValue(TRI.getFrameRegister(*MF))) {
+            // Below the frame register: the low half.
             MIB.addReg(Regs[i], getDefRegState(true));
-          else
+            AnyLowReg = true;
+          } else {
+            // The frame register and everything above it: the high half.
             MIB2.addReg(Regs[i], getDefRegState(true));
-        // Empty csr operands
-        if (MIB->getDesc().getNumOperands() > MIB->getNumOperands())
+          }
+        // A low half without registers would be a registerless pop.
+        if (!AnyLowReg)
           MIB->eraseFromParent();
+        // The folded return is MIB2, so the implicit operands of the old return
+        // instruction (the return value registers) belong there. MIB may have
+        // been erased above and is not the returning instruction anyway.
+        if (DeleteRet) {
+          if (MI != MBB.end()) {
+            MIB2.copyImplicitOps(*MI);
+            MI->eraseFromParent();
+          }
+        }
+        MI = MIB2;
       } else {
         for (unsigned i = 0, e = Regs.size(); i < e; ++i)
           MIB.addReg(Regs[i], getDefRegState(true));
-      }
-      if (DeleteRet) {
-        if (MI != MBB.end()) {
-          MIB.copyImplicitOps(*MI);
-          MI->eraseFromParent();
+        if (DeleteRet) {
+          if (MI != MBB.end()) {
+            MIB.copyImplicitOps(*MI);
+            MI->eraseFromParent();
+          }
         }
+        MI = MIB;
       }
-      MI = MIB;
     } else if (Regs.size() == 1) {
       // If we adjusted the reg to PC from LR above, switch it back here. We
       // only do that for LDM.
