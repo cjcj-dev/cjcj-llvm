@@ -18,7 +18,7 @@ declare void @llvm.cj.gcwrite.struct(i8 addrspace(1)*, i8 addrspace(1)*, i8*, i6
 ; CHECK-NEXT: %4 = bitcast i8* %3 to i8 addrspace(1)**
 ; CHECK-NEXT: %5 = load i8 addrspace(1)*, i8 addrspace(1)** %4, align 8
 ; CHECK-NEXT: %6 = bitcast i8 addrspace(1)* %2 to i8 addrspace(1)* addrspace(1)*
-; CHECK-NEXT: call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %5, i8 addrspace(1)* %this, i8 addrspace(1)* addrspace(1)* %6)
+; CHECK-NEXT: call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %5, i8 addrspace(1)* %this, i8 addrspace(1)* addrspace(1)* %6, i32 1)
 ; CHECK-NEXT: ret void
 
 
@@ -43,7 +43,7 @@ entry1:
 ; CHECK-NEXT: %6 = bitcast i8* %5 to i8 addrspace(1)**
 ; CHECK-NEXT: %7 = load i8 addrspace(1)*, i8 addrspace(1)** %6, align 8
 ; CHECK-NEXT: %8 = bitcast i8 addrspace(1)* %4 to i8 addrspace(1)* addrspace(1)*
-; CHECK-NEXT: call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %7, i8 addrspace(1)* %this, i8 addrspace(1)* addrspace(1)* %8)
+; CHECK-NEXT: call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %7, i8 addrspace(1)* %this, i8 addrspace(1)* addrspace(1)* %8, i32 1)
 ; CHECK-NEXT: ret void
 
 
@@ -68,7 +68,7 @@ entry2:
 ; CHECK-NEXT: %6 = bitcast i8* %5 to i8 addrspace(1)**
 ; CHECK-NEXT: %7 = load i8 addrspace(1)*, i8 addrspace(1)** %6, align 8
 ; CHECK-NEXT: %8 = bitcast i8 addrspace(1)* %4 to i8 addrspace(1)* addrspace(1)*
-; CHECK-NEXT: call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %7, i8 addrspace(1)* %this, i8 addrspace(1)* addrspace(1)* %8)
+; CHECK-NEXT: call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %7, i8 addrspace(1)* %this, i8 addrspace(1)* addrspace(1)* %8, i32 1)
 ; CHECK-NEXT: %9 = getelementptr inbounds i8, i8 addrspace(1)* %2, i32 16
 ; CHECK-NEXT: %10 = getelementptr inbounds i8, i8* %3, i32 16
 ; CHECK-NEXT: call void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)* align 8 %9, i8* align 8 %10, i64 8, i1 false)
