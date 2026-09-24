@@ -356,7 +356,12 @@ public:
       DstCast = IRB.CreateBitCast(DstPtr, Int8AS1Ty->getPointerTo(1));
       Function *Callee =
           Intrinsic::getDeclaration(M, Intrinsic::cj_gcwrite_ref);
-      WriteRef = IRB.CreateCall(Callee, {LI, BaseObj, DstCast});
+      // Value-record slots are statically strong, even when BaseObj is an
+      // interior record address. ZGC zBarrierSet.inline.hpp:232-242 selects
+      // known strength before the store; only unknown oop accesses inspect
+      // the holder's Reference type.
+      WriteRef = IRB.CreateCall(
+          Callee, {LI, BaseObj, DstCast, IRB.getInt32(GCWriteRef::Strong)});
     } else {
       DstCast = IRB.CreateBitCast(DstPtr, Int8AS1Ty->getPointerTo());
       Function *Callee =
