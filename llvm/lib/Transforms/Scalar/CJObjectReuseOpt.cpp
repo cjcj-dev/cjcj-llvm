@@ -312,7 +312,18 @@ void CJObjectReuseOpt::adjustForReuseByLiveInterval(
             // MayAlias means we couldn't decide whether to replace mem or not,
             // PartialAlias means we should replace mem partly, currently not
             // support.
-            if (AliasRes == AliasResult::MayAlias ||
+            // The rewrite below substitutes memory-equivalent addresses only;
+            // it cannot preserve an interior field offset. In particular, SROA
+            // may hoist a field GEP before the constructor's live interval, so
+            // replacing the constructor receiver does not redirect that GEP.
+            // CJ alias analysis can report NoAlias for scalar fields of a GC
+            // record. Check the common allocation independently of that result
+            // before accepting a whole-object reuse candidate.
+            Value *Receiver = CJVar->getArgOperand(0);
+            bool HasInteriorAddress =
+                getUnderlyingObject(&Instr) == getUnderlyingObject(Receiver) &&
+                Instr.stripPointerCasts() != Receiver->stripPointerCasts();
+            if (HasInteriorAddress || AliasRes == AliasResult::MayAlias ||
                 AliasRes == AliasResult::PartialAlias) {
               AddCJVarToLiveIntervalMap = false;
               SkipCB.insert(CJVar);
