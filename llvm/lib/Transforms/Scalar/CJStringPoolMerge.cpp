@@ -388,9 +388,12 @@ unsigned eraseMergedBuffers(MergeableList &mergeable) {
 // that happens to carry the attribute (foreign IR, attribute-marked
 // aggregates) is left untouched, so a store to such a global can never be
 // turned into a store to read-only memory.
+// Registered runtime String caches remain writable for materialization and
+// native-root healing (ZGC zBarrierSet.inline.hpp:258-265). Their existing
+// CJGlobalValue marker is distinct from deferred compile-time literals.
 void restoreConstantLiterals(Module &M) {
   for (auto &gv : M.globals())
-    if (isStringLiteral(gv) && isStringRecordGV(gv))
+    if (isStringLiteral(gv) && isStringRecordGV(gv) && !gv.isCJGlobalValue())
       gv.setConstant(true);
 }
 
