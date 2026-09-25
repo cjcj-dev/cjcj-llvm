@@ -1,6 +1,6 @@
 ; RUN: split-file %s %t
 ; RUN: opt -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/allocation.ll 2>&1 | FileCheck %s --check-prefix=ALLOC
-; RUN: opt -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/gcread.ll 2>&1 | FileCheck %s --check-prefix=GCREAD
+; RUN: not --crash opt -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/gcread.ll 2>&1 | FileCheck %s --check-prefix=GCREAD
 ; RUN: opt -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/language.ll 2>&1 | FileCheck %s --check-prefix=LANGUAGE
 ; RUN: opt -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/indirect.ll 2>&1 | FileCheck %s --check-prefix=INDIRECT
 ; RUN: opt -cj-ir-verifier-mode=report -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/allocation.ll 2>&1 | FileCheck %s --check-prefix=REPORT-ALLOC
@@ -12,10 +12,10 @@
 ; ALLOC-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
 ; ALLOC: in function keep_managed_allocation
 ; ALLOC-NOT: LLVM ERROR
+; GCREAD: P01: plain local root must not use a colored static read barrier
 ; GCREAD: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
-; GCREAD-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
 ; GCREAD: in function keep_managed_gcread
-; GCREAD-NOT: LLVM ERROR
+; GCREAD: LLVM ERROR: Broken function found, compilation aborted
 ; LANGUAGE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; LANGUAGE-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
 ; LANGUAGE: in function keep_managed_language_call
@@ -27,6 +27,7 @@
 ; REPORT-ALLOC: keep_managed_allocation{{[[:space:]]}}Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]{{[[:space:]]}}memcpy
 ; REPORT-ALLOC-NOT: LLVM ERROR
 ; REPORT-ALLOC-NOT: in function
+; REPORT-GCREAD: keep_managed_gcread{{[[:space:]]}}P01: plain local root must not use a colored static read barrier
 ; REPORT-GCREAD: keep_managed_gcread{{[[:space:]]}}Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]{{[[:space:]]}}memcpy
 ; REPORT-GCREAD-NOT: LLVM ERROR
 ; REPORT-GCREAD-NOT: in function
