@@ -424,8 +424,7 @@ static bool simplySplit(Function *F) {
   return Changed;
 }
 
-PreservedAnalyses CJBarrierSplit::run(Module &M,
-                                      ModuleAnalysisManager &) const {
+static bool splitModuleBarrier(Module &M) {
   auto C = &(M.getContext());
   int LongSize = M.getDataLayout().getPointerSizeInBits();
   auto IntptrTy = Type::getIntNTy(*C, LongSize);
@@ -441,7 +440,13 @@ PreservedAnalyses CJBarrierSplit::run(Module &M,
   bool Changed = false;
   for (auto *F : AggBarrierIntrinsics)
     Changed |= simplySplit(F);
-  return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+  return Changed;
+}
+
+PreservedAnalyses CJBarrierSplit::run(Module &M,
+                                    ModuleAnalysisManager &) const {
+  return splitModuleBarrier(M) ? PreservedAnalyses::none()
+                               : PreservedAnalyses::all();
 }
 
 namespace {
@@ -455,16 +460,7 @@ public:
   ~CJBarrierSplitLegacyPass() = default;
 
   bool runOnModule(Module &M) override {
-    SmallVector<Function *> AggBarrierIntrinsics = {
-        Intrinsic::getDeclaration(&M, Intrinsic::cj_gcread_struct),
-        Intrinsic::getDeclaration(&M, Intrinsic::cj_gcwrite_struct,
-                                  {Type::getInt8PtrTy(M.getContext())}),
-        Intrinsic::getDeclaration(&M, Intrinsic::cj_gcread_static_struct),
-        Intrinsic::getDeclaration(&M, Intrinsic::cj_gcwrite_static_struct)};
-    bool Changed = false;
-    for (auto *F : AggBarrierIntrinsics)
-      Changed |= simplySplit(F);
-    return Changed;
+    return splitModuleBarrier(M);
   }
 };
 } // namespace
