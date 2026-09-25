@@ -1,4 +1,5 @@
 ; RUN: opt -passes=cj-ir-verifier -disable-output < %s
+; RUN: llc -mtriple=x86_64 -O0 -enable-gc-fast-path=false -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O0 -enable-gc-fast-path=false -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O2 -enable-gc-fast-path=false -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s
 ; Regression for direct llc input: cj.memset is legal initialization.
@@ -17,6 +18,7 @@ entry:
   %slot = addrspacecast %Plain* %plain to i8 addrspace(1)* addrspace(1)*
   call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %value, i8 addrspace(1)* %heap, i8 addrspace(1)* addrspace(1)* %slot, i32 1)
 ; CHECK-LABEL: define i8 addrspace(1)* @probe(
+; CHECK: call void @llvm.memset.p0i8.i64(i8* %init, i8 0, i64 8, i1 false)
 ; CHECK: store volatile i64 %word, i64* %alias
 ; CHECK: %cj.loadbadmask = load i64
 ; CHECK: call i8 addrspace(1)* @CJ_MCC_ReadRefField(

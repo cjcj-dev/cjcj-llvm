@@ -1132,8 +1132,6 @@ bool TargetPassConfig::addISelPasses() {
       addPass(createCangjieSpecificOptLegacyPass(0));
       addPass(createPlaceSafepointsLegacyPass());
       addPass(createCJRewriteStatepointLegacyPass(0));
-    } else {
-      addPass(createCJMemsetLoweringLegacyPass());
     }
     if (CangjieThreadSanitizer) {
       addPass(createThreadSanitizerPass());
@@ -1143,7 +1141,11 @@ bool TargetPassConfig::addISelPasses() {
   // A function's GC strategy is sufficient to identify Cangjie barrier IR.
   // Frontends can feed such IR directly to llc without selecting the wider
   // optimization pipeline, but the barriers must still be consumed before
-  // instruction selection.
+  // instruction selection. That same direct entry still carries llvm.cj.memset.
+  // Rewrite it with the shared lowerCJMemset before barrier lowering and ISel.
+  // JIT already rewrites it inside createCangjieSpecificOptLegacyPass.
+  if (!CangjieJIT)
+    addPass(createCJMemsetLoweringLegacyPass());
   addPass(createCJBarrierLoweringPass(getOptLevel()));
 
   addIRPasses();

@@ -1,4 +1,5 @@
 ; RUN: not --crash opt -passes=cj-ir-verifier -disable-output < %s 2>&1 | FileCheck %s --check-prefix=VERIFY
+; RUN: llc -mtriple=x86_64 -O0 -enable-gc-fast-path=false -o /dev/null < %s
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -O0 -enable-gc-fast-path=false -o /dev/null < %s
 ; VERIFY: Missing cj.memset in allocation of structure.
 target datalayout = "e-m:e-p:64:64-p1:64:64-i64:64-n8:16:32:64-S128"
