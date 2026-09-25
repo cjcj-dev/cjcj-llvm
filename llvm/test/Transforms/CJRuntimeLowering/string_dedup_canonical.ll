@@ -8,7 +8,8 @@ define i8 addrspace(1)* @canonicalize(i8* %ti, i8 addrspace(1)* %candidate) {
 ; DEDUP-LABEL: @canonicalize(
 ; DEDUP: call i8 addrspace(1)* @CJ_MCC_StringDedupCanonical(i8* %ti, i8 addrspace(1)* %candidate)
 ; DEDUP: declare i8 addrspace(1)* @CJ_MCC_StringDedupCanonical(i8*, i8 addrspace(1)*) [[RT:#[0-9]+]]
-; DEDUP: attributes [[RT]] = { "cj-runtime" }
+; DEDUP: declare i8 addrspace(1)* @CJ_MCC_FillInStackTrace(i8*, i8 addrspace(1)*) [[RT]]
+; DEDUP: attributes [[RT]] = { nounwind "cj-runtime" }
   %backing = call i8 addrspace(1)* @llvm.cj.string.dedup.canonical(i8* %ti, i8 addrspace(1)* %candidate)
   ret i8 addrspace(1)* %backing
 }
