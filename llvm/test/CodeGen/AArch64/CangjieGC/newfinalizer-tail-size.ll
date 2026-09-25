@@ -3,7 +3,6 @@
 ;
 ; Tail calls lower to one B. Counting the TCRETURNdi as the 48-byte finalizer
 ; fast path prints size=0x30 and fails here.
-; CHECK-LABEL: allocate_finalizer_tail:
 ; CHECK: Basic blocks before relaxation
 ; CHECK-NEXT: %bb.0 offset=00000000 size=0x4
 

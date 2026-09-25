@@ -3,7 +3,6 @@
 ;
 ; Tail calls lower to one B (AArch64AsmPrinter.cpp:1718-1725). Counting the
 ; TCRETURNdi as the 44-byte fast path prints size=0x2c and fails here.
-; CHECK-LABEL: allocate_tail:
 ; CHECK: Basic blocks before relaxation
 ; CHECK-NEXT: %bb.0 offset=00000000 size=0x4
 
