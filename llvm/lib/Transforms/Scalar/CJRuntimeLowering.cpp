@@ -94,6 +94,8 @@ const static StdMap<unsigned, RuntimeLoweringInfo> RuntimeMap {
     {Intrinsic::cj_post_throw_exception, {"CJ_MCC_PostThrowException", false}},
     {Intrinsic::cj_throw_exception, {"CJ_MCC_ThrowException", true}},
     {Intrinsic::cj_fill_in_stack_trace, {"CJ_MCC_FillInStackTrace", true}},
+    {Intrinsic::cj_string_dedup_canonical,
+     {"CJ_MCC_StringDedupCanonical", true}},
     {Intrinsic::cj_pre_initialize_package,
      {"CJ_MRT_PreInitializePackage", false}},
     {Intrinsic::cj_get_exception_wrapper, {"CJ_MCC_GetExceptionWrapper", false}},
@@ -1067,6 +1069,7 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
     case Intrinsic::cj_remove_exported_ref:
     case Intrinsic::cj_create_export_handle:
     case Intrinsic::cj_fill_in_stack_trace:
+    case Intrinsic::cj_string_dedup_canonical:
       Lowering.replaceWithRuntimeFunc(CI, false, false);
       Changed = true;
       break;
