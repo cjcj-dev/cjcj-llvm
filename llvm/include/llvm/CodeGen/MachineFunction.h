@@ -271,6 +271,9 @@ class LLVM_EXTERNAL_VISIBILITY MachineFunction {
   // Keep track of objects allocated on the stack.
   MachineFrameInfo *FrameInfo;
 
+  // GC references that remain in ABI return registers after frame teardown.
+  SmallVector<unsigned, 4> CJReturnRootRegs;
+
   // Keep track of constants which are spilled to memory
   MachineConstantPool *ConstantPool;
 
@@ -681,6 +684,15 @@ public:
   /// frame of the current function in an abstract way.
   MachineFrameInfo &getFrameInfo() { return *FrameInfo; }
   const MachineFrameInfo &getFrameInfo() const { return *FrameInfo; }
+
+  void addCJReturnRootReg(unsigned Reg) {
+    for (unsigned Existing : CJReturnRootRegs)
+      if (Existing == Reg)
+        return;
+    CJReturnRootRegs.push_back(Reg);
+  }
+  ArrayRef<unsigned> getCJReturnRootRegs() const { return CJReturnRootRegs; }
+
 
   /// getJumpTableInfo - Return the jump table info object for the current
   /// function.  This object contains information about jump tables in the

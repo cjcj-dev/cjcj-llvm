@@ -7042,6 +7042,11 @@ AArch64TargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
        ++i, ++realRVLocIdx) {
     CCValAssign &VA = RVLocs[i];
     assert(VA.isRegLoc() && "Can only return in registers!");
+    if (MF.getFunction().hasCangjieGC() &&
+        Outs[realRVLocIdx].Flags.isPointer() &&
+        Outs[realRVLocIdx].Flags.getPointerAddrSpace() == 1)
+      MF.addCJReturnRootReg(VA.getLocReg());
+
     SDValue Arg = OutVals[realRVLocIdx];
 
     switch (VA.getLocInfo()) {

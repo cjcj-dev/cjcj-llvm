@@ -1304,6 +1304,14 @@ bool X86FastISel::X86SelectRet(const Instruction *I) {
   }
   for (unsigned i = 0, e = RetRegs.size(); i != e; ++i)
     MIB.addReg(RetRegs[i], RegState::Implicit);
+  if (F.hasCangjieGC() && Ret->getNumOperands() == 1) {
+    if (auto *PT = dyn_cast<PointerType>(Ret->getOperand(0)->getType())) {
+      if (PT->getAddressSpace() == 1) {
+        for (unsigned R : RetRegs)
+          FuncInfo.MF->addCJReturnRootReg(R);
+      }
+    }
+  }
   return true;
 }
 
