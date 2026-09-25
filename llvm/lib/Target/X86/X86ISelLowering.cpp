@@ -3106,11 +3106,6 @@ X86TargetLowering::LowerReturn(SDValue Chain, CallingConv::ID CallConv,
        ++I, ++OutsIndex) {
     CCValAssign &VA = RVLocs[I];
     assert(VA.isRegLoc() && "Can only return in registers!");
-    if (MF.getFunction().hasCangjieGC() &&
-        Outs[OutsIndex].Flags.isPointer() &&
-        Outs[OutsIndex].Flags.getPointerAddrSpace() == 1)
-      MF.addCJReturnRootReg(VA.getLocReg());
-
 
     // Add the register to the CalleeSaveDisableRegs list.
     if (ShouldDisableCalleeSavedRegister)
