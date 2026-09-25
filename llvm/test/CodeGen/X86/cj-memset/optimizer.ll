@@ -15,7 +15,7 @@ define double @optimized(i8* %dst, double %x, double %y) gc "cangjie" {
 }
 
 ; CHECK-LABEL: define double @unoptimized(
-; CHECK: call void @llvm.cj.memset(i8* %dst, i8 0, i64 8, i1 false)
+; CHECK: call void @llvm.cj.memset.p0i8(i8* %dst, i8 0, i64 8, i1 false)
 ; CHECK: %p = call double @llvm.pow.f64(double %x, double %y)
 ; CHECK: ret double %p
 define double @unoptimized(i8* %dst, double %x, double %y) noinline optnone gc "cangjie" {
