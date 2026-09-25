@@ -851,21 +851,9 @@ void SCCPInstVisitor::visitPHINode(PHINode &PN) {
     VisitedPhi.insert(&PN);
   }
 
-  bool IsInLoop = PhiInfo.count(&PN) ? PhiInfo[&PN].first : false;
-  bool AllConstants = PhiInfo.count(&PN) ? PhiInfo[&PN].second : false;
-
   for (unsigned i = 0, e = PN.getNumIncomingValues(); i != e; ++i) {
     if (!isEdgeFeasible(PN.getIncomingBlock(i), PN.getParent()))
       continue;
-
-    if (PN.getNumIncomingValues() == IncomingSZ && IsInLoop && AllConstants) {
-      if (!AnalysisResults[F]
-               .LI->getLoopFor(PN.getParent())
-               ->contains(PN.getIncomingBlock(i))) {
-        ++NumActiveIncoming;
-        continue;
-      }
-    }
 
     ValueLatticeElement IV = getValueState(PN.getIncomingValue(i));
     PhiState.mergeIn(IV);
