@@ -2372,18 +2372,23 @@ void AArch64AsmPrinter::emitCJReturnPollStubs() {
     OutStreamer->emitLabel(Poll.second);
     auto *Handler = MCSymbolRefExpr::create(
         OutContext.getOrCreateSymbol("CJ_MCC_HandleReturnSafepoint"), OutContext);
-    // A PLT veneer uses x16/x17. Load the resolved target before publishing
-    // the return-site PC in x16, then branch without changing LR or SP.
+    // x17 must be startPC and x16 the return-site PC at the handler entry.
+    // A PLT veneer would clobber both, so the resolved target goes in x9
+    // (AAPCS caller-saved, not an AAPCS return register) before those adrs.
+    // br does not change LR or SP.
     EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::ADRP)
-        .addReg(AArch64::X17)
+        .addReg(AArch64::X9)
         .addExpr(AArch64MCExpr::create(Handler, AArch64MCExpr::VK_GOT_PAGE, OutContext)));
     EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::LDRXui)
-        .addReg(AArch64::X17).addReg(AArch64::X17)
+        .addReg(AArch64::X9).addReg(AArch64::X9)
         .addExpr(AArch64MCExpr::create(Handler, AArch64MCExpr::VK_GOT_LO12, OutContext)));
+    EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::ADR)
+        .addReg(AArch64::X17)
+        .addExpr(MCSymbolRefExpr::create(getFunctionBegin(), OutContext)));
     EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::ADR)
         .addReg(AArch64::X16)
         .addExpr(MCSymbolRefExpr::create(Poll.first, OutContext)));
-    EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::BR).addReg(AArch64::X17));
+    EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::BR).addReg(AArch64::X9));
   }
   CJReturnPolls.clear();
 }

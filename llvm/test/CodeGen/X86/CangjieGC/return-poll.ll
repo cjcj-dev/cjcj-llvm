@@ -3,39 +3,52 @@
 ;
 ; HotSpot macroAssembler_x86.cpp:2590-2596 and
 ; macroAssembler_aarch64.cpp:515-521: after the frame is gone, compare SP
-; unsigned-above the shared poll word. The slow path is an out-of-line
-; branch that publishes the return-site PC and tail-jumps, matching
-; C2SafepointPollStub (x86_64.ad return poll / aarch64 safepoint poll).
-; A direct PLT branch would clobber that PC or push, so the branch is a
-; GOT load. gc-leaf-function stays on the existing no-poll path.
+; unsigned-above the shared poll word. C2SafepointPollStub
+; (c2_CodeStubs_x86.cpp:45-48) records the safepoint PC then jumps.
+; This AOT image has no CodeCache, so the stub also publishes startPC
+; (the .Lfunc_begin the frame stores, AArch64AsmPrinter.cpp:1577-1583)
+; in r10/x17, and the return-site PC in r11/x16. A PLT veneer would
+; clobber x16/x17, so AArch64 loads the handler into x9 and br x9.
+; gc-leaf-function stays on the existing no-poll path.
 
 ; BOTH-LABEL: void_ret:
+; X86: .Lfunc_begin[[VOID:[0-9]+]]:
 ; X86: cmpq 48(%r15), %rsp
 ; X86-NEXT: ja
 ; X86-NEXT: retq
-; X86: leaq .Lcj_return_pc{{[0-9]+}}(%rip), %r11
+; X86: leaq .Lfunc_begin[[VOID]](%rip), %r10
+; X86-NEXT: leaq .Lcj_return_pc{{[0-9]+}}(%rip), %r11
 ; X86-NEXT: jmpq *CJ_MCC_HandleReturnSafepoint@GOTPCREL(%rip)
+; A64: .Lfunc_begin[[VOID:[0-9]+]]:
 ; A64: ldr x16, [x28, #48]
 ; A64-NEXT: cmp sp, x16
 ; A64-NEXT: b.hi
 ; A64: {{^[[:space:]]*ret$}}
-; A64: adrp x17, :got:CJ_MCC_HandleReturnSafepoint
-; A64: ldr x17, [x17, :got_lo12:CJ_MCC_HandleReturnSafepoint]
-; A64: adr x16, .Lcj_return_pc{{[0-9]+}}
-; A64-NEXT: br x17
+; A64: adrp x9, :got:CJ_MCC_HandleReturnSafepoint
+; A64-NEXT: ldr x9, [x9, :got_lo12:CJ_MCC_HandleReturnSafepoint]
+; A64-NEXT: adr x17, .Lfunc_begin[[VOID]]
+; A64-NEXT: adr x16, .Lcj_return_pc{{[0-9]+}}
+; A64-NEXT: br x9
 define void @void_ret() gc "cangjie" {
   ret void
 }
 
 ; BOTH-LABEL: ref_ret:
+; X86: .Lfunc_begin[[REF:[0-9]+]]:
 ; X86: movq %rdi, %rax
 ; X86: cmpq 48(%r15), %rsp
 ; X86-NEXT: ja
 ; X86-NEXT: retq
+; X86: leaq .Lfunc_begin[[REF]](%rip), %r10
+; X86-NEXT: leaq .Lcj_return_pc{{[0-9]+}}(%rip), %r11
+; A64: .Lfunc_begin[[REF:[0-9]+]]:
 ; A64: ldr x16, [x28, #48]
 ; A64-NEXT: cmp sp, x16
 ; A64-NEXT: b.hi
 ; A64: {{^[[:space:]]*ret$}}
+; A64: adr x17, .Lfunc_begin[[REF]]
+; A64-NEXT: adr x16, .Lcj_return_pc{{[0-9]+}}
+; A64-NEXT: br x9
 define i8 addrspace(1)* @ref_ret(i8 addrspace(1)* %p) gc "cangjie" {
   ret i8 addrspace(1)* %p
 }

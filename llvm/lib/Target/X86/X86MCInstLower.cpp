@@ -1505,12 +1505,19 @@ void X86AsmPrinter::emitCJReturnPoll() {
 void X86AsmPrinter::emitCJReturnPollStubs() {
   for (const auto &Poll : CJReturnPolls) {
     OutStreamer->emitLabel(Poll.second);
+    // startPC is the same label the frame stores (AsmPrinter.cpp:1039-1046).
+    // r10/r11 are not return registers. GOT jmp does not clobber them.
+    EmitAndCountInstruction(MCInstBuilder(X86::LEA64r)
+                               .addReg(X86::R10).addReg(X86::RIP).addImm(1)
+                               .addReg(0)
+                               .addExpr(MCSymbolRefExpr::create(getFunctionBegin(),
+                                                                OutContext))
+                               .addReg(0));
     EmitAndCountInstruction(MCInstBuilder(X86::LEA64r)
                                .addReg(X86::R11).addReg(X86::RIP).addImm(1)
                                .addReg(0)
                                .addExpr(MCSymbolRefExpr::create(Poll.first, OutContext))
                                .addReg(0));
-    // GOT indirection avoids a lazy PLT resolver clobbering the PC in r11.
     auto *Handler = OutContext.getOrCreateSymbol("CJ_MCC_HandleReturnSafepoint");
     EmitAndCountInstruction(MCInstBuilder(X86::JMP64m)
                                .addReg(X86::RIP).addImm(1).addReg(0)
