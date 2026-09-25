@@ -89,6 +89,7 @@ void initializeBranchRelaxationPass(PassRegistry&);
 void initializeBreakCriticalEdgesPass(PassRegistry&);
 void initializeBreakFalseDepsPass(PassRegistry&);
 void initializeCangjieSpecificOptLegacyPassPass(PassRegistry &);
+void initializeCJMemsetLoweringLegacyPassPass(PassRegistry &);
 void initializeCanonicalizeFreezeInLoopsPass(PassRegistry &);
 void initializeCJBarrierOptLegacyPassPass(PassRegistry &);
 void initializeCJBarrierSplitLegacyPassPass(PassRegistry &);

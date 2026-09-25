@@ -587,6 +587,7 @@ ModulePass *createCJRuntimeLoweringLegacyPass();
 // CheckFastCall - Checks the fastcall from the optimized code and marks it
 //
 ModulePass *createCangjieSpecificOptLegacyPass(unsigned OptLevel);
+FunctionPass *createCJMemsetLoweringLegacyPass();
 
 //===----------------------------------------------------------------------===//
 //

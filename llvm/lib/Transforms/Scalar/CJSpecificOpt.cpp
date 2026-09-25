@@ -349,12 +349,11 @@ static bool insertResetFPState(Function &F, unsigned OptLevel) {
   return Changed;
 }
 
-static bool runOnFunction(Function &F, unsigned OptLevel) {
+// Code generation only needs the mandatory cj.memset legalization. Keep its
+// dispatch and rewrite shared with the optimizer, without running the optional
+// Cangjie optimizations (or rewriting pow) on llc input.
+static bool lowerCJIntrinsics(Function &F, bool MemsetOnly) {
   bool Changed = false;
-  if (F.isDeclaration() || F.empty() || !F.hasCangjieGC() || F.hasOptNone()) {
-    return Changed;
-  }
-
   for (auto I = inst_begin(F); I != inst_end(F);) {
     IntrinsicInst *CI = dyn_cast<IntrinsicInst>(&*I++);
     if (!CI || CI->getCalledFunction() == nullptr)
@@ -369,11 +368,21 @@ static bool runOnFunction(Function &F, unsigned OptLevel) {
       break;
     case Intrinsic::pow:
     case Intrinsic::powi:
-      lowerCJPow(F, CI);
-      Changed = true;
+      if (!MemsetOnly) {
+        lowerCJPow(F, CI);
+        Changed = true;
+      }
       break;
     }
   }
+  return Changed;
+}
+
+static bool runOnFunction(Function &F, unsigned OptLevel) {
+  if (F.isDeclaration() || F.empty() || !F.hasCangjieGC() || F.hasOptNone())
+    return false;
+
+  bool Changed = lowerCJIntrinsics(F, false);
   if (CangjieJIT)
     return Changed;
 
@@ -479,6 +488,20 @@ PreservedAnalyses CJSpecificOpt::run(Module &M, ModuleAnalysisManager &) const {
 }
 
 namespace {
+class CJMemsetLoweringLegacyPass : public FunctionPass {
+public:
+  static char ID;
+
+  CJMemsetLoweringLegacyPass() : FunctionPass(ID) {
+    initializeCJMemsetLoweringLegacyPassPass(*PassRegistry::getPassRegistry());
+  }
+
+  bool runOnFunction(Function &F) override {
+    // Unlike an optimization, legalization is required even with optnone.
+    return lowerCJIntrinsics(F, true);
+  }
+};
+
 class CangjieSpecificOptLegacyPass : public ModulePass {
 public:
   static char ID;
@@ -503,3 +526,12 @@ ModulePass *llvm::createCangjieSpecificOptLegacyPass(unsigned OptLevel) {
 
 INITIALIZE_PASS(CangjieSpecificOptLegacyPass, "cj-specific-opt",
                 "Cangjie Specific Optimize", false, false)
+
+char CJMemsetLoweringLegacyPass::ID = 0;
+
+FunctionPass *llvm::createCJMemsetLoweringLegacyPass() {
+  return new CJMemsetLoweringLegacyPass();
+}
+
+INITIALIZE_PASS(CJMemsetLoweringLegacyPass, "cj-memset-lowering",
+                "Cangjie memset lowering", false, false)

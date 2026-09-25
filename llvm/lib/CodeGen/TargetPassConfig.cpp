@@ -1132,6 +1132,8 @@ bool TargetPassConfig::addISelPasses() {
       addPass(createCangjieSpecificOptLegacyPass(0));
       addPass(createPlaceSafepointsLegacyPass());
       addPass(createCJRewriteStatepointLegacyPass(0));
+    } else {
+      addPass(createCJMemsetLoweringLegacyPass());
     }
     if (CangjieThreadSanitizer) {
       addPass(createThreadSanitizerPass());
