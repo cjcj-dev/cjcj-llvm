@@ -1987,6 +1987,22 @@ void SelectionDAGBuilder::visitRet(const ReturnInst &I) {
     SmallVector<EVT, 4> ValueVTs;
     ComputeValueVTs(TLI, DL, I.getOperand(0)->getType(), ValueVTs);
     unsigned NumValues = ValueVTs.size();
+    // Retain pointer address spaces for scalarized aggregate return fields.
+    // The return poll uses the ABI registers, not the removed frame's spills.
+    SmallVector<Type *, 4> ReturnTypes;
+    auto CollectReturnTypes = [&](auto &&Self, Type *Ty) -> void {
+      if (auto *ST = dyn_cast<StructType>(Ty)) {
+        for (Type *Element : ST->elements())
+          Self(Self, Element);
+      } else if (auto *AT = dyn_cast<ArrayType>(Ty)) {
+        for (uint64_t N = 0; N < AT->getNumElements(); ++N)
+          Self(Self, AT->getElementType());
+      } else if (!Ty->isVoidTy()) {
+        ReturnTypes.push_back(Ty);
+      }
+    };
+    CollectReturnTypes(CollectReturnTypes, I.getOperand(0)->getType());
+    assert(ReturnTypes.size() == NumValues && "return type decomposition");
     if (NumValues) {
       SDValue RetOp = getValue(I.getOperand(0));
 
@@ -2025,10 +2041,11 @@ void SelectionDAGBuilder::visitRet(const ReturnInst &I) {
         if (RetInReg)
           Flags.setInReg();
 
-        if (I.getOperand(0)->getType()->isPointerTy()) {
+        Type *ReturnType = F->hasCangjieGC() ? ReturnTypes[j]
+                                           : I.getOperand(0)->getType();
+        if (auto *PT = dyn_cast<PointerType>(ReturnType)) {
           Flags.setPointer();
-          Flags.setPointerAddrSpace(
-              cast<PointerType>(I.getOperand(0)->getType())->getAddressSpace());
+          Flags.setPointerAddrSpace(PT->getAddressSpace());
         }
 
         if (NeedsRegBlock) {

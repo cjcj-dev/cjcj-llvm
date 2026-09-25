@@ -265,6 +265,8 @@ private:
   int emitStackOverflowCall(const MachineInstr &MI);
   void emitSafepoint(const MachineInstr &MI);
   void emitCJSafepointInlineCheck(const MachineInstr &MI);
+  void emitCJReturnPoll();
+  void emitCJReturnPollStubs();
   int emitCJSafepointInlineCall(unsigned Index) override;
   void emitGcStateCheck() override;
   void emitGetCJTLSData(int64_t Offset);
@@ -678,6 +680,7 @@ void AArch64AsmPrinter::emitLOHs() {
 }
 
 void AArch64AsmPrinter::emitFunctionBodyEnd() {
+  emitCJReturnPollStubs();
   if (!AArch64FI->getLOHRelated().empty())
     emitLOHs();
 }
@@ -1520,7 +1523,19 @@ void AArch64AsmPrinter::emitFMov0(const MachineInstr &MI) {
 // instructions) auto-generated.
 #include "AArch64GenMCPseudoLowering.inc"
 
+static bool isCJReturnOpcode(const MachineInstr *MI) {
+  if (MI->getOpcode() == AArch64::RET_ReallyLR)
+    return true;
+  // aarch64-expand-pseudo rewrites RET_ReallyLR to RET LR before emission.
+  return MI->getOpcode() == AArch64::RET && MI->getNumOperands() > 0 &&
+         MI->getOperand(0).isReg() &&
+         MI->getOperand(0).getReg() == AArch64::LR;
+}
+
 void AArch64AsmPrinter::emitInstruction(const MachineInstr *MI) {
+  if (isCJReturnOpcode(MI) && needsCJReturnPoll())
+    emitCJReturnPoll();
+
   AArch64_MC::verifyInstructionPredicates(MI->getOpcode(), STI->getFeatureBits());
 
   // Do any auto-generated pseudo lowerings.
@@ -2316,7 +2331,7 @@ void AArch64AsmPrinter::emitMetadataAddress() {
 // Note: emit specific inst should update inst size info in
 // AArch64InstrInfo::getInstSizeInBytes for AArch64 at the same time
 //  ldr x9, [x28, #SafepointCheckAddrOffset]
-//  cmp x9, #0
+//  tst x9, #1
 // >>>>>>>>>>>>>>>>>>>
 // case 1:
 //  b.ne Label
@@ -2334,15 +2349,58 @@ void AArch64AsmPrinter::emitMetadataAddress() {
 // Label:
 //  ...
 // <<<<<<<<<<<<<<<<<<<
+void AArch64AsmPrinter::emitCJReturnPoll() {
+  // HotSpot aarch64.ad:1869-1884: compare only after removing the frame.
+  auto *PC = OutContext.createTempSymbol("cj_return_pc");
+  auto *Slow = OutContext.createTempSymbol("cj_return_slow");
+  OutStreamer->emitLabel(PC);
+  SM.recordCJReturnMap(*PC);
+  EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::LDRXui)
+      .addReg(AArch64::X16).addReg(AArch64::X28)
+      .addImm(getSafepointCheckAddrOffsetInCJTLS() / 8));
+  EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::SUBSXrx64)
+      .addReg(AArch64::XZR).addReg(AArch64::SP).addReg(AArch64::X16)
+      .addImm(AArch64_AM::getArithExtendImm(AArch64_AM::UXTX, 0)));
+  EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::Bcc)
+      .addImm(AArch64CC::HI)
+      .addExpr(MCSymbolRefExpr::create(Slow, OutContext)));
+  CJReturnPolls.emplace_back(PC, Slow);
+}
+
+void AArch64AsmPrinter::emitCJReturnPollStubs() {
+  for (const auto &Poll : CJReturnPolls) {
+    OutStreamer->emitLabel(Poll.second);
+    auto *Handler = MCSymbolRefExpr::create(
+        OutContext.getOrCreateSymbol("CJ_MCC_HandleReturnSafepoint"), OutContext);
+    // x17 must be startPC and x16 the return-site PC at the handler entry.
+    // A PLT veneer would clobber both, so the resolved target goes in x9
+    // (AAPCS caller-saved, not an AAPCS return register) before those adrs.
+    // br does not change LR or SP.
+    EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::ADRP)
+        .addReg(AArch64::X9)
+        .addExpr(AArch64MCExpr::create(Handler, AArch64MCExpr::VK_GOT_PAGE, OutContext)));
+    EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::LDRXui)
+        .addReg(AArch64::X9).addReg(AArch64::X9)
+        .addExpr(AArch64MCExpr::create(Handler, AArch64MCExpr::VK_GOT_LO12, OutContext)));
+    EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::ADR)
+        .addReg(AArch64::X17)
+        .addExpr(MCSymbolRefExpr::create(getFunctionBegin(), OutContext)));
+    EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::ADR)
+        .addReg(AArch64::X16)
+        .addExpr(MCSymbolRefExpr::create(Poll.first, OutContext)));
+    EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::BR).addReg(AArch64::X9));
+  }
+  CJReturnPolls.clear();
+}
+
 void AArch64AsmPrinter::emitCJSafepointInlineCheck(const MachineInstr &MI) {
   emitGetCJTLSData(getSafepointCheckAddrOffsetInCJTLS());
 
   auto &Ctx = OutStreamer->getContext();
-  MCInst Cmp = MCInstBuilder(AArch64::SUBSXri)
+  MCInst Cmp = MCInstBuilder(AArch64::ANDSXri)
                    .addReg(AArch64::XZR)
                    .addReg(AArch64::X9)
-                   .addImm(0)
-                   .addImm(0);
+                   .addImm(AArch64_AM::encodeLogicalImmediate(1, 64));
   EmitToStreamer(*OutStreamer, Cmp);
 
   // If Jmp size beyond the 19bit, emitting safepoint on following inst
@@ -2439,8 +2497,9 @@ void AArch64AsmPrinter::emitCJSafepointOutlineStub() {
       SymOriAddrLo12);
   MCInst ADRP =
       MCInstBuilder(AArch64::ADRP).addReg(AArch64::X9).addOperand(SymOriAddr);
-  MCInst CBNZ = MCInstBuilder(AArch64::CBNZX)
+  MCInst TBNZ = MCInstBuilder(AArch64::TBNZX)
                     .addReg(AArch64::X9)
+                    .addImm(0)
                     .addExpr(MCSymbolRefExpr::create(Label, OutContext));
   MCInst LDR1 = MCInstBuilder(AArch64::LDRXui)
                     .addReg(AArch64::X9)
@@ -2450,14 +2509,14 @@ void AArch64AsmPrinter::emitCJSafepointOutlineStub() {
   MCInst BR = MCInstBuilder(AArch64::BR).addReg(AArch64::X9);
   MCInst RET = MCInstBuilder(AArch64::RET).addReg(AArch64::LR);
   //   ldr x9, [x9, SafepollingAddrOffsetInCJTLS]
-  //   cbnz    x9, .Ltmp0
+  //   tbnz    x9, #0, .Ltmp0
   //   ret
   // .Ltmp0:
   //   adrp    x9, CJ_MCC_HandleSafepoint.CJStubGV
   //   ldr x0, [x9, :lo12:CJ_MCC_HandleSafepoint.StubGV]
   //   br  x0
   OutStreamer->emitInstruction(LDR0, STI);
-  OutStreamer->emitInstruction(CBNZ, STI);
+  OutStreamer->emitInstruction(TBNZ, STI);
   OutStreamer->emitInstruction(RET, STI);
   OutStreamer->emitLabel(Label);
   OutStreamer->emitInstruction(ADRP, STI);

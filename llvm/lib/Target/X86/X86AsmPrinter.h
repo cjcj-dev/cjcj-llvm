@@ -141,6 +141,8 @@ public:
   int emitStackGrow(const MachineInstr &MI) override;
 
   void emitCJSafepointInlineCheck(const MachineInstr &MI);
+  void emitCJReturnPoll();
+  void emitCJReturnPollStubs();
 
   int emitCJSafepointInlineCall(unsigned Index) override;
 

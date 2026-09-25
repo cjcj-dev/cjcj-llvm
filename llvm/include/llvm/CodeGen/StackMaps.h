@@ -410,6 +410,10 @@ public:
   /// Generate a stackmap record for a cangjie statepoint instruction.
   void recordCJStackMap(const MachineInstr &MI, bool RecordAllRefInReg = false);
 
+  // A return poll has already removed the frame. Record only the actual ABI
+  // result registers; the runtime walks the caller using its original PC.
+  void recordCJReturnMap(const MCSymbol &PC);
+
   /// If there is any stack map data, create a stack map section and serialize
   /// the map info into it. This clears the stack map data structures
   /// afterwards.
