@@ -104,7 +104,8 @@ bool findAllocaInsts(Value *V, SetVector<Value *> &BaseSet, bool HasArg) {
     } else {
       assert((isa<Constant>(Ptr) || isa<CallInst>(Ptr) ||
               isa<InvokeInst>(Ptr) || isa<LoadInst>(Ptr) ||
-              isa<Argument>(Ptr) || isa<ExtractValueInst>(Ptr)) &&
+              isa<Argument>(Ptr) || isa<ExtractValueInst>(Ptr) ||
+              isa<ExtractElementInst>(Ptr)) &&
              "unexpected instructions in findStructPtrAlloca");
       if (isa<Argument>(Ptr) && HasArg) {
         BaseSet.insert(Ptr);
