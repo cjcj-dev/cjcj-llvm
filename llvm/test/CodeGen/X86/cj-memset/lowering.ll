@@ -35,5 +35,13 @@ define double @keep_pow(double %x, double %y) gc "cangjie" {
   ret double %p
 }
 
+; CHECK-LABEL: define void @unmanaged_init(
+; CHECK: call void @llvm.memset.p0i8.i64(i8* %dst, i8 0, i64 8, i1 false)
+; CHECK: ret void
+define void @unmanaged_init(i8* %dst) {
+  call void @llvm.cj.memset(i8* %dst, i8 0, i64 8, i1 false)
+  ret void
+}
+
 declare void @llvm.cj.memset(i8*, i8, i64, i1)
 declare double @llvm.pow.f64(double, double)
