@@ -1033,22 +1033,6 @@ void StackMaps::recordStatepoint(const MCSymbol &L, const MachineInstr &MI,
   recordStackMapOpers(L, MI, OpersInfo, false, RecordAllRefInReg);
 }
 
-void StackMaps::recordCJReturnMap(const MCSymbol &PC) {
-  auto &Ctx = AP.OutStreamer->getContext();
-  CallsiteInfo Info;
-  Info.CSOffsetExpr = MCBinaryExpr::createSub(
-      MCSymbolRefExpr::create(&PC, Ctx),
-      MCSymbolRefExpr::create(AP.CurrentFnSymForSize, Ctx), Ctx);
-  Info.RecordAllRefInReg = true;
-  const auto *TRI = AP.MF->getSubtarget().getRegisterInfo();
-  for (unsigned Reg : AP.MF->getCJReturnRootRegs()) {
-    Location Root(Location::Register, 8, getDwarfRegNum(Reg, TRI), 0);
-    Info.RefPairs.push_back(Root);
-    Info.RefPairs.push_back(Root);
-  }
-  updateOrInsertFnInfo(AP.CurrentFnSym, Info);
-}
-
 void StackMaps::recordCJStackMap(const MachineInstr &MI,
                                  bool RecordAllRefInReg) {
   const Triple TT(AP.MMI->getModule()->getTargetTriple());

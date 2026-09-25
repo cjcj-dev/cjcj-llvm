@@ -198,8 +198,6 @@ protected:
   std::map<const MachineInstr *, std::pair<MCSymbol *, MCSymbol *>> StackCheckMap;
   SmallVector<std::tuple<const MachineInstr *, MCSymbol *, MCSymbol *>>
       SafepointStackMap;
-  SmallVector<std::pair<MCSymbol *, MCSymbol *>, 4> CJReturnPolls;
-  bool needsCJReturnPoll() const;
   /// A vector of all debug/EH info emitters we should use. This vector
   /// maintains ownership of the emitters.
   std::vector<HandlerInfo> Handlers;
