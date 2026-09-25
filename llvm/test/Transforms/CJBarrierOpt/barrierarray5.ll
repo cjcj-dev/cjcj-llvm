@@ -34,7 +34,7 @@ declare void @llvm.lifetime.end.p0i8(i64, i8*)
 declare void @llvm.lifetime.start.p0i8(i64, i8*)
 declare void @llvm.memset.p0i8.i64(i8*, i8, i64, i1)
 
-; CHECK: call void @llvm.cj.gcwrite.struct.p0i8(i8 addrspace(1)* %3, i8 addrspace(1)* %7, i8* nonnull %.sub, i64 6)
+; CHECK: call void @llvm.cj.gcwrite.struct.p0i8.i64(i8 addrspace(1)* %3, i8 addrspace(1)* %7, i8* nonnull %.sub, i64 6)
 ; CHECK: call void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)* align 8 %20, i8* align 8 %9, i64 6, i1 false)
 
 define internal void @foo(i8 addrspace(1)* nocapture readnone %"__auto_v_889$BP", %"record._ZN7default11std$FS$core5ArrayIN_ZN11std$FS$core6OptionIT2_uN_ZN11std$FS$core6OptionIN_ZN11std$FS$core6OptionIN_ZN11std$FS$core6OptionIbEEEEEE" addrspace(1)* nocapture writeonly %this, i64 %size, i8 addrspace(1)* nocapture readnone %"initElement$BP", %_ZN07ClosureE addrspace(1)* nocapture readonly %initElement) gc "cangjie" {
