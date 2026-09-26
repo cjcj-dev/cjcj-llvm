@@ -63,13 +63,39 @@ void checkFailed(const Twine &Message, Instruction *I) {
   } while (false)
 
 namespace llvm {
+static bool findAllocaInstsOfVector(Value *V, SetVector<Value *> &BaseSet,
+                                     bool HasArg) {
+  if (isa<Argument>(V) || isa<Constant>(V) || isa<LoadInst>(V) ||
+      isa<InsertElementInst>(V) || isa<ShuffleVectorInst>(V))
+    return false;
+
+  if (auto *GEP = dyn_cast<GetElementPtrInst>(V))
+    return findAllocaInsts(GEP->getPointerOperand(), BaseSet, HasArg);
+
+  if (auto *Freeze = dyn_cast<FreezeInst>(V))
+    return findAllocaInsts(Freeze->getOperand(0), BaseSet, HasArg);
+
+  if (auto *BC = dyn_cast<BitCastInst>(V))
+    return findAllocaInsts(BC->getOperand(0), BaseSet, HasArg);
+
+  if (isa<CallInst>(V) || isa<InvokeInst>(V))
+    return false;
+
+  assert((isa<SelectInst>(V) || isa<PHINode>(V)) &&
+         "unknown vector instruction - no base found for vector element");
+  return false;
+}
+
 // Find all base defining values reachable from the initial.
 // Return true if the terminator point is alloca, and if the struct contains
 // ref of heap, save it to liveset, otherwise ignore it.
 // Returns false if the base pointer is a gcptr.
 bool findAllocaInsts(Value *V, SetVector<Value *> &BaseSet, bool HasArg) {
-  assert(V->getType()->isPointerTy() &&
+  assert(V->getType()->isPtrOrPtrVectorTy() &&
          "Illegal to ask for the base pointer of a non-pointer type");
+
+  if (V->getType()->isVectorTy())
+    return findAllocaInstsOfVector(V, BaseSet, HasArg);
 
   bool IsAlloca = false;
   bool IsGCPtr = false;
@@ -960,6 +986,19 @@ bool StructLiveAnalysis::isStackContainGCPtr(Value *V, uint64_t Size) {
   if (isa<Constant>(findMemoryBasePointer(V))) {
     Ret = false;
   } else {
+    APInt LayoutOffsets(DL.getIndexSizeInBits(0), 0);
+    Value *LayoutBase =
+        V->stripAndAccumulateConstantOffsets(DL, LayoutOffsets, false);
+    if (!isa<AllocaInst>(LayoutBase))
+      LayoutBase = findMemoryBasePointer(V);
+    if (auto *LayoutAI = dyn_cast<AllocaInst>(LayoutBase)) {
+      if (!isGCPointerType(LayoutAI->getAllocatedType()) &&
+          !AllocaData.StructLayoutGCPtrMap.count(LayoutAI)) {
+        StackContainGCPtrMap[V] = false;
+        return false;
+      }
+    }
+
     Value *Def = V->stripPointerCasts();
     if (isMemoryContainsGCPtrType(Def->getType())) {
       Ret = true;
