@@ -106,7 +106,6 @@ void X86AsmPrinter::emitFunctionBodyStart() {
 }
 
 void X86AsmPrinter::emitFunctionBodyEnd() {
-  emitCJReturnPollStubs();
   if (EmitFPOData) {
     if (auto *XTS =
             static_cast<X86TargetStreamer *>(OutStreamer->getTargetStreamer()))
