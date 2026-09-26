@@ -1,22 +1,42 @@
 ; RUN: split-file %s %t
-; RUN: not --crash opt -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/allocation.ll 2>&1 | FileCheck %s --check-prefixes=ALLOC,ABORT
-; RUN: not --crash opt -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/gcread.ll 2>&1 | FileCheck %s --check-prefixes=GCREAD,ABORT
-; RUN: not --crash opt -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/language.ll 2>&1 | FileCheck %s --check-prefixes=LANGUAGE,ABORT
-; RUN: not --crash opt -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/indirect.ll 2>&1 | FileCheck %s --check-prefixes=INDIRECT,ABORT
+; RUN: opt -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/allocation.ll 2>&1 | FileCheck %s --check-prefix=ALLOC
+; RUN: not --crash opt -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/gcread.ll 2>&1 | FileCheck %s --check-prefix=GCREAD
+; RUN: opt -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/language.ll 2>&1 | FileCheck %s --check-prefix=LANGUAGE
+; RUN: opt -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/indirect.ll 2>&1 | FileCheck %s --check-prefix=INDIRECT
+; RUN: opt -cj-ir-verifier-mode=report -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/allocation.ll 2>&1 | FileCheck %s --check-prefix=REPORT-ALLOC
+; RUN: opt -cj-ir-verifier-mode=report -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/gcread.ll 2>&1 | FileCheck %s --check-prefix=REPORT-GCREAD
+; RUN: opt -cj-ir-verifier-mode=report -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/language.ll 2>&1 | FileCheck %s --check-prefix=REPORT-LANGUAGE
+; RUN: opt -cj-ir-verifier-mode=report -passes='cj-typed-call-return-copy,cj-ir-verifier' -disable-output < %t/indirect.ll 2>&1 | FileCheck %s --check-prefix=REPORT-INDIRECT
 
-; ALLOC: Bare memcpy/memmove
+; ALLOC: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; ALLOC-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
 ; ALLOC: in function keep_managed_allocation
-; GCREAD: Bare memcpy/memmove
-; GCREAD-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
+; ALLOC-NOT: LLVM ERROR
+; GCREAD: P01: plain local root must not use a colored static read barrier
+; GCREAD: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; GCREAD: in function keep_managed_gcread
-; LANGUAGE: Bare memcpy/memmove
+; GCREAD: LLVM ERROR: Broken function found, compilation aborted
+; LANGUAGE: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; LANGUAGE-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
 ; LANGUAGE: in function keep_managed_language_call
-; INDIRECT: Bare memcpy/memmove
+; LANGUAGE-NOT: LLVM ERROR
+; INDIRECT: Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]
 ; INDIRECT-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64
 ; INDIRECT: in function keep_managed_indirect_call
-; ABORT: LLVM ERROR: Broken function found, compilation aborted
+; INDIRECT-NOT: LLVM ERROR
+; REPORT-ALLOC: keep_managed_allocation{{[[:space:]]}}Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]{{[[:space:]]}}memcpy
+; REPORT-ALLOC-NOT: LLVM ERROR
+; REPORT-ALLOC-NOT: in function
+; REPORT-GCREAD: keep_managed_gcread{{[[:space:]]}}P01: plain local root must not use a colored static read barrier
+; REPORT-GCREAD: keep_managed_gcread{{[[:space:]]}}Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]{{[[:space:]]}}memcpy
+; REPORT-GCREAD-NOT: LLVM ERROR
+; REPORT-GCREAD-NOT: in function
+; REPORT-LANGUAGE: keep_managed_language_call{{[[:space:]]}}Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]{{[[:space:]]}}memcpy
+; REPORT-LANGUAGE-NOT: LLVM ERROR
+; REPORT-LANGUAGE-NOT: in function
+; REPORT-INDIRECT: keep_managed_indirect_call{{[[:space:]]}}Bare memcpy/memmove payload provenance is unknown; use cj_array_copy_ref, a typed helper, or supply typed provenance. [unknown-payload:report]{{[[:space:]]}}memcpy
+; REPORT-INDIRECT-NOT: LLVM ERROR
+; REPORT-INDIRECT-NOT: in function
 
 ;--- allocation.ll
 %Ref = type { i8 addrspace(1)*, i64 }

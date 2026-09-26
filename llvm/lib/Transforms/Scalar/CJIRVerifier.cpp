@@ -455,6 +455,24 @@ public:
     Assert(hasMemset, "Missing cj.memset in allocation of structure.", &AI);
   }
 
+  bool ptrmaskClearsColorBits(const CallBase &Call) const {
+    unsigned PtrBits =
+        DL.getPointerSizeInBits(Call.getType()->getPointerAddressSpace());
+    constexpr unsigned ColorBit = 48;
+    if (PtrBits <= ColorBit)
+      return false;
+    const auto *Mask = dyn_cast<ConstantInt>(Call.getArgOperand(1));
+    if (!Mask)
+      return true;
+    APInt Bits = Mask->getValue();
+    if (Bits.getBitWidth() < PtrBits)
+      Bits = Bits.zext(PtrBits);
+    else if (Bits.getBitWidth() > PtrBits)
+      Bits = Bits.trunc(PtrBits);
+    APInt ColorKeep = APInt::getBitsSet(PtrBits, ColorBit, PtrBits);
+    return (Bits & ColorKeep) != ColorKeep;
+  }
+
   void visitCallBase(CallBase &Call) {
     Function *Callee = Call.getCalledFunction();
     if (Callee == nullptr) {
@@ -462,7 +480,8 @@ public:
     }
 
     unsigned IID = Call.getIntrinsicID();
-    if (IID == Intrinsic::ptrmask && isGCPointerType(Call.getType())) {
+    if (IID == Intrinsic::ptrmask && isGCPointerType(Call.getType()) &&
+        ptrmaskClearsColorBits(Call)) {
       checkFailed("P01: GC addresses are plain; ptrmask cannot uncolor a field value", &Call);
       return;
     }
