@@ -1,0 +1,3 @@
+; RUN: llc -mtriple=aarch64 -O0 -print-after=cj-barrier-lowering -o /dev/null < %S/../../X86/CangjieGC/generic-payload-width.ll 2>&1 | FileCheck %S/../../X86/CangjieGC/generic-payload-width.ll --check-prefix=WIDE
+; RUN: llc -mtriple=aarch64 -O1 -print-after=cj-barrier-lowering -o /dev/null < %S/../../X86/CangjieGC/generic-payload-width.ll 2>&1 | FileCheck %S/../../X86/CangjieGC/generic-payload-width.ll --check-prefix=WIDE
+; RUN: llc -mtriple=aarch64 -O2 -print-after=cj-barrier-lowering -o /dev/null < %S/../../X86/CangjieGC/generic-payload-width.ll 2>&1 | FileCheck %S/../../X86/CangjieGC/generic-payload-width.ll --check-prefix=WIDE
