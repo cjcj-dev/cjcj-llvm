@@ -35,14 +35,14 @@ entry:
 
 ; CHECK:  tmp1:
 ; CHECK-NEXT:  %.sroa.0.sroa.0.0..sroa.0.sroa.0.0..sroa.0.0..fca.0.load = load i8, i8* %.sroa.0.sroa.0, align 8
-; CHECK-NEXT:  %.sroa.5.0.insert.ext21 = zext i56 %.sroa.5.0.extract.trunc to i64
-; CHECK-NEXT:  %.sroa.5.0.insert.shift22 = shl i64 %.sroa.5.0.insert.ext21, 8
-; CHECK-NEXT:  %.sroa.5.0.insert.mask23 = and i64 undef, 255
-; CHECK-NEXT:  %.sroa.5.0.insert.insert24 = or i64 %.sroa.5.0.insert.mask23, %.sroa.5.0.insert.shift22
-; CHECK-NEXT:  %.sroa.0.0.insert.ext12 = zext i8 %.sroa.0.sroa.0.0..sroa.0.sroa.0.0..sroa.0.0..fca.0.load to i64
-; CHECK-NEXT:  %.sroa.0.0.insert.mask13 = and i64 %.sroa.5.0.insert.insert24, -256
-; CHECK-NEXT:  %.sroa.0.0.insert.insert14 = or i64 %.sroa.0.0.insert.mask13, %.sroa.0.0.insert.ext12
-; CHECK-NEXT:  %.fca.0.insert = insertvalue %record poison, i64 %.sroa.0.0.insert.insert14, 0
+; CHECK-NEXT:  [[TMP1_EXT:%.*]] = zext i56 %.sroa.5.0.extract.trunc to i64
+; CHECK-NEXT:  [[TMP1_SHIFT:%.*]] = shl i64 [[TMP1_EXT]], 8
+; CHECK-NEXT:  [[TMP1_MASK:%.*]] = and i64 undef, 255
+; CHECK-NEXT:  [[TMP1_INSERT:%.*]] = or i64 [[TMP1_MASK]], [[TMP1_SHIFT]]
+; CHECK-NEXT:  [[TMP1_LOW_EXT:%.*]] = zext i8 %.sroa.0.sroa.0.0..sroa.0.sroa.0.0..sroa.0.0..fca.0.load to i64
+; CHECK-NEXT:  [[TMP1_LOW_MASK:%.*]] = and i64 [[TMP1_INSERT]], -256
+; CHECK-NEXT:  [[TMP1_LOW_INSERT:%.*]] = or i64 [[TMP1_LOW_MASK]], [[TMP1_LOW_EXT]]
+; CHECK-NEXT:  %.fca.0.insert = insertvalue %record poison, i64 [[TMP1_LOW_INSERT]], 0
 ; CHECK-NEXT:  %.fca.1.insert = insertvalue %record %.fca.0.insert, i8 addrspace(1)* %arg0.fca.1.extract, 1
 ; CHECK-NEXT:  %token = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, void ()* @g0, i32 0, i32 0)
 ;
@@ -52,8 +52,8 @@ tmp1:
   br label %tmpend
 
 ; CHECK:  tmp2:
-; CHECK-NEXT:  %.sroa.0.sroa.0.0.sroa_cast33 = bitcast i8* %.sroa.0.sroa.0 to i1*
-; CHECK-NEXT:  %.sroa.0.sroa.0.0..sroa.0.sroa.0.0..sroa.0.0. = load i1, i1* %.sroa.0.sroa.0.0.sroa_cast33, align 8
+; CHECK-NEXT:  [[TMP2_CAST:%.*]] = bitcast i8* %.sroa.0.sroa.0 to i1*
+; CHECK-NEXT:  %.sroa.0.sroa.0.0..sroa.0.sroa.0.0..sroa.0.0. = load i1, i1* [[TMP2_CAST]], align 8
 ; CHECK-NEXT:  %token2 = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, void (%record addrspace(1)*, i8 addrspace(1)*)* @g1, i32 2, i32 0, %record addrspace(1)* %arg2, i8 addrspace(1)* null) [ "gc-live"(%record %arg0) ]
 ;
 tmp2:
@@ -64,14 +64,14 @@ tmp2:
 
 ; CHECK:  tmpend:
 ; CHECK-NEXT:  %.sroa.0.sroa.0.0..sroa.0.sroa.0.0..sroa.0.0..fca.0.load4 = load i8, i8* %.sroa.0.sroa.0, align 8
-; CHECK-NEXT:  %.sroa.5.0.insert.ext26 = zext i56 %.sroa.5.0.extract.trunc to i64
-; CHECK-NEXT:  %.sroa.5.0.insert.shift27 = shl i64 %.sroa.5.0.insert.ext26, 8
-; CHECK-NEXT:  %.sroa.5.0.insert.mask28 = and i64 undef, 255
-; CHECK-NEXT:  %.sroa.5.0.insert.insert29 = or i64 %.sroa.5.0.insert.mask28, %.sroa.5.0.insert.shift27
-; CHECK-NEXT:  %.sroa.0.0.insert.ext16 = zext i8 %.sroa.0.sroa.0.0..sroa.0.sroa.0.0..sroa.0.0..fca.0.load4 to i64
-; CHECK-NEXT:  %.sroa.0.0.insert.mask17 = and i64 %.sroa.5.0.insert.insert29, -256
-; CHECK-NEXT:  %.sroa.0.0.insert.insert18 = or i64 %.sroa.0.0.insert.mask17, %.sroa.0.0.insert.ext16
-; CHECK-NEXT:  %.fca.0.insert5 = insertvalue %record poison, i64 %.sroa.0.0.insert.insert18, 0
+; CHECK-NEXT:  [[END_EXT:%.*]] = zext i56 %.sroa.5.0.extract.trunc to i64
+; CHECK-NEXT:  [[END_SHIFT:%.*]] = shl i64 [[END_EXT]], 8
+; CHECK-NEXT:  [[END_MASK:%.*]] = and i64 undef, 255
+; CHECK-NEXT:  [[END_INSERT:%.*]] = or i64 [[END_MASK]], [[END_SHIFT]]
+; CHECK-NEXT:  [[END_LOW_EXT:%.*]] = zext i8 %.sroa.0.sroa.0.0..sroa.0.sroa.0.0..sroa.0.0..fca.0.load4 to i64
+; CHECK-NEXT:  [[END_LOW_MASK:%.*]] = and i64 [[END_INSERT]], -256
+; CHECK-NEXT:  [[END_LOW_INSERT:%.*]] = or i64 [[END_LOW_MASK]], [[END_LOW_EXT]]
+; CHECK-NEXT:  %.fca.0.insert5 = insertvalue %record poison, i64 [[END_LOW_INSERT]], 0
 ; CHECK-NEXT:  %.fca.1.insert8 = insertvalue %record %.fca.0.insert5, i8 addrspace(1)* %arg0.fca.1.extract, 1
 ;
 tmpend:
