@@ -23,7 +23,7 @@ entry:
   ret void
 }
 
-; VERIFY: The WriteBarrier instruction should be used here!
+; VERIFY: Bare memcpy/memmove of reference payload must use cj_array_copy_ref or another typed GC barrier.
 ; VERIFY: call void @llvm.memcpy.p1i8.p0i8.i64
 define void @reject_raw_nested_array(i8 addrspace(1)* %dst) gc "cangjie" {
 entry:
