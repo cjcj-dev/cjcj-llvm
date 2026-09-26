@@ -3878,6 +3878,14 @@ bool AArch64FastISel::selectRet(const Instruction *I) {
                                     TII.get(AArch64::RET_ReallyLR));
   for (unsigned RetReg : RetRegs)
     MIB.addReg(RetReg, RegState::Implicit);
+  if (F.hasCangjieGC() && Ret->getNumOperands() == 1) {
+    if (auto *PT = dyn_cast<PointerType>(Ret->getOperand(0)->getType())) {
+      if (PT->getAddressSpace() == 1) {
+        for (unsigned R : RetRegs)
+          FuncInfo.MF->addCJReturnRootReg(R);
+      }
+    }
+  }
   return true;
 }
 
