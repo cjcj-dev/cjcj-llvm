@@ -1484,8 +1484,50 @@ void X86AsmPrinter::emitGcStateCheck() {
 }
 
 // load tls data
-//   cmpq   $0, %rax
+//   testq  $1, %rax
 //   jne    Label
+void X86AsmPrinter::emitCJReturnPoll() {
+  // HotSpot x86.ad:1963-1978: the caller frame is exposed before this poll.
+  auto *PC = OutContext.createTempSymbol("cj_return_pc");
+  auto *Slow = OutContext.createTempSymbol("cj_return_slow");
+  OutStreamer->emitLabel(PC);
+  SM.recordCJReturnMap(*PC);
+  EmitAndCountInstruction(MCInstBuilder(X86::CMP64rm)
+                             .addReg(X86::RSP).addReg(X86::R15).addImm(1)
+                             .addReg(0).addImm(getSafepointCheckAddrOffsetInCJTLS())
+                             .addReg(0));
+  EmitAndCountInstruction(MCInstBuilder(X86::JCC_4)
+                             .addExpr(MCSymbolRefExpr::create(Slow, OutContext))
+                             .addImm(X86::COND_A));
+  CJReturnPolls.emplace_back(PC, Slow);
+}
+
+void X86AsmPrinter::emitCJReturnPollStubs() {
+  for (const auto &Poll : CJReturnPolls) {
+    OutStreamer->emitLabel(Poll.second);
+    // startPC is the same label the frame stores (AsmPrinter.cpp:1039-1046).
+    // r10/r11 are not return registers. GOT jmp does not clobber them.
+    EmitAndCountInstruction(MCInstBuilder(X86::LEA64r)
+                               .addReg(X86::R10).addReg(X86::RIP).addImm(1)
+                               .addReg(0)
+                               .addExpr(MCSymbolRefExpr::create(getFunctionBegin(),
+                                                                OutContext))
+                               .addReg(0));
+    EmitAndCountInstruction(MCInstBuilder(X86::LEA64r)
+                               .addReg(X86::R11).addReg(X86::RIP).addImm(1)
+                               .addReg(0)
+                               .addExpr(MCSymbolRefExpr::create(Poll.first, OutContext))
+                               .addReg(0));
+    auto *Handler = OutContext.getOrCreateSymbol("CJ_MCC_HandleReturnSafepoint");
+    EmitAndCountInstruction(MCInstBuilder(X86::JMP64m)
+                               .addReg(X86::RIP).addImm(1).addReg(0)
+                               .addExpr(MCSymbolRefExpr::create(
+                                   Handler, MCSymbolRefExpr::VK_GOTPCREL, OutContext))
+                               .addReg(0));
+  }
+  CJReturnPolls.clear();
+}
+
 void X86AsmPrinter::emitCJSafepointInlineCheck(const MachineInstr &MI) {
   emitGetCJTLSData(getSafepointCheckAddrOffsetInCJTLS());
   // create label
@@ -1495,9 +1537,9 @@ void X86AsmPrinter::emitCJSafepointInlineCheck(const MachineInstr &MI) {
   const MCSymbolRefExpr *MILabelExpr =
       MCSymbolRefExpr::create(MILabel, OutContext);
   MCInst CmpInst;
-  CmpInst.setOpcode(X86::CMP64ri32);
+  CmpInst.setOpcode(X86::TEST64ri32);
   CmpInst.addOperand(MCOperand::createReg(X86::RAX));
-  CmpInst.addOperand(MCOperand::createImm(0));
+  CmpInst.addOperand(MCOperand::createImm(1));
   OutStreamer->emitInstruction(CmpInst, getSubtargetInfo());
   MCInst JccInst;
   JccInst.setOpcode(X86::JCC_1);
@@ -1554,13 +1596,13 @@ void X86AsmPrinter::emitCJSafepointOutlineStub() {
                        ? "_CJ_MCC_HandleSafepoint.CJStubGV"
                        : "CJ_MCC_HandleSafepoint.CJStubGV";
   MCSymbol *StubGV = OutContext.getOrCreateSymbol(Name);
-  MCInst CMP = MCInstBuilder(X86::CMP64mi32)
+  MCInst CMP = MCInstBuilder(X86::TEST64mi32)
                    .addReg(X86::R15)
                    .addImm(1)
                    .addReg(0)
                    .addImm(getSafepointCheckAddrOffsetInCJTLS())
                    .addReg(0)
-                   .addImm(0);
+                   .addImm(1);
   MCInst JNE = MCInstBuilder(X86::JCC_1)
                    .addExpr(MCSymbolRefExpr::create(Label, OutContext))
                    .addImm(X86::COND_NE);
@@ -1572,7 +1614,7 @@ void X86AsmPrinter::emitCJSafepointOutlineStub() {
                    .addReg(0);
   MCInst RET = MCInstBuilder(X86::RET64);
   auto &STI = getSubtargetInfo();
-  //   cmpq    $0, SafePollingAddrOffsetInCJTLS(%r15)
+  //   testq   $1, SafePollingAddrOffsetInCJTLS(%r15)
   //   jne .Ltmp0
   //   retq
   // .Ltmp0:
@@ -2858,6 +2900,9 @@ void X86AsmPrinter::tryDoAdaptionForFP16InCJ(const MachineInstr *MI,
 }
 
 void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
+  if (MI->getOpcode() == X86::RET64 && needsCJReturnPoll())
+    emitCJReturnPoll();
+
   // FIXME: Enable feature predicate checks once all the test pass.
   // X86_MC::verifyInstructionPredicates(MI->getOpcode(),
   //                                     Subtarget->getFeatureBits());
