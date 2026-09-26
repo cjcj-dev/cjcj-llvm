@@ -1,0 +1,45 @@
+# RUN: llc %s -o - -mtriple=x86_64-unknown-linux-gnu \
+# RUN:   -experimental-debug-variable-locations -stress-regalloc=1 \
+# RUN:   -verify-machineinstrs -start-before=greedy -stop-after=virtregrewriter \
+# RUN: | FileCheck %s
+#
+# Single-def STATEPOINT: operand 1 is the ID immediate
+# (StackMaps.h StatepointOpers::IDPos). The same vreg is operand 0 (def) and
+# the tied gc use, so foldMemoryOperand sees Ops.size()==2 with Ops[0] the def.
+# debug-instr-number takes the substitution check in InlineSpiller. stress-regalloc=1
+# leaves only the first allocatable GPR; implicit-def $rax conflicts with that
+# assignment, so the spill must fold. Operand 1 is not a register, so the isReg
+# guard skips MakeSubstitution (cloneInstrSymbols does not copy the number).
+# Removing the isReg conjunct calls isTied() on the ID immediate.
+#
+# CHECK-LABEL: name: statepoint_fold_imm_op1
+# CHECK: MOV64mr %stack.0, {{.*}} $rdi
+# CHECK-NOT: = STATEPOINT
+# CHECK: STATEPOINT 0, 0, 0, {{.*}}1, 8, %stack.0, 0
+# CHECK: $rsi = MOV64rm %stack.0
+--- |
+  target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+  target triple = "x86_64-unknown-linux-gnu"
+
+  define void @statepoint_fold_imm_op1(i64 %a) {
+    ret void
+  }
+...
+---
+name:            statepoint_fold_imm_op1
+alignment:       16
+tracksRegLiveness: true
+registers:
+  - { id: 0, class: gr64 }
+frameInfo:
+  hasCalls:        true
+machineFunctionInfo: {}
+body:             |
+  bb.0:
+    liveins: $rdi
+
+    %0:gr64 = COPY killed $rdi
+    %0:gr64 = STATEPOINT 0, 0, 0, target-flags(x86-plt) 0, 2, 0, 2, 0, 2, 0, 2, 1, %0(tied-def 0), 2, 0, 2, 1, 0, 0, csr_64, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax, debug-instr-number 1
+    $rsi = COPY killed %0
+    RET 0, killed $rsi
+...
