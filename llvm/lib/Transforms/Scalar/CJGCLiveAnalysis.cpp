@@ -1454,6 +1454,11 @@ void LivenessData::recomputeLiveInValues(CallBase *Call, SafepointRecord &Info,
   Info.LiveSet = Updated;
 
   for (auto V : Updated) {
+    // Record SSA values remain gc-live roots, but have no alloca base to
+    // contribute to struct-live. Pointer vectors keep their own base analysis.
+    if (V->getType()->isStructTy())
+      continue;
+
     // Records them whose base is alloca contained gcptr.
     SetVector<Value *> AllocaSet;
     findAllocaInsts(V, AllocaSet);
