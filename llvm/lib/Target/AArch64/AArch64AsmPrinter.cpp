@@ -2120,6 +2120,16 @@ void AArch64AsmPrinter::emitMccNewObjectForCopyGC(
 void AArch64AsmPrinter::emitMccNewObjectFastPath(const MachineInstr *MI,
                                                  const MachineOperand &MOSym,
                                                  unsigned Opcode) {
+  if (Opcode == AArch64::TCRETURNdi) {
+    MCOperand Dest;
+    MCInstLowering.lowerOperand(MOSym, Dest);
+    MCInst TmpInst;
+    TmpInst.setOpcode(AArch64::B);
+    TmpInst.addOperand(Dest);
+    EmitToStreamer(*OutStreamer, TmpInst);
+    return;
+  }
+
   StringRef FastFuncName =
       (MOSym.getGlobal()->getName().find("Object") != StringRef::npos)
           ? "CJ_MCC_NewObjectFast"
