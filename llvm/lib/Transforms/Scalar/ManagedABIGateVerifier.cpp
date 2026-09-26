@@ -197,6 +197,7 @@ static constexpr StringLiteral PrivateRuntimeABI[] = {
     "CJ_MCC_StackCheck",
     "CJ_MCC_StartCpuProfiling",
     "CJ_MCC_StopCpuProfiling",
+    "CJ_MCC_StringDedupCanonical",
     "CJ_MCC_ThrowArithmeticException",
     "CJ_MCC_ThrowException",
     "CJ_MCC_UpdateVMT",
@@ -308,6 +309,7 @@ static bool isCangjiePrivateIntrinsic(Intrinsic::ID ID) {
   case Intrinsic::cj_get_exception_typeid:
   case Intrinsic::cj_pre_initialize_package:
   case Intrinsic::cj_fill_in_stack_trace:
+  case Intrinsic::cj_string_dedup_canonical:
   case Intrinsic::cj_get_real_heap_size:
   case Intrinsic::cj_get_allocated_heap_size:
   case Intrinsic::cj_get_max_heap_size:
