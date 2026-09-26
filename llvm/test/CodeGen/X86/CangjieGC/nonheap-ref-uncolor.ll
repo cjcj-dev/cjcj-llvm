@@ -1,18 +1,26 @@
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -print-after=cj-barrier-lowering \
 ; RUN:   -o /dev/null < %s 2>&1 | FileCheck %s
 
-; Value-struct field loads (String.myData) are raw LoadInst of
-; addrspace(1)* through an AS0 place. STACK_ROOTS_STAY_PLAIN: peel
-; colour after the load so the stack copy is used as a VA.
-; Heap-place raw loads stay untouched (not this knife).
+; zAddress.inline.hpp:609-614 uncolors only a load-good zpointer, by the
+; published load shift. A value-struct field through an AS0 place is a raw
+; LoadInst/StoreInst, not llvm.cj.gcread/gcwrite
+; (CJBarrierLowering.cpp:1404-1406). STACK_ROOTS_STAY_PLAIN: the slot value
+; and a function argument are already plain addresses. ptrmask on a GC
+; pointer is rejected (CJIRVerifier.cpp:465). Shift uncolor of a plain
+; address is rejected (CJIRVerifier.cpp:947). Lowering must leave the raw
+; load/store untouched. Heap-place raw loads stay untouched.
 
 %"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
 
 define i8 @string_get(%"record.std.core:String"* %this, i64 %index) gc "cangjie" {
 ; CHECK-LABEL: define i8 @string_get(
+; CHECK-NOT: llvm.ptrmask
+; CHECK-NOT: @g_cjLoadShift
 ; CHECK: [[RAW:%.*]] = load i8 addrspace(1)*, i8 addrspace(1)**
-; CHECK: [[PLAIN:%.*]] = call i8 addrspace(1)* @llvm.ptrmask.p1i8.i64(i8 addrspace(1)* [[RAW]], i64 281474976710655)
-; CHECK: getelementptr {{.*}} [[PLAIN]]
+; CHECK: getelementptr {{.*}} [[RAW]]
+; CHECK-NOT: llvm.ptrmask
+; CHECK-NOT: @g_cjLoadShift
+; CHECK: ret i8
 entry:
   %p = getelementptr inbounds %"record.std.core:String", %"record.std.core:String"* %this, i64 0, i32 0
   %raw = load i8 addrspace(1)*, i8 addrspace(1)** %p, align 8
@@ -25,10 +33,11 @@ entry:
 define void @string_rawdata(%"record.std.core:String"* %this,
                            i8 addrspace(1)** %dst) gc "cangjie" {
 ; CHECK-LABEL: define void @string_rawdata(
-; CHECK: [[RAW:%.*]] = load i8 addrspace(1)*, i8 addrspace(1)**
-; CHECK: [[PLAIN:%.*]] = call i8 addrspace(1)* @llvm.ptrmask.p1i8.i64(i8 addrspace(1)* [[RAW]], i64 281474976710655)
 ; CHECK-NOT: llvm.ptrmask
-; CHECK: store i8 addrspace(1)* [[PLAIN]], i8 addrspace(1)** %dst
+; CHECK-NOT: @g_cjLoadShift
+; CHECK: [[RAW:%.*]] = load i8 addrspace(1)*, i8 addrspace(1)**
+; CHECK-NOT: llvm.ptrmask
+; CHECK: store i8 addrspace(1)* [[RAW]], i8 addrspace(1)** %dst
 entry:
   %p = getelementptr inbounds %"record.std.core:String", %"record.std.core:String"* %this, i64 0, i32 0
   %raw = load i8 addrspace(1)*, i8 addrspace(1)** %p, align 8
@@ -39,8 +48,9 @@ entry:
 define void @store_into_stack(i8 addrspace(1)* %val,
                               %"record.std.core:String"* %this) gc "cangjie" {
 ; CHECK-LABEL: define void @store_into_stack(
-; CHECK: [[PLAIN:%.*]] = call i8 addrspace(1)* @llvm.ptrmask.p1i8.i64(i8 addrspace(1)* %val, i64 281474976710655)
-; CHECK: store i8 addrspace(1)* [[PLAIN]]
+; CHECK-NOT: llvm.ptrmask
+; CHECK-NOT: @g_cjLoadShift
+; CHECK: store i8 addrspace(1)* %val
 entry:
   %p = getelementptr inbounds %"record.std.core:String", %"record.std.core:String"* %this, i64 0, i32 0
   store i8 addrspace(1)* %val, i8 addrspace(1)** %p, align 8
@@ -50,6 +60,7 @@ entry:
 define i8 addrspace(1)* @heap_place_untouched(i8 addrspace(1)* addrspace(1)* %field) gc "cangjie" {
 ; CHECK-LABEL: define i8 addrspace(1)* @heap_place_untouched(
 ; CHECK-NOT: llvm.ptrmask
+; CHECK-NOT: @g_cjLoadShift
 ; CHECK: [[V:%.*]] = load i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)* %field
 ; CHECK-NEXT: ret i8 addrspace(1)* [[V]]
 entry:

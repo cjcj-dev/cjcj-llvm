@@ -70,3 +70,6 @@ pythonenv*
 /clang/utils/analyzer/projects/*/RefScanBuildResults
 # automodapi puts generated documentation files here.
 /lldb/docs/python_api/
+
+# lane working notes live outside the repository (agent_scratch)
+.lane-notes.md
