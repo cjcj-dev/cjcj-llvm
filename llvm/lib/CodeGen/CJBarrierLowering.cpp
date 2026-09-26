@@ -225,6 +225,17 @@ public:
 
     Function *Callee = getOrInsertRuntimeFunc(II);
     switch (II->getIntrinsicID()) {
+    case Intrinsic::cj_gcwrite_generic_payload:
+    case Intrinsic::cj_gcread_generic_payload: {
+      IRBuilder<> Builder(II);
+      // Payload layout sizes are i32; the runtime consumes size_t.
+      Value *Size = Builder.CreateZExtOrTrunc(
+          II->getArgOperand(2), M.getDataLayout().getIntPtrType(C),
+          "payload.size");
+      replaceCallInst(Callee,
+                      {II->getArgOperand(0), II->getArgOperand(1), Size}, II);
+      break;
+    }
     case Intrinsic::cj_gcwrite_ref:
       replaceCallInst(Callee, {II->getArgOperand(0), II->getArgOperand(1),
                                II->getArgOperand(2)}, II);
@@ -328,6 +339,12 @@ private:
     const Triple TT(II->getModule()->getTargetTriple());
     auto isARM = TT.isARM();
     switch (II->getIntrinsicID()) {
+    case Intrinsic::cj_gcwrite_generic_payload:
+    case Intrinsic::cj_gcread_generic_payload:
+      FuncType = FunctionType::get(Type::getVoidTy(C),
+          {II->getArgOperand(0)->getType(), II->getArgOperand(1)->getType(),
+           M.getDataLayout().getIntPtrType(C)}, false);
+      break;
     case Intrinsic::cj_gcwrite_ref:
       FuncType = FunctionType::get(Type::getVoidTy(C),
           {II->getArgOperand(0)->getType(), II->getArgOperand(1)->getType(),

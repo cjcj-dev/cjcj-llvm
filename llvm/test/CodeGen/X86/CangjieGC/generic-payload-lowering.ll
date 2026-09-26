@@ -12,7 +12,8 @@
 
 ; LOWER-LABEL: define void @gcread_generic_payload(
 ; LOWER-NOT: llvm.cj.gcread.generic.payload
-; LOWER: call void @CJ_MCC_ReadGenericPayload(i8* %dst, i8 addrspace(1)* %obj, i32 %size)
+; LOWER: %[[SIZE:.*]] = zext i32 %size to i64
+; LOWER: call void @CJ_MCC_ReadGenericPayload(i8* %dst, i8 addrspace(1)* %obj, i64 %[[SIZE]])
 ;--- cangjie.ll
 define void @gcread_generic_payload(i8* %dst, i8 addrspace(1)* %obj,
                                     i32 %size) #0 gc "cangjie" {
