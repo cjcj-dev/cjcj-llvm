@@ -986,6 +986,19 @@ bool StructLiveAnalysis::isStackContainGCPtr(Value *V, uint64_t Size) {
   if (isa<Constant>(findMemoryBasePointer(V))) {
     Ret = false;
   } else {
+    APInt LayoutOffsets(DL.getIndexSizeInBits(0), 0);
+    Value *LayoutBase =
+        V->stripAndAccumulateConstantOffsets(DL, LayoutOffsets, false);
+    if (!isa<AllocaInst>(LayoutBase))
+      LayoutBase = findMemoryBasePointer(V);
+    if (auto *LayoutAI = dyn_cast<AllocaInst>(LayoutBase)) {
+      if (!isGCPointerType(LayoutAI->getAllocatedType()) &&
+          !AllocaData.StructLayoutGCPtrMap.count(LayoutAI)) {
+        StackContainGCPtrMap[V] = false;
+        return false;
+      }
+    }
+
     Value *Def = V->stripPointerCasts();
     if (isMemoryContainsGCPtrType(Def->getType())) {
       Ret = true;
