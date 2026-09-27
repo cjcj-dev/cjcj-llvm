@@ -9,9 +9,18 @@
 ; Repeated callsites with the same derived/base location sequence should share
 ; one compressed DerivedInfo entry instead of appending duplicate table rows.
 
-; CHECK:      #StackMapItem nums:2
-; CHECK:      #[RegIdx: -1, SlotIdx: 0, LNIdx: -1, DerivedStartIdx: 0, SPRegIdx: -1, SPSlotIdx: -1]
-; CHECK:      #[RegIdx: -1, SlotIdx: 0, LNIdx: -1, DerivedStartIdx: 0, SPRegIdx: -1, SPSlotIdx: -1]
+; The two calls share derived info; the return poll adds a distinct PC row
+; whose only root is the returned pointer in rax. It adds no derived info.
+; CHECK-LABEL: .Lstack_map.dedup:
+; CHECK:      #StackMapItem nums:3
+; CHECK:      .long .Ltmp{{[0-9]+}}-dedup
+; CHECK-NEXT: #[RegIdx: -1, SlotIdx: 0, LNIdx: -1, DerivedStartIdx: 0, SPRegIdx: -1, SPSlotIdx: -1]
+; CHECK:      .long .Ltmp{{[0-9]+}}-dedup
+; CHECK-NEXT:      #[RegIdx: -1, SlotIdx: 0, LNIdx: -1, DerivedStartIdx: 0, SPRegIdx: -1, SPSlotIdx: -1]
+; CHECK:      .long .Lcj_return_pc{{[0-9]+}}-dedup
+; CHECK-NEXT: #[RegIdx: 0, SlotIdx: -1, LNIdx: -1, DerivedStartIdx: -1, SPRegIdx: -1, SPSlotIdx: -1]
+; CHECK:      #RegNums: 1
+; CHECK-NEXT: {{.*}}#Idx[0]: (0x1=1), rax
 ; CHECK:      #DerivedInfoNums: 1
 ; CHECK-NEXT: {{.*}}#Idx[0]: RegIdx: -1, SlotIdx: 1
 
