@@ -61,7 +61,6 @@ extern cl::opt<bool> EnableCalledSaveForStackMap;
 
 namespace llvm {
 extern cl::opt<bool> CJPipeline;
-extern cl::opt<bool> EnableStackGrow;
 }
 #define DEBUG_TYPE "statepoint-lowering"
 
@@ -871,10 +870,8 @@ lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
   // Finally, we record the fields and stack ptrs.
   if (CJPipeline) {
     lowerStructFieldsValue(Fields, Ops, Builder, AllocaPtrsIndexMap);
-    if (EnableStackGrow) {
-      LowerStackInfo Info(SI, Ops, Builder, MemRefs);
-      Info.lowerStackValue(LoweredStackPtrs);
-    }
+    LowerStackInfo Info(SI, Ops, Builder, MemRefs);
+    Info.lowerStackValue(LoweredStackPtrs);
   }
 
   // Copy to out vector. LoweredGCPtrs will be empty after this point.

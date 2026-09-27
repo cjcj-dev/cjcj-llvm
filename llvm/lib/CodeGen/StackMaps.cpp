@@ -63,7 +63,6 @@ int32_t OffsetStepSize = 8;
 int32_t FuncPtrSize = 8;
 
 extern cl::opt<bool> CJPipeline;
-extern cl::opt<bool> EnableStackGrow;
 } // namespace llvm
 const char *StackMaps::WSMP = "Stack Maps: ";
 namespace {
@@ -827,14 +826,12 @@ void StackMaps::parseCangjieStatepointOpers(
     }
   }
 
-  if (EnableStackGrow) {
-    unsigned NumStackPtrsIdx = SO.getNumStackPtrsIdx();
-    auto MOI = MOB + NumStackPtrsIdx;
-    unsigned NumStackPtrs = MOI->getImm();
-    ++MOI;
-    while (NumStackPtrs--) {
-      MOI = parseCangjieStackOpers(MOI, CSInfo);
-    }
+  unsigned NumStackPtrsIdx = SO.getNumStackPtrsIdx();
+  auto MOI = MOB + NumStackPtrsIdx;
+  unsigned NumStackPtrs = MOI->getImm();
+  ++MOI;
+  while (NumStackPtrs--) {
+    MOI = parseCangjieStackOpers(MOI, CSInfo);
   }
 }
 
@@ -1491,15 +1488,13 @@ static void genStackMapInfo(CompressedInfo &Data,
     IdxInfo.DerivedInfoStartIdx = Data.getOrInsertDerivedInfoStartIdx(IdxsInfo);
   }
 
-  if (EnableStackGrow) {
-    // The set of the Stack Ptrs Locations.
-    std::set<StackMaps::Location> SPLocs(CSI.StackLocations.begin(),
-                                         CSI.StackLocations.end());
-    std::pair<unsigned, unsigned> StackPtrIdx =
-        addItemInfo(Data, CSI, WidthInfo, SPLocs);
-    IdxInfo.SPRegIdxPlusOne = StackPtrIdx.first;
-    IdxInfo.SPSlotIdxPlusOne = StackPtrIdx.second;
-  }
+  // The set of the Stack Ptrs Locations.
+  std::set<StackMaps::Location> SPLocs(CSI.StackLocations.begin(),
+                                       CSI.StackLocations.end());
+  std::pair<unsigned, unsigned> StackPtrIdx =
+      addItemInfo(Data, CSI, WidthInfo, SPLocs);
+  IdxInfo.SPRegIdxPlusOne = StackPtrIdx.first;
+  IdxInfo.SPSlotIdxPlusOne = StackPtrIdx.second;
 }
 
 void StackMaps::prepareCompressedData(CompressedInfo &Data,
@@ -1530,26 +1525,16 @@ void StackMaps::prepareCompressedData(CompressedInfo &Data,
   Data.MaxBits.SlotIdx = getValidBitNums(Data.SlotItems.Items.size());
   Data.MaxBits.LNIdx = getValidBitNums(Data.LNItems.Items.size());
   Data.MaxBits.DerivedIdx = getValidBitNums(Data.DerivedInfo.size());
-  if (EnableStackGrow) {
-    Data.MaxBits.SPRegIdx = Data.MaxBits.RegIdx;
-    Data.MaxBits.SPSlotIdx = Data.MaxBits.SlotIdx;
-    // add paddingBits to SPSlotIdx since PC should be byte (8 bits) aligned
-    uint32_t PaddingBits =
-        (8 - ((Data.MaxBits.RegIdx + Data.MaxBits.SlotIdx + Data.MaxBits.LNIdx +
-               Data.MaxBits.DerivedIdx + Data.MaxBits.SPRegIdx +
-               Data.MaxBits.SPSlotIdx) %
-              8)) %
-        8;
-    Data.MaxBits.SPSlotIdx += PaddingBits;
-  } else {
-    // add paddingBits to DerivedIdx since PC should be byte (8 bits) aligned
-    uint32_t PaddingBits =
-        (8 - ((Data.MaxBits.RegIdx + Data.MaxBits.SlotIdx + Data.MaxBits.LNIdx +
-               Data.MaxBits.DerivedIdx) %
-              8)) %
-        8;
-    Data.MaxBits.DerivedIdx += PaddingBits;
-  }
+  Data.MaxBits.SPRegIdx = Data.MaxBits.RegIdx;
+  Data.MaxBits.SPSlotIdx = Data.MaxBits.SlotIdx;
+  // add paddingBits to SPSlotIdx since PC should be byte (8 bits) aligned
+  uint32_t PaddingBits =
+      (8 - ((Data.MaxBits.RegIdx + Data.MaxBits.SlotIdx + Data.MaxBits.LNIdx +
+             Data.MaxBits.DerivedIdx + Data.MaxBits.SPRegIdx +
+             Data.MaxBits.SPSlotIdx) %
+            8)) %
+      8;
+  Data.MaxBits.SPSlotIdx += PaddingBits;
 
   // RegItem
   Data.MaxBits.RegBit = getValidBitNums(WidthInfo.RegBit);
@@ -1581,14 +1566,14 @@ void StackMaps::prepareCompressedData(CompressedInfo &Data,
 // varInt SlotIdx
 // varInt LNIdx
 // varInt DerivedIdx (EnableCJCopyGC)
-// varInt SPRegIdx (EnableStackGrow)
-// varInt SPSlotIdx (EnableStackGrow)
+// varInt SPRegIdx 
+// varInt SPSlotIdx 
 // varInt PaddingBits
 // bits[PaddingBits]
 // StackMapItemNums * {PC, RegIdxPlusOne, SlotIdxPlusOne, LNIdxPlusOne,
 //                     DerivedInfoStartIdx(EnableCJCopyGC),
-//                     SPRegIdxPlusOne(EnableStackGrow),
-//                     SPSlotIdxPlusOne(EnableStackGrow)}
+//                     SPRegIdxPlusOne,
+//                     SPSlotIdxPlusOne}
 // =========================
 // varInt RegInfosNums
 // varInt RegBit
@@ -1638,8 +1623,8 @@ void StackMaps::emitCangjieCompressedData(MCStreamer &OS,
 // varInt SlotIdx
 // varInt LNIdx
 // varInt DerivedIdx (EnableCJCopyGC)
-// varInt SPRegIdx (EnableStackGrow)
-// varInt SPSlotIdx (EnableStackGrow)
+// varInt SPRegIdx 
+// varInt SPSlotIdx 
 // varInt PaddingBits
 void DataEncoder::emitPrologueAndStackMapItemHeader() {
   writeVarUint(Data.StackSize);
@@ -1655,10 +1640,8 @@ void DataEncoder::emitPrologueAndStackMapItemHeader() {
     writeVarUint(Data.MaxBits.SlotIdx);
     writeVarUint(Data.MaxBits.LNIdx);
     writeVarUint(Data.MaxBits.DerivedIdx);
-    if (EnableStackGrow) {
-      writeVarUint(Data.MaxBits.SPRegIdx);
-      writeVarUint(Data.MaxBits.SPSlotIdx);
-    }
+    writeVarUint(Data.MaxBits.SPRegIdx);
+    writeVarUint(Data.MaxBits.SPSlotIdx);
   }
   writeBitsToPadding();
   // emitBuffer since PC should be Byte aligned and can't write into buffer
@@ -1668,8 +1651,8 @@ void DataEncoder::emitPrologueAndStackMapItemHeader() {
 
 // StackMapItemNums * {PC, RegIdxPlusOne, SlotIdxPlusOne, LNIdxPlusOne,
 //                     DerivedInfoStartIdx(EnableCJCopyGC),
-//                     SPRegIdxPlusOne(EnableStackGrow),
-//                     SPSlotIdxPlusOne(EnableStackGrow)}
+//                     SPRegIdxPlusOne,
+//                     SPSlotIdxPlusOne}
 void DataEncoder::emitStackMapItem() {
   for (const auto &StackMap : Data.StackMapItem) {
     // emit PC breaks the consistency of the emit buffer
@@ -1679,10 +1662,8 @@ void DataEncoder::emitStackMapItem() {
     writeBits(Data.MaxBits.LNIdx, StackMap.second.LNIdxPlusOne);
     writeBits(Data.MaxBits.DerivedIdx, StackMap.second.DerivedInfoStartIdx);
 
-    if (EnableStackGrow) {
-      writeBits(Data.MaxBits.SPRegIdx, StackMap.second.SPRegIdxPlusOne);
-      writeBits(Data.MaxBits.SPSlotIdx, StackMap.second.SPSlotIdxPlusOne);
-    }
+    writeBits(Data.MaxBits.SPRegIdx, StackMap.second.SPRegIdxPlusOne);
+    writeBits(Data.MaxBits.SPSlotIdx, StackMap.second.SPSlotIdxPlusOne);
     emitCommentForStackMapItem();
     emitBufferContent();
   }
@@ -1796,10 +1777,8 @@ void DataEncoder::emitCommentForPrologueAndStackMapItemHeader() {
     MaxBits.SlotIdx = readVarUint();
     MaxBits.LNIdx = readVarUint();
     MaxBits.DerivedIdx = readVarUint();
-    if (EnableStackGrow) {
-      MaxBits.SPRegIdx = readVarUint();
-      MaxBits.SPSlotIdx = readVarUint();
-    }
+    MaxBits.SPRegIdx = readVarUint();
+    MaxBits.SPSlotIdx = readVarUint();
   }
   uint64_t SkipBitNums = readVarUint();
   if (SkipBitNums != 0) {
@@ -1814,17 +1793,11 @@ void DataEncoder::emitCommentForStackMapItem() {
   int32_t SlotIdx = readBits(MaxBits.SlotIdx) - 1;
   int32_t LNIdx = readBits(MaxBits.LNIdx) - 1;
   int32_t DerivedStartIdx = readBits(MaxBits.DerivedIdx) - 1;
-  if (EnableStackGrow) {
-    int32_t SPRegIdx = readBits(MaxBits.SPRegIdx) - 1;
-    int32_t SPSlotIdx = readBits(MaxBits.SPSlotIdx) - 1;
-    Comment << "[RegIdx: " << RegIdx << ", SlotIdx: " << SlotIdx
-            << ", LNIdx: " << LNIdx << ", DerivedStartIdx: " << DerivedStartIdx
-            << ", SPRegIdx: " << SPRegIdx << ", SPSlotIdx: " << SPSlotIdx << "]";
-  } else {
-    Comment << "[RegIdx: " << RegIdx << ", SlotIdx: " << SlotIdx
-            << ", LNIdx: " << LNIdx << ", DerivedStartIdx: " << DerivedStartIdx
-            << "]";
-  }
+  int32_t SPRegIdx = readBits(MaxBits.SPRegIdx) - 1;
+  int32_t SPSlotIdx = readBits(MaxBits.SPSlotIdx) - 1;
+  Comment << "[RegIdx: " << RegIdx << ", SlotIdx: " << SlotIdx
+          << ", LNIdx: " << LNIdx << ", DerivedStartIdx: " << DerivedStartIdx
+          << ", SPRegIdx: " << SPRegIdx << ", SPSlotIdx: " << SPSlotIdx << "]";
   OS.emitRawComment(Comment.str());
 }
 
