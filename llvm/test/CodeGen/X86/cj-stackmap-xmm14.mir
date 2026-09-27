@@ -1,0 +1,21 @@
+# RUN: llc -mtriple=x86_64-pc-linux-gnu -cangjie-pipeline -start-after=prologepilog -filetype=obj %s -o %t.o
+# RUN: %python %S/Inputs/check-cj-register-map.py %t.o 0x80000000
+# RUN: llc -mtriple=x86_64-pc-linux-gnu -cangjie-pipeline -start-after=prologepilog %s -o - | FileCheck %s
+# CHECK: #Idx[0]: (0x80000000=2147483648), xmm14
+# Low-register control for the compressed register bitmap.
+--- |
+  target triple = "x86_64-pc-linux-gnu"
+  declare void @CJ_MCC_SafepointStub()
+  define void @xmm14_root() gc "cangjie" { ret void }
+...
+---
+name: xmm14_root
+tracksRegLiveness: true
+frameInfo:
+  hasCalls: true
+body: |
+  bb.0:
+    liveins: $xmm14
+    STATEPOINT 4, 0, 0, @CJ_MCC_SafepointStub, 2, 0, 2, 0, 2, 0, 2, 1, $xmm14, 2, 0, 2, 1, 0, 0, 2, 0, 2, 0, csr_64, implicit-def $rsp, implicit-def $ssp
+    RET64
+...

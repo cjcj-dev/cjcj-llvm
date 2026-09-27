@@ -1,0 +1,22 @@
+# RUN: llc -mtriple=x86_64-pc-linux-gnu -cangjie-pipeline -start-after=prologepilog -filetype=obj %s -o %t.o
+# RUN: %python %S/Inputs/check-cj-register-map.py %t.o 0x100000000
+# RUN: llc -mtriple=x86_64-pc-linux-gnu -cangjie-pipeline -start-after=prologepilog %s -o - | FileCheck %s
+# CHECK: #Idx[0]: (0x100000000=4294967296), xmm15
+# A physical XMM15 root at an outline safepoint must survive the compressed
+# register table, its width calculation, and the assembly comment readback.
+--- |
+  target triple = "x86_64-pc-linux-gnu"
+  declare void @CJ_MCC_SafepointStub()
+  define void @xmm15_root() gc "cangjie" { ret void }
+...
+---
+name: xmm15_root
+tracksRegLiveness: true
+frameInfo:
+  hasCalls: true
+body: |
+  bb.0:
+    liveins: $xmm15
+    STATEPOINT 4, 0, 0, @CJ_MCC_SafepointStub, 2, 0, 2, 0, 2, 0, 2, 1, $xmm15, 2, 0, 2, 1, 0, 0, 2, 0, 2, 0, csr_64, implicit-def $rsp, implicit-def $ssp
+    RET64
+...
