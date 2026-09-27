@@ -168,7 +168,9 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
                            ('restored', green, executables['candidate'])]))
 (OUT/'run-results.json').write_text(json.dumps(results, indent=2))
 unchanged = source_before == sha(source_consumer)
-source_rc = run(['git', '-C', SOURCE.parent, 'diff', '--exit-code'], OUT/'runtime-source-unchanged.log')
+# The MutatorManager.cpp sha256 pin above is the source-integrity guard; this
+# diff is an auxiliary sweep, and Windows checkouts carry CRLF row noise.
+source_rc = run(['git', '-C', SOURCE.parent, 'diff', '--exit-code', '--ignore-cr-at-eol'], OUT/'runtime-source-unchanged.log')
 (OUT/'runtime-source-identity.json').write_text(json.dumps({'before': source_before, 'after': sha(source_consumer), 'diff_rc': source_rc}))
 run(['uptime'], OUT/'uptime-after.log')
 run(['sccache', '--show-stats'], OUT/'sccache.log')
