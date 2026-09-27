@@ -1,0 +1,75 @@
+name: Native return-poll roots
+on:
+  push:
+    branches: ['sym/74-implement-r5852506143']
+    paths:
+      - 'llvm/utils/return-poll-native/**'
+      - '.github/workflows/return-poll-native.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: macos-15, target: aarch64-macos}
+          - {runner: macos-15-intel, target: x86_64-macos}
+          - {runner: windows-latest, target: x86_64-windows}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      RETURN_PAIR_OUT: ${{ runner.temp }}/return-pair
+      SCCACHE_GHA_ENABLED: 'false'
+      SCCACHE_DIR: ${{ runner.temp }}/sccache-return-pair
+      SCCACHE_CACHE_SIZE: 2G
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: cjcj-dev/cangjie-runtime
+          ref: 6864e7f2364447cf576feda84a9398744bf6872f
+          path: runtime-source
+      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/sccache-return-pair
+          key: return-pair-${{ matrix.target }}-6864e7f-${{ github.run_id }}
+          restore-keys: return-pair-${{ matrix.target }}-6864e7f-
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: CLANG64
+          update: false
+          install: >-
+            mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
+            file
+      - name: Apple native pair
+        if: runner.os == 'macOS'
+        run: |
+          ulimit -c 0
+          python3 llvm/utils/return-poll-native/native.py runtime-source
+      - name: Windows native pair
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          ulimit -c 0
+          export PATH="$(dirname "$(cygpath -u "$SCCACHE_PATH")"):$PATH"
+          python3 llvm/utils/return-poll-native/native.py runtime-source
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: return-pair-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/return-pair/*.json
+            ${{ runner.temp }}/return-pair/*.log
+            ${{ runner.temp }}/return-pair/*.o
+            ${{ runner.temp }}/return-pair/*-pair*
+            ${{ runner.temp }}/return-pair/*/*.json
+            ${{ runner.temp }}/return-pair/*/*.log
+            ${{ runner.temp }}/return-pair/*/*.diff
+            ${{ runner.temp }}/return-pair/*/product/*
+          if-no-files-found: error
