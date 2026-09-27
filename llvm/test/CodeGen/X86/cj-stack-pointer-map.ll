@@ -33,7 +33,7 @@ entry:
 ; CHECK-LABEL: .Lstack_map.sret_forward:
 ; CHECK: #StackMapItem nums:2
 ; CHECK: .long {{.*}}-sret_forward
-; CHECK: #{{\[}}RegIdx: -1, SlotIdx: -1, LNIdx: -1, DerivedStartIdx: -1, SPRegIdx: {{-1|[0-9]+}}, SPSlotIdx: {{[0-9]+}}]
+; CHECK: #{{\[}}RegIdx: -1, SlotIdx: -1, LNIdx: -1, DerivedStartIdx: -1, SPRegIdx: {{(-1, SPSlotIdx: [0-9]+|[0-9]+, SPSlotIdx: -?[0-9]+)}}]
 ; CHECK: #{{(RegNums|SlotsNums)}}: 1
 ; CHECK-LABEL: .Lstack_map.no_stack_pointer:
 ; CHECK: #StackMapItem nums:2
