@@ -195,7 +195,6 @@ extern cl::opt<bool> DisableGCSupport;
 extern cl::opt<bool> EnableBarrierOnly;
 extern cl::opt<bool> EnableSafepointOnly;
 }
-extern cl::opt<bool> EnableCalledSaveForStackMap;
 extern cl::opt<cl::boolOrDefault> EnableGlobalISelOption;
 namespace {
 
@@ -467,7 +466,6 @@ static bool addPass(PassManagerBase &PM, const char *argv0,
 
 // enable CJ Options when -cangjie-pipeline='true'
 static void initCangjieOptions() {
-  EnableCalledSaveForStackMap = CJPipeline && EnableCalledSaveForStackMap;
   if (CJPipeline) {
     EnableGlobalISelOption = cl::BOU_FALSE;
   }
@@ -499,7 +497,6 @@ static int compileModule(char **argv, LLVMContext &Context) {
   case ' ': break;
   case '0': {
     OLvl = CodeGenOpt::None;
-    EnableCalledSaveForStackMap = false;
     break;
   }
   case '1': OLvl = CodeGenOpt::Less; break;
