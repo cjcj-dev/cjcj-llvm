@@ -1518,11 +1518,16 @@ void X86AsmPrinter::emitCJReturnPollStubs() {
                                .addReg(0)
                                .addExpr(MCSymbolRefExpr::create(Poll.first, OutContext))
                                .addReg(0));
-    auto *Handler = OutContext.getOrCreateSymbol("CJ_MCC_HandleReturnSafepoint");
+    const bool IsCOFF = TM.getTargetTriple().isOSBinFormatCOFF();
+    auto *Handler = GetExternalSymbolSymbol(
+        IsCOFF ? "__imp_CJ_MCC_HandleReturnSafepoint"
+               : "CJ_MCC_HandleReturnSafepoint");
     EmitAndCountInstruction(MCInstBuilder(X86::JMP64m)
                                .addReg(X86::RIP).addImm(1).addReg(0)
                                .addExpr(MCSymbolRefExpr::create(
-                                   Handler, MCSymbolRefExpr::VK_GOTPCREL, OutContext))
+                                   Handler, IsCOFF ? MCSymbolRefExpr::VK_None
+                                                   : MCSymbolRefExpr::VK_GOTPCREL,
+                                   OutContext))
                                .addReg(0));
   }
   CJReturnPolls.clear();
