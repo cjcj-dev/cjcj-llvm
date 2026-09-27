@@ -63,6 +63,8 @@ if set(objects) != {'candidate', 'cut-producer'}:
 (OUT/'producer-identity.json').write_text(json.dumps(manifest, indent=2))
 run(['git', '-C', SOURCE.parent, 'rev-parse', 'HEAD'], OUT/'runtime-head.log')
 run(['uptime'], OUT/'uptime-before.log')
+source_consumer = SOURCE/'src/Mutator/MutatorManager.cpp'
+source_before = sha(source_consumer)
 
 
 def build(arm):
@@ -144,6 +146,10 @@ def execute(spec):
     env['DYLD_LIBRARY_PATH'] = str(destination)
     env['PATH'] = str(destination)+os.pathsep+env['PATH']
     rc = run([local], OUT/(name+'-run.log'), env=env, timeout=30)
+    if APPLE and name == 'candidate' and rc < 0:
+        run(['lldb', '--batch', '-o', 'settings set target.disable-aslr false',
+             '-o', 'run', '-k', 'thread backtrace all', '-k', 'register read',
+             '-k', 'disassemble --frame', '--', local], OUT/'candidate-debug.log', env=env, timeout=120)
     text = (OUT/(name+'-run.log')).read_text()
     expected = 1 if name.startswith('cut') else 0
     target = [x for x in text.splitlines() if x.startswith('PAIR_RETURN_TARGET ')]
@@ -157,6 +163,9 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
                            ('cut-consumer', cut, executables['candidate']),
                            ('restored', green, executables['candidate'])]))
 (OUT/'run-results.json').write_text(json.dumps(results, indent=2))
+unchanged = source_before == sha(source_consumer)
+source_rc = run(['git', '-C', SOURCE.parent, 'diff', '--exit-code'], OUT/'runtime-source-unchanged.log')
+(OUT/'runtime-source-identity.json').write_text(json.dumps({'before': source_before, 'after': sha(source_consumer), 'diff_rc': source_rc}))
 run(['uptime'], OUT/'uptime-after.log')
 run(['sccache', '--show-stats'], OUT/'sccache.log')
-sys.exit(0 if all(r['valid'] for r in results) else 1)
+sys.exit(0 if unchanged and source_rc == 0 and all(r['valid'] for r in results) else 1)

@@ -35,7 +35,8 @@ jobs:
           ref: 6864e7f2364447cf576feda84a9398744bf6872f
           path: runtime-source
       - uses: mozilla-actions/sccache-action@v0.0.10
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: cache
         with:
           path: ${{ github.workspace }}/sccache-return-pair
           key: return-pair-${{ matrix.target }}-6864e7f-${{ github.run_id }}
@@ -62,6 +63,11 @@ jobs:
           ulimit -c 0
           export PATH="$(dirname "$(cygpath -u "$SCCACHE_PATH")"):$PATH"
           python3 llvm/utils/return-poll-native/native.py runtime-source
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ${{ github.workspace }}/sccache-return-pair
+          key: ${{ steps.cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
