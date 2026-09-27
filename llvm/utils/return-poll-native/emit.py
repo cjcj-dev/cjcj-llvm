@@ -4,6 +4,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -17,8 +18,9 @@ if a.source_root is None:
 source = Path(__file__).with_name('pair.ll')
 a.out.mkdir(parents=True, exist_ok=True)
 sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
-head = subprocess.run(['git', '-C', a.source_root, 'rev-parse', 'HEAD'],
-                      capture_output=True, text=True, check=True).stdout.strip()
+head = os.environ.get('LLVM_HEAD') or subprocess.run(
+    ['git', '-C', a.source_root, 'rev-parse', 'HEAD'],
+    capture_output=True, text=True, check=True).stdout.strip()
 manifest = {'llvm_head': head,
             'ir_sha256': sha(source), 'objects': [],
             'product_sources': {name: sha(a.source_root/name) for name in [
