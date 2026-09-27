@@ -56,7 +56,6 @@ using namespace llvm;
 namespace llvm {
 extern cl::opt<bool> CJPipeline;
 extern cl::opt<bool> CangjieJIT;
-extern cl::opt<bool> EnableStackGrow;
 }
 
 static cl::opt<bool>
@@ -1226,7 +1225,8 @@ void TargetPassConfig::addMachinePasses() {
   // Run post-ra passes.
   addPostRegAlloc();
 
-  if (CJPipeline && EnableStackGrow && !CangjieJIT)
+  // Stack pointers are required for GC frame processing in both AOT and JIT.
+  if (CJPipeline)
     addPass(&CJStackPointerInserterID);
 
   addPass(&RemoveRedundantDebugValuesID);
