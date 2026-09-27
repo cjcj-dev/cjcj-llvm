@@ -35,4 +35,6 @@ uploaded even when a job fails.
 
 The GHA workflow runs macOS arm64, macOS x86_64 and Windows x86_64. iOS object
 format checks remain in `return-poll-formats.ll`; macOS execution is not evidence
-of iOS execution. The workflow's runtime pin is the merged runtime #1178 commit.
+of iOS execution. The workflow's default runtime pin is the merged runtime #1178 commit;
+`runtime_ref` permits the paired fix to run the same experiment, and every run
+records the resolved runtime SHA. `targets` selects a JSON runner/target matrix.
