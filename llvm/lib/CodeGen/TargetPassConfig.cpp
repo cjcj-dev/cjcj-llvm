@@ -1225,8 +1225,8 @@ void TargetPassConfig::addMachinePasses() {
   // Run post-ra passes.
   addPostRegAlloc();
 
-  // Stack pointers are also required for GC frame processing without growth.
-  if (CJPipeline && !CangjieJIT)
+  // Stack pointers are required for GC frame processing in both AOT and JIT.
+  if (CJPipeline)
     addPass(&CJStackPointerInserterID);
 
   addPass(&RemoveRedundantDebugValuesID);
