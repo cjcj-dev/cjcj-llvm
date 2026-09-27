@@ -20,9 +20,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     env:
-      RETURN_PAIR_OUT: ${{ runner.temp }}/return-pair
+      RETURN_PAIR_OUT: ${{ github.workspace }}/return-pair
       SCCACHE_GHA_ENABLED: 'false'
-      SCCACHE_DIR: ${{ runner.temp }}/sccache-return-pair
+      SCCACHE_DIR: ${{ github.workspace }}/sccache-return-pair
       SCCACHE_CACHE_SIZE: 2G
     steps:
       - uses: actions/checkout@v4
@@ -34,7 +34,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.10
       - uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/sccache-return-pair
+          path: ${{ github.workspace }}/sccache-return-pair
           key: return-pair-${{ matrix.target }}-6864e7f-${{ github.run_id }}
           restore-keys: return-pair-${{ matrix.target }}-6864e7f-
       - uses: msys2/setup-msys2@v2
@@ -64,12 +64,12 @@ jobs:
         with:
           name: return-pair-${{ matrix.target }}
           path: |
-            ${{ runner.temp }}/return-pair/*.json
-            ${{ runner.temp }}/return-pair/*.log
-            ${{ runner.temp }}/return-pair/*.o
-            ${{ runner.temp }}/return-pair/*-pair*
-            ${{ runner.temp }}/return-pair/*/*.json
-            ${{ runner.temp }}/return-pair/*/*.log
-            ${{ runner.temp }}/return-pair/*/*.diff
-            ${{ runner.temp }}/return-pair/*/product/*
+            ${{ github.workspace }}/return-pair/*.json
+            ${{ github.workspace }}/return-pair/*.log
+            ${{ github.workspace }}/return-pair/*.o
+            ${{ github.workspace }}/return-pair/*-pair*
+            ${{ github.workspace }}/return-pair/*/*.json
+            ${{ github.workspace }}/return-pair/*/*.log
+            ${{ github.workspace }}/return-pair/*/*.diff
+            ${{ github.workspace }}/return-pair/*/product/*
           if-no-files-found: error
