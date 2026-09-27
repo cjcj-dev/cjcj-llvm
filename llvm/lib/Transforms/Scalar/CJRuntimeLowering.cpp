@@ -89,7 +89,9 @@ const static StdMap<unsigned, RuntimeLoweringInfo> RuntimeMap {
     {Intrinsic::cj_get_vtable_func, {"CJ_MCC_UpdateVMT", false}},
     {Intrinsic::cj_get_mtable_func, {"CJ_MCC_GetMTable", false}},
     {Intrinsic::cj_get_method_outertype, {"CJ_MCC_GetMethodOuterTI", false}},
-    {Intrinsic::cj_acquire_rawdata, {"CJ_MCC_AcquireRawData", false}},
+    // JNI critical entry can block in a saferegion; its caller needs roots.
+    // HotSpot sharedRuntime_x86_64.cpp:2365-2372 publishes the native oop map.
+    {Intrinsic::cj_acquire_rawdata, {"CJ_MCC_AcquireRawData", true}},
     {Intrinsic::cj_release_rawdata, {"CJ_MCC_ReleaseRawData", false}},
     {Intrinsic::cj_post_throw_exception, {"CJ_MCC_PostThrowException", false}},
     {Intrinsic::cj_throw_exception, {"CJ_MCC_ThrowException", true}},
@@ -1036,7 +1038,6 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
       break;
     }
     case Intrinsic::cj_get_obj_klass:
-    case Intrinsic::cj_acquire_rawdata:
     case Intrinsic::cj_release_rawdata:
     case Intrinsic::cj_set_location:
     case Intrinsic::cj_pre_initialize_package:
@@ -1064,6 +1065,7 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
       Lowering.replaceWithRuntimeFunc(CI, true, false);
       Changed = true;
       break;
+    case Intrinsic::cj_acquire_rawdata:
     case Intrinsic::cj_cross_access_barrier:
     case Intrinsic::cj_get_exported_ref:
     case Intrinsic::cj_remove_exported_ref:
