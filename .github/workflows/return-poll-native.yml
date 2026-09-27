@@ -32,6 +32,10 @@ jobs:
         shell: bash
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
+      - name: Preserve Windows batch-file checkout convention
+        if: runner.os == 'Windows'
+        shell: bash
+        run: git config --global core.autocrlf true
       - uses: actions/checkout@v4
         with:
           repository: cjcj-dev/cangjie-runtime
