@@ -61,9 +61,9 @@ inline uint32_t getVarIntBitNumsForUInt(uint32_t Value) {
   return SingleVarIntBits + BitsPerByte * getMinBytesForUInt(Value);
 }
 
-inline uint32_t getValidBitNums(uint32_t Value) {
-  for (int I = 31; I >= 1; --I) { // 31: uint32_t occupy 32 bits at most
-    if (Value & (1 << I)) {
+inline uint32_t getValidBitNums(uint64_t Value) {
+  for (int I = 63; I >= 1; --I) { // A register bitmap can include XMM15 at bit 32.
+    if (Value & (uint64_t{1} << I)) {
       return I + 1;
     }
   }
@@ -89,7 +89,7 @@ struct CompressedInfo {
   ~CompressedInfo() = default;
 
   struct RegItem {
-    unsigned RegBit;
+    uint64_t RegBit;
     bool operator<(const RegItem &X) const { return RegBit < X.RegBit; }
   };
 

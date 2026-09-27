@@ -1330,7 +1330,7 @@ getLocation(std::set<StackMaps::Location>::const_iterator Itr) {
 }
 
 struct MaxWidthOfRefInfo {
-  unsigned RegBit;
+  uint64_t RegBit;
   unsigned BaseOffsetBytes;
   unsigned SlotBitIdx;
   unsigned CompressedSlotBit;
@@ -1429,7 +1429,7 @@ addItemInfo(CompressedInfo &Data, const StackMaps::CallsiteInfo &CSI,
       // other points
       if (CSI.RecordAllRefInReg ||
           Data.CSRegMap.find(Loc.Reg) != Data.CSRegMap.end()) {
-        RegInfo.RegBit |= 1 << Loc.Reg;
+        RegInfo.RegBit |= uint64_t{1} << Loc.Reg;
       }
     } else {
       BOffsets.push_back(Loc.Offset);
@@ -1877,11 +1877,11 @@ void DataEncoder::emitCommentForRegsAndSlots() {
   Comment << "RegNums: " << RegNums;
   MaxBits.RegBit = readVarUint();
   for (unsigned I = 0; I < RegNums; ++I) {
-    uint32_t Reg = readBits(MaxBits.RegBit);
+    uint64_t Reg = readBits(MaxBits.RegBit);
     (Comment << "\n\t\t#Idx[" << I << "]: (0x").write_hex(Reg)
         << "=" << Reg << ")";
-    for (int J = 0; J < 32; ++J) { // 32: uint32_t
-      if (Reg & (1 << J)) {
+    for (unsigned J = 0; J < Bit2RegStr.size(); ++J) {
+      if (Reg & (uint64_t{1} << J)) {
         Comment << ", " << Bit2RegStr.at(J);
       }
     }
