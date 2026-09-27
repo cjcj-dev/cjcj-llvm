@@ -1,3 +1,5 @@
+; RUN: llc --cangjie-pipeline -cj-stack-grow=false -O0 -mtriple=x86_64-unknown-linux-gnu \
+; RUN:   -stop-after=cangjie-stack-pointer-inserter -o - < %s | FileCheck %s
 ; RUN: llc --cangjie-pipeline -O0 -mtriple=x86_64-unknown-linux-gnu \
 ; RUN:   -stop-after=cangjie-stack-pointer-inserter -o - < %s | FileCheck %s
 

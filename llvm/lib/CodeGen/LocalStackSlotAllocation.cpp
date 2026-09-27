@@ -47,7 +47,6 @@ STATISTIC(NumReplacements, "Number of frame indices references replaced");
 
 namespace llvm {
 extern cl::opt<bool> CJPipeline;
-extern cl::opt<bool> EnableStackGrow;
 }
 
 namespace {
@@ -333,10 +332,10 @@ bool LocalStackSlotPass::insertFrameReferenceRegisters(MachineFunction &Fn) {
             break;
           int Idx = MO.getIndex();
           auto AI = Fn.getFrameInfo().getObjectAllocation(Idx);
-          // For cj-stack-grow, the FrameBaseReg will make a new spill opreation
+          // The FrameBaseReg will make a new spill operation
           // in the entry, which cannot be identified in the rewrite-statepoint-
           // for-cangjie-gc. Therefore, we do not perform it temporarily.
-          if (AI && EnableStackGrow && CJPipeline &&
+          if (AI && CJPipeline &&
               Fn.getFunction().hasCangjieGC())
             break;
 

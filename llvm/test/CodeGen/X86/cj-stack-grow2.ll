@@ -1,3 +1,4 @@
+; RUN: llc -O0 --cangjie-pipeline -cj-stack-grow=false -mtriple x86_64-pc-linux-gnu < %s | FileCheck %s
 ; RUN: llc -O0 --cangjie-pipeline -mtriple x86_64-pc-linux-gnu  < %s  | FileCheck %s
 
 %Unit.Type = type { i8 }
