@@ -2381,9 +2381,8 @@ void AArch64AsmPrinter::emitCJReturnPollStubs() {
   for (const auto &Poll : CJReturnPolls) {
     OutStreamer->emitLabel(Poll.second);
     const Triple &TT = TM.getTargetTriple();
-    auto *HandlerSymbol = GetExternalSymbolSymbol(
-        TT.isOSBinFormatCOFF() ? "__imp_CJ_MCC_HandleReturnSafepoint"
-                              : "CJ_MCC_HandleReturnSafepoint");
+    auto *HandlerSymbol =
+        GetExternalSymbolSymbol("CJ_MCC_HandleReturnSafepoint");
     auto *Handler = MCSymbolRefExpr::create(HandlerSymbol, OutContext);
     const MCExpr *Page;
     const MCExpr *PageOffset;
@@ -2393,14 +2392,10 @@ void AArch64AsmPrinter::emitCJReturnPollStubs() {
       PageOffset = MCSymbolRefExpr::create(
           HandlerSymbol, MCSymbolRefExpr::VK_GOTPAGEOFF, OutContext);
     } else {
-      Page = AArch64MCExpr::create(
-          Handler, TT.isOSBinFormatCOFF() ? AArch64MCExpr::VK_ABS_PAGE
-                                         : AArch64MCExpr::VK_GOT_PAGE,
-          OutContext);
-      PageOffset = AArch64MCExpr::create(
-          Handler, TT.isOSBinFormatCOFF() ? AArch64MCExpr::VK_LO12
-                                         : AArch64MCExpr::VK_GOT_LO12,
-          OutContext);
+      Page = AArch64MCExpr::create(Handler, AArch64MCExpr::VK_GOT_PAGE,
+                                   OutContext);
+      PageOffset = AArch64MCExpr::create(Handler, AArch64MCExpr::VK_GOT_LO12,
+                                         OutContext);
     }
     // x17 must be startPC and x16 the return-site PC at the handler entry.
     // A PLT veneer would clobber both, so the resolved target goes in x9

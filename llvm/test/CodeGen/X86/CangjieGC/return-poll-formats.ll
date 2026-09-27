@@ -1,6 +1,7 @@
 ; REQUIRES: x86-registered-target, aarch64-registered-target
-; RUN: llc --cangjie-pipeline -mtriple=x86_64 < %s | FileCheck %s --check-prefix=UNKNOWN
-; RUN: llc --cangjie-pipeline -mtriple=aarch64 < %s | FileCheck %s --check-prefix=UNKNOWN
+; RUN: llc --cangjie-pipeline -mtriple=aarch64-pc-windows-msvc < %s | FileCheck %s --check-prefix=NO-POLL
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 < %s | FileCheck %s --check-prefix=NO-POLL
+; RUN: llc --cangjie-pipeline -mtriple=aarch64 < %s | FileCheck %s --check-prefix=NO-POLL
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnu < %s | FileCheck %s --check-prefixes=X86,X86-ELF
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnu -filetype=obj < %s -o %t.x86_64-unknown-linux-gnu.o
 ; RUN: llvm-objdump -r %t.x86_64-unknown-linux-gnu.o | FileCheck %s --check-prefix=X86-ELF-RELOC
@@ -22,18 +23,16 @@
 ; RUN: llc --cangjie-pipeline -mtriple=aarch64-apple-ios14.0 < %s | FileCheck %s --check-prefixes=A64,A64-MACH
 ; RUN: llc --cangjie-pipeline -mtriple=aarch64-apple-ios14.0 -filetype=obj < %s -o %t.aarch64-apple-ios14.0.o
 ; RUN: llvm-objdump -r %t.aarch64-apple-ios14.0.o | FileCheck %s --check-prefix=A64-MACH-RELOC
-; RUN: llc --cangjie-pipeline -mtriple=aarch64-pc-windows-msvc < %s | FileCheck %s --check-prefixes=A64,A64-COFF
-; RUN: llc --cangjie-pipeline -mtriple=aarch64-pc-windows-msvc -filetype=obj < %s -o %t.aarch64-pc-windows-msvc.o
-; RUN: llvm-objdump -r %t.aarch64-pc-windows-msvc.o | FileCheck %s --check-prefix=A64-COFF-RELOC
 ;
+; Windows ARM64 is outside the runtime platform matrix.
 ; Address materialization follows X86MCInstLower and
 ; AArch64MCInstLower::lowerSymbolOperand{MachO,COFF,ELF}. The indirect
 ; transfer must preserve the return registers and r10/r11 or x17/x16.
 ; Check the actual object relocations as well as the instruction operands.
 
-; UNKNOWN: ref_ret:
-; UNKNOWN-NOT: CJ_MCC_HandleReturnSafepoint
-; UNKNOWN-NOT: cj_return_pc
+; NO-POLL: ref_ret:
+; NO-POLL-NOT: CJ_MCC_HandleReturnSafepoint
+; NO-POLL-NOT: cj_return_pc
 ; X86-LABEL: ref_ret:
 ; X86: cmpq {{[0-9]+}}(%r15), %rsp
 ; X86-NEXT: ja
@@ -52,8 +51,6 @@
 ; A64-ELF-NEXT: ldr x9, [x9, :got_lo12:CJ_MCC_HandleReturnSafepoint]
 ; A64-MACH: adrp x9, _CJ_MCC_HandleReturnSafepoint@GOTPAGE
 ; A64-MACH-NEXT: ldr x9, [x9, _CJ_MCC_HandleReturnSafepoint@GOTPAGEOFF]
-; A64-COFF: adrp x9, __imp_CJ_MCC_HandleReturnSafepoint
-; A64-COFF-NEXT: ldr x9, [x9, :lo12:__imp_CJ_MCC_HandleReturnSafepoint]
 ; A64: adr x17, {{.*}}func_begin{{[0-9]+}}
 ; A64-NEXT: adr x16, {{.*}}cj_return_pc{{[0-9]+}}
 ; A64-NEXT: br x9
@@ -84,8 +81,6 @@ attributes #0 = { "gc-leaf-function" }
 ; A64-ELF-RELOC: R_AARCH64_LD64_GOT_LO12_NC{{.*}} CJ_MCC_HandleReturnSafepoint
 ; A64-MACH-RELOC-DAG: ARM64_RELOC_GOT_LOAD_PAGE21{{.*}} _CJ_MCC_HandleReturnSafepoint
 ; A64-MACH-RELOC-DAG: ARM64_RELOC_GOT_LOAD_PAGEOFF12{{.*}} _CJ_MCC_HandleReturnSafepoint
-; A64-COFF-RELOC: IMAGE_REL_ARM64_PAGEBASE_REL21{{.*}} __imp_CJ_MCC_HandleReturnSafepoint
-; A64-COFF-RELOC: IMAGE_REL_ARM64_PAGEOFFSET_12L{{.*}} __imp_CJ_MCC_HandleReturnSafepoint
 
 !llvm.module.flags = !{!0}
 !0 = !{i32 2, !"Cangjie_PACKAGE_ID", !"return_poll_formats"}
