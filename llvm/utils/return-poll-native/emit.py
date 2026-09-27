@@ -10,12 +10,19 @@ import subprocess
 p = argparse.ArgumentParser()
 p.add_argument('--tools', type=Path, required=True)
 p.add_argument('--out', type=Path, required=True)
+p.add_argument('--source-root', type=Path)
 a = p.parse_args()
+if a.source_root is None:
+    a.source_root = Path(__file__).resolve().parents[3]
 source = Path(__file__).with_name('pair.ll')
 a.out.mkdir(parents=True, exist_ok=True)
 sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
 manifest = {'llvm_head': '52f9519714b42ee8c416fe2e26a266c2efdd2e51',
-            'ir_sha256': sha(source), 'objects': []}
+            'ir_sha256': sha(source), 'objects': [],
+            'product_sources': {name: sha(a.source_root/name) for name in [
+                'llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp',
+                'llvm/lib/Target/X86/X86MCInstLower.cpp',
+                'llvm/lib/Target/AArch64/AArch64AsmPrinter.cpp']}}
 for target, triple in [('x86_64-macos', 'x86_64-apple-macosx11.0'),
                        ('aarch64-macos', 'aarch64-apple-macosx11.0'),
                        ('x86_64-windows', 'x86_64-pc-windows-msvc')]:
