@@ -1490,7 +1490,7 @@ static void genStackMapInfo(CompressedInfo &Data,
 
   // The set of the Stack Ptrs Locations.
   std::set<StackMaps::Location> SPLocs(CSI.StackLocations.begin(),
-                                       CSI.StackLocations.end());
+                                     CSI.StackLocations.end());
   std::pair<unsigned, unsigned> StackPtrIdx =
       addItemInfo(Data, CSI, WidthInfo, SPLocs);
   IdxInfo.SPRegIdxPlusOne = StackPtrIdx.first;
@@ -1566,8 +1566,8 @@ void StackMaps::prepareCompressedData(CompressedInfo &Data,
 // varInt SlotIdx
 // varInt LNIdx
 // varInt DerivedIdx (EnableCJCopyGC)
-// varInt SPRegIdx 
-// varInt SPSlotIdx 
+// varInt SPRegIdx
+// varInt SPSlotIdx
 // varInt PaddingBits
 // bits[PaddingBits]
 // StackMapItemNums * {PC, RegIdxPlusOne, SlotIdxPlusOne, LNIdxPlusOne,
@@ -1623,8 +1623,8 @@ void StackMaps::emitCangjieCompressedData(MCStreamer &OS,
 // varInt SlotIdx
 // varInt LNIdx
 // varInt DerivedIdx (EnableCJCopyGC)
-// varInt SPRegIdx 
-// varInt SPSlotIdx 
+// varInt SPRegIdx
+// varInt SPSlotIdx
 // varInt PaddingBits
 void DataEncoder::emitPrologueAndStackMapItemHeader() {
   writeVarUint(Data.StackSize);
