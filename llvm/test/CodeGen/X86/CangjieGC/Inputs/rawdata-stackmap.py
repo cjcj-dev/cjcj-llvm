@@ -33,19 +33,26 @@ for i,s in enumerate(sects):
 def target(section,pos):
  sym,add,typ=relocs[section,pos]
  return sym[1],sym[2]+add
-md,mdpos=target(sec,start-4)
-sm,smpos=target(md,mdpos)
-bits=int.from_bytes(data(sm)[smpos:], 'little'); cursor=0
-def take(n):
- global cursor
- v=(bits>>cursor)&((1<<n)-1); cursor+=n; return v
-def var():
- t=take(4); return t if t<=11 else take((t-11)*8)
-stack,fmt,pro=var(),var(),var(); offsets=[var() for i in range(32) if pro&(1<<i)]
-cols=8+(2 if fmt&2 else 0)
-hdr=[var() for _ in range(cols)]; take(hdr[-1])
-rows=[[take(32)]+[take(n) for n in hdr[1:-1]] for _ in range(hdr[0])]
-rn,rw=var(),var(); regs=[take(rw) for _ in range(rn)]
+# A function with no safepoint-carrying call has no stack map at all; that is
+# exactly the leaf-Acquire regression this decodes, so report it as no root
+# rather than failing to walk the record.
+rows=[]; regs=[]
+if (sec,start-4) in relocs:
+    md,mdpos=target(sec,start-4)
+    if (md,mdpos) in relocs:
+        sm,smpos=target(md,mdpos)
+        bits=int.from_bytes(data(sm)[smpos:], 'little'); cursor=0
+        def take(n):
+            global cursor
+            v=(bits>>cursor)&((1<<n)-1); cursor+=n; return v
+        def var():
+            t=take(4); return t if t<=11 else take((t-11)*8)
+        stack,fmt,pro=var(),var(),var(); offsets=[var() for i in range(32) if pro&(1<<i)]
+        cols=8+(2 if fmt&2 else 0)
+        hdr=[var() for _ in range(cols)]; take(hdr[-1])
+        rows=[[take(32)]+[take(n) for n in hdr[1:-1]] for _ in range(hdr[0])]
+        rn,rw=var(),var(); regs=[take(rw) for _ in range(rn)]
+stack=0; fmt=0; pro=0; hdr=[0]*9
 calls=[]
 for (section,pos),(sym,add,typ) in relocs.items():
  if section==sec and start<=pos<start+size and sym[0] in ('CJ_MCC_AcquireRawData','CJ_MCC_ReleaseRawData'):
