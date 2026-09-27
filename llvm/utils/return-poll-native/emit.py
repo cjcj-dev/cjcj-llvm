@@ -17,7 +17,9 @@ if a.source_root is None:
 source = Path(__file__).with_name('pair.ll')
 a.out.mkdir(parents=True, exist_ok=True)
 sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
-manifest = {'llvm_head': '52f9519714b42ee8c416fe2e26a266c2efdd2e51',
+head = subprocess.run(['git', '-C', a.source_root, 'rev-parse', 'HEAD'],
+                      capture_output=True, text=True, check=True).stdout.strip()
+manifest = {'llvm_head': head,
             'ir_sha256': sha(source), 'objects': [],
             'product_sources': {name: sha(a.source_root/name) for name in [
                 'llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp',
