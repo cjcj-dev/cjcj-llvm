@@ -1,4 +1,6 @@
 ; REQUIRES: x86-registered-target, aarch64-registered-target
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 < %s | FileCheck %s --check-prefix=UNKNOWN
+; RUN: llc --cangjie-pipeline -mtriple=aarch64 < %s | FileCheck %s --check-prefix=UNKNOWN
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnu < %s | FileCheck %s --check-prefixes=X86,X86-ELF
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnu -filetype=obj < %s -o %t.x86_64-unknown-linux-gnu.o
 ; RUN: llvm-objdump -r %t.x86_64-unknown-linux-gnu.o | FileCheck %s --check-prefix=X86-ELF-RELOC
@@ -29,6 +31,9 @@
 ; transfer must preserve the return registers and r10/r11 or x17/x16.
 ; Check the actual object relocations as well as the instruction operands.
 
+; UNKNOWN: ref_ret:
+; UNKNOWN-NOT: CJ_MCC_HandleReturnSafepoint
+; UNKNOWN-NOT: cj_return_pc
 ; X86-LABEL: ref_ret:
 ; X86: cmpq {{[0-9]+}}(%r15), %rsp
 ; X86-NEXT: ja
