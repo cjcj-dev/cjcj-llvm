@@ -3,6 +3,7 @@
 # emitStackMapItem, writeRegRefAndSlotRef. No compiler log is used as a map.
 import hashlib
 import json
+import re
 import struct
 import sys
 from pathlib import Path
@@ -49,7 +50,7 @@ def target(section, pos):
     return symbol[1], symbol[2] + addend
 
 
-name = "call_root_stack"
+name = sys.argv[2] if len(sys.argv) > 2 else "call_root_stack"
 symbol = next(s for table in symbols.values() for s in table if s[0] == name)
 _, section, start, size = symbol
 metadata, offset = target(section, start - 4)
@@ -84,20 +85,60 @@ take(var())
 rows = [[take(32)] + [take(width) for width in widths] for _ in range(count)]
 reg_count, reg_width = var(), var()
 registers = [take(reg_width) for _ in range(reg_count)]
+assert fmt == 0, "small fixture must use the bitmap slot format"
+slot_count, offset_width, slot_width = var(), var(), var()
+slots = [(take(offset_width), take(slot_width)) for _ in range(slot_count)]
+line_count, line_width = var(), var()
+for _ in range(line_count):
+    take(line_width)
+derived_count = var()
+derived = [(take(widths[0]), take(widths[1])) for _ in range(derived_count)]
+
+
+def reg_mask(index):
+    return registers[index - 1] if index else 0
+
+
+def slot_mask(index):
+    return slots[index - 1][1] if index else 0
+
+call_returns = []
+if name == "indirect_root_stack":
+    instructions = []
+    for line in Path(sys.argv[3]).read_text().splitlines():
+        match = re.match(r"\s*([0-9a-f]+):\s+(.*)", line)
+        if match:
+            instructions.append((int(match[1], 16), match[2]))
+    for index, (pc, instruction) in enumerate(instructions):
+        if re.match(r"(?:callq?\s+\*|blr\s)", instruction):
+            call_returns.append(instructions[index + 1][0] - start)
+else:
+    for (sec, pos), (callee, addend) in relocations.items():
+        if sec == section and start <= pos < start + size and callee[0] == "checkpoint":
+            call_returns.append(pos + 4 - start)
 calls = []
-for (sec, pos), (callee, addend) in relocations.items():
-    if sec == section and start <= pos < start + size and callee[0] == "checkpoint":
-        pc = pos + 4 - start
-        matches = [row for row in rows if row[0] == pc]
-        assert len(matches) == 1, "call return must have exactly one product map"
-        row = matches[0]
-        mask = registers[row[1] - 1] if row[1] else 0
-        calls.append({"return_offset": pc, "register_mask": mask, "slot_index": row[2]})
-assert calls, "fixture did not emit checkpoint call"
+for pc in call_returns:
+    matches = [row for row in rows if row[0] == pc]
+    assert len(matches) == 1, "call return must have exactly one product map"
+    row = matches[0]
+    mask = reg_mask(row[1])
+    stack_mask = slot_mask(row[2])
+    base_count = bin(mask).count("1") + bin(stack_mask).count("1")
+    derived_masks = []
+    if row[4]:
+        begin = row[4] - 1
+        pairs = derived[begin:begin + base_count]
+        assert len(pairs) == base_count, "missing derived-root records"
+        derived_masks = [reg_mask(pair[0]) for pair in pairs]
+    calls.append({"return_offset": pc, "register_mask": mask,
+                  "stack_mask": stack_mask, "derived_register_masks": derived_masks})
+assert calls, "fixture did not emit a tested call"
 print(json.dumps({"sha256": hashlib.sha256(raw).hexdigest(), "function": name,
                   "stack_size": stack, "calls": calls}, sort_keys=True))
 # Emit the target assertion verdict before failing so an earlier assertion
 # cannot be mistaken for this invariant's negative control.
-okay = all(call["register_mask"] == 0 and call["slot_index"] != 0 for call in calls)
+expect_root = name != "no_root_stack"
+okay = all(call["register_mask"] == 0 and bool(call["stack_mask"]) == expect_root
+           and not any(call["derived_register_masks"]) for call in calls)
 print("CALL_ROOTS_IN_FRAME_STACK=" + str(okay), flush=True)
 sys.exit(0 if okay else 1)
