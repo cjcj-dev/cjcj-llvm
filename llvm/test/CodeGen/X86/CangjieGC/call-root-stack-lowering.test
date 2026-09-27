@@ -1,0 +1,10 @@
+# RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnu -O2 -stop-after=finalize-isel %S/call-root-stack.ll -o - | FileCheck %s
+# The default lowering must describe live-through roots as frame locations.
+# A late register-allocation spill must not hide reintroduction of the removed
+# lowering override. See StatepointLowering.cpp:651-661 and x86.ad:43-49.
+# CHECK-LABEL: name:{{ *}}call_root_stack
+# CHECK: STATEPOINT{{.*}}%stack.
+# CHECK-LABEL: name:{{ *}}invoke_root_stack
+# CHECK: STATEPOINT{{.*}}%stack.
+# CHECK-LABEL: name:{{ *}}derived_root_stack
+# CHECK: STATEPOINT{{.*}}%stack.

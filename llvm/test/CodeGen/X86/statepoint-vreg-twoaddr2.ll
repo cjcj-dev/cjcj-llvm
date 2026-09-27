@@ -1,4 +1,4 @@
-; RUN: llc -O2 --enable-callee-saved-stackmap --max-registers-for-gc-values=16 --mtriple x86_64-pc-linux-gnu --print-after='twoaddressinstruction' < %s --filetype=obj 2>&1 | FileCheck %s
+; RUN: llc -O2 --max-registers-for-gc-values=16 --mtriple x86_64-pc-linux-gnu --print-after='twoaddressinstruction' < %s --filetype=obj 2>&1 | FileCheck %s
 
 ; This test checks that TwoAddressInstruction pass will create COPY instruction for registers
 ; with inconsistent types.

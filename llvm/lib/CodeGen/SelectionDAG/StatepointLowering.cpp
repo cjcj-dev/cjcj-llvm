@@ -57,7 +57,6 @@
 #include <utility>
 
 using namespace llvm;
-extern cl::opt<bool> EnableCalledSaveForStackMap;
 
 namespace llvm {
 extern cl::opt<bool> CJPipeline;
@@ -917,11 +916,6 @@ SDValue SelectionDAGBuilder::LowerAsSTATEPOINT(
   // Clear state
   StatepointLowering.startNewStatepoint(*this);
   assert(SI.Bases.size() == SI.Ptrs.size());
-
-  if (EnableCalledSaveForStackMap) {
-    MaxRegistersForGCPointers = 64;
-    UseRegistersForGCPointersInLandingPad = true;
-  }
 
   LLVM_DEBUG(dbgs() << "Lowering statepoint " << *SI.StatepointInstr << "\n");
 #ifndef NDEBUG

@@ -57,12 +57,6 @@ static cl::opt<unsigned> MaxStatepointsWithRegs(
     "fixup-max-csr-statepoints", cl::Hidden,
     cl::desc("Max number of statepoints allowed to pass GC Ptrs in registers"));
 
-cl::opt<bool>
-    EnableCalledSaveForStackMap("enable-callee-saved-stackmap", cl::init(true),
-                                cl::ReallyHidden,
-                                cl::desc("enable called saved for stackmap."
-                                         " ALWAYS disable if optlevel=-O0"));
-
 namespace {
 
 class FixupStatepointCallerSaved : public MachineFunctionPass {
@@ -603,9 +597,6 @@ public:
 } // namespace
 
 bool FixupStatepointCallerSaved::runOnMachineFunction(MachineFunction &MF) {
-  if (EnableCalledSaveForStackMap) {
-    PassGCPtrInCSR = true;
-  }
   if (skipFunction(MF.getFunction()))
     return false;
 
