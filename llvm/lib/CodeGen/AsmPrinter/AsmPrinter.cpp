@@ -4224,8 +4224,10 @@ int64_t AsmPrinter::getProtectAddrOffsetInCJTLS() const {
 
 bool AsmPrinter::needsCJReturnPoll() const {
   const Function &F = MF->getFunction();
-  // The paired runtime return stub ABI is currently provided on Linux.
-  return TM.getTargetTriple().isOSLinux() && F.hasCangjieGC() &&
+  const Triple &TT = TM.getTargetTriple();
+  return (TT.isOSLinux() || TT.isOSDarwin() ||
+          (TT.isOSWindows() && TT.getArch() == Triple::x86_64)) &&
+         F.hasCangjieGC() &&
          !F.hasFnAttribute("gc-leaf-function") &&
          !F.hasFnAttribute("cj_fast_call") &&
          !F.hasFnAttribute(Attribute::Naked);

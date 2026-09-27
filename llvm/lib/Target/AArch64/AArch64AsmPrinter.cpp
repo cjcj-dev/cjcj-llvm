@@ -2380,18 +2380,33 @@ void AArch64AsmPrinter::emitCJReturnPoll() {
 void AArch64AsmPrinter::emitCJReturnPollStubs() {
   for (const auto &Poll : CJReturnPolls) {
     OutStreamer->emitLabel(Poll.second);
-    auto *Handler = MCSymbolRefExpr::create(
-        OutContext.getOrCreateSymbol("CJ_MCC_HandleReturnSafepoint"), OutContext);
+    const Triple &TT = TM.getTargetTriple();
+    auto *HandlerSymbol =
+        GetExternalSymbolSymbol("CJ_MCC_HandleReturnSafepoint");
+    auto *Handler = MCSymbolRefExpr::create(HandlerSymbol, OutContext);
+    const MCExpr *Page;
+    const MCExpr *PageOffset;
+    if (TT.isOSBinFormatMachO()) {
+      Page = MCSymbolRefExpr::create(
+          HandlerSymbol, MCSymbolRefExpr::VK_GOTPAGE, OutContext);
+      PageOffset = MCSymbolRefExpr::create(
+          HandlerSymbol, MCSymbolRefExpr::VK_GOTPAGEOFF, OutContext);
+    } else {
+      Page = AArch64MCExpr::create(Handler, AArch64MCExpr::VK_GOT_PAGE,
+                                   OutContext);
+      PageOffset = AArch64MCExpr::create(Handler, AArch64MCExpr::VK_GOT_LO12,
+                                         OutContext);
+    }
     // x17 must be startPC and x16 the return-site PC at the handler entry.
     // A PLT veneer would clobber both, so the resolved target goes in x9
     // (AAPCS caller-saved, not an AAPCS return register) before those adrs.
     // br does not change LR or SP.
     EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::ADRP)
         .addReg(AArch64::X9)
-        .addExpr(AArch64MCExpr::create(Handler, AArch64MCExpr::VK_GOT_PAGE, OutContext)));
+        .addExpr(Page));
     EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::LDRXui)
         .addReg(AArch64::X9).addReg(AArch64::X9)
-        .addExpr(AArch64MCExpr::create(Handler, AArch64MCExpr::VK_GOT_LO12, OutContext)));
+        .addExpr(PageOffset));
     EmitToStreamer(*OutStreamer, MCInstBuilder(AArch64::ADR)
         .addReg(AArch64::X17)
         .addExpr(MCSymbolRefExpr::create(getFunctionBegin(), OutContext)));
