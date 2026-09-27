@@ -1,3 +1,7 @@
+; RUN: llc -O0 --cangjie-pipeline -cj-stack-grow=false -mtriple=x86_64-unknown-linux-gnu -filetype=obj < %s -o %t.off.o
+; RUN: %python %S/Inputs/check-cj-stack-pointer-map.py %t.off.o
+; RUN: llc -O0 --cangjie-pipeline -cj-stack-grow=true -mtriple=x86_64-unknown-linux-gnu -filetype=obj < %s -o %t.on.o
+; RUN: %python %S/Inputs/check-cj-stack-pointer-map.py %t.on.o
 ; RUN: llc -O0 --cangjie-pipeline -cj-stack-grow=false -mtriple=x86_64-unknown-linux-gnu < %s | FileCheck %s
 ; RUN: llc -O0 --cangjie-pipeline -cj-stack-grow=true -mtriple=x86_64-unknown-linux-gnu < %s | FileCheck %s
 ; RUN: llc -O2 --cangjie-pipeline -cj-stack-grow=false -mtriple=x86_64-unknown-linux-gnu < %s | FileCheck %s
