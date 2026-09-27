@@ -17,10 +17,16 @@ define i64 @foo(i8 addrspace(1)* %a) #0 gc "cangjie" {
 ; CHECK-NEXT:     callq   test@PLT
 ; CHECK-LABEL:  .Ltmp2:
 
+; The return poll adds its own PC row after the callsite rows. It has no
+; roots for this integer return and must not change the record slot table.
 ; CHECK-LABEL:  .Lstack_map.foo:
+; CHECK:          #StackMapItem nums:3
 ; CHECK:          .long   .Ltmp2-foo
 ; CHECK-NEXT:     #[RegIdx: -1, SlotIdx: 0, LNIdx: -1, DerivedStartIdx: -1, SPRegIdx: -1, SPSlotIdx: -1]
 ; CHECK-NEXT:     .byte   2
+; CHECK-NEXT:     .long   .Lcj_return_pc{{[0-9]+}}-foo
+; CHECK-NEXT:     #[RegIdx: -1, SlotIdx: -1, LNIdx: -1, DerivedStartIdx: -1, SPRegIdx: -1, SPSlotIdx: -1]
+; CHECK-NEXT:     .byte   0
 ; CHECK-NEXT:     #RegNums: 0
 ; CHECK-NEXT:     #SlotsNums: 1
 ; CHECK-NEXT:             #Idx[0]: BaseOffset: -24, SlotBits: 0x1[ -24 ]

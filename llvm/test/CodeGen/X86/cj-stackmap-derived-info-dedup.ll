@@ -4,16 +4,23 @@
 
 ; See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-; RUN: llc -O0 --cangjie-pipeline -mtriple x86_64-pc-linux-gnu < %s | FileCheck %s
+; RUN: llc -O0 --cangjie-pipeline -mtriple x86_64-pc-linux-gnu < %s | FileCheck %s --check-prefixes=CHECK,DERIVED
 
 ; Repeated callsites with the same derived/base location sequence should share
 ; one compressed DerivedInfo entry instead of appending duplicate table rows.
 
-; CHECK:      #StackMapItem nums:2
+; The return-poll row describes the returned root in rax, independently of
+; the shared derived sequence used by the two callsites.
+; CHECK-LABEL: .Lstack_map.dedup:
+; CHECK:      #StackMapItem nums:3
 ; CHECK:      #[RegIdx: -1, SlotIdx: 0, LNIdx: -1, DerivedStartIdx: 0, SPRegIdx: -1, SPSlotIdx: -1]
 ; CHECK:      #[RegIdx: -1, SlotIdx: 0, LNIdx: -1, DerivedStartIdx: 0, SPRegIdx: -1, SPSlotIdx: -1]
-; CHECK:      #DerivedInfoNums: 1
-; CHECK-NEXT: {{.*}}#Idx[0]: RegIdx: -1, SlotIdx: 1
+; CHECK:      .long .Lcj_return_pc{{[0-9]+}}-dedup
+; CHECK-NEXT: #[RegIdx: 0, SlotIdx: -1, LNIdx: -1, DerivedStartIdx: -1, SPRegIdx: -1, SPSlotIdx: -1]
+; CHECK:      #RegNums: 1
+; CHECK-NEXT: {{.*}}#Idx[0]: (0x1=1), rax
+; DERIVED:      #DerivedInfoNums: 1
+; DERIVED-NEXT: {{.*}}#Idx[0]: RegIdx: -1, SlotIdx: 1
 
 declare cangjiegccc void @g0()
 declare token @llvm.cj.gc.statepoint(...)
