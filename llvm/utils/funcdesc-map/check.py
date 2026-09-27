@@ -69,11 +69,14 @@ def check(path, stripped=False):
         errors.append('fixture has no surviving managed functions')
     if stripped and '_map_unused' in symbols:
         errors.append('unreferenced function retained by map')
+    if symbols.get('_map_second', 0) >= symbols.get('_map_first', 0):
+        errors.append('linker order-file did not reorder the two modules')
     for name in ('map_leaf', 'map_plain'):
         if symbols.get('_' + name) in actual:
             errors.append('unmanaged or leaf function included: ' + name)
     result = {'image': str(path), 'records': records, 'expected': sorted(expected.items()),
-              'errors': errors, 'target_executed': True, 'pass': not errors}
+              'errors': errors, 'file_address_ordered': records == sorted(records),
+              'target_executed': True, 'pass': not errors}
     print('FUNC_MAP_TARGET ' + json.dumps(result), flush=True)
     return result
 

@@ -1,3 +1,4 @@
+; REQUIRES: aarch64-registered-target, x86-registered-target
 ; RUN: llc --cangjie-pipeline -mtriple=arm64-apple-macosx15.0 -o - %s | FileCheck %s --check-prefix=MACHO
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64-apple-macosx15.0 -o - %s | FileCheck %s --check-prefix=MACHO
 ; RUN: llc --cangjie-pipeline -mtriple=arm64-apple-ios15.0 -o - %s | FileCheck %s --check-prefix=MACHO
