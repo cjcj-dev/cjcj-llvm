@@ -36,6 +36,9 @@ def run(cmd, log, cwd=None, env=None, timeout=3600):
                                 stdout=output, stderr=subprocess.STDOUT, timeout=timeout).returncode
         except subprocess.TimeoutExpired:
             rc = 124
+        except FileNotFoundError as error:
+            output.write(str(error)+'\n')
+            rc = 127
     record = {'rc': rc, 'wall': time.monotonic()-start, 'log': str(log)}
     log.with_suffix('.json').write_text(json.dumps(record))
     print(f'{log}: rc={rc} wall={record["wall"]:.1f}', flush=True)
@@ -61,7 +64,8 @@ for row in manifest['objects']:
 if set(objects) != {'candidate', 'cut-producer'}:
     raise RuntimeError('target objects missing')
 (OUT/'producer-identity.json').write_text(json.dumps(manifest, indent=2))
-run(['git', '-C', SOURCE.parent, 'rev-parse', 'HEAD'], OUT/'runtime-head.log')
+if run(['git', '-C', SOURCE.parent, 'rev-parse', 'HEAD'], OUT/'runtime-head.log') != 0:
+    raise RuntimeError('runtime source identity command did not execute')
 run(['uptime'], OUT/'uptime-before.log')
 source_consumer = SOURCE/'src/Mutator/MutatorManager.cpp'
 source_before = sha(source_consumer)

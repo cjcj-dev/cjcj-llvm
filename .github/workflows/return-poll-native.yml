@@ -1,11 +1,12 @@
 name: Native return-poll roots
 on:
-  push:
-    branches: ['sym/74-implement-r5852506143']
-    paths:
-      - 'llvm/utils/return-poll-native/**'
-      - '.github/workflows/return-poll-native.yml'
   workflow_dispatch:
+    inputs:
+      targets:
+        description: Native runner/target matrix (JSON); select only the arm needing new evidence.
+        type: string
+        required: false
+        default: '[{"runner":"macos-15","target":"aarch64-macos"},{"runner":"macos-15-intel","target":"x86_64-macos"},{"runner":"windows-latest","target":"x86_64-windows"}]'
 permissions:
   contents: read
 jobs:
@@ -13,10 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - {runner: macos-15, target: aarch64-macos}
-          - {runner: macos-15-intel, target: x86_64-macos}
-          - {runner: windows-latest, target: x86_64-windows}
+        include: ${{ fromJSON(inputs.targets) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     env:
@@ -50,7 +48,7 @@ jobs:
             mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-llvm
             mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja
             mingw-w64-clang-x86_64-python mingw-w64-clang-x86_64-make
-            file
+            file git procps-ng
       - name: Apple native pair
         if: runner.os == 'macOS'
         run: |
