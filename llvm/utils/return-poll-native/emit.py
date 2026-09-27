@@ -23,6 +23,7 @@ manifest = {'llvm_head': head,
             'ir_sha256': sha(source), 'objects': [],
             'product_sources': {name: sha(a.source_root/name) for name in [
                 'llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp',
+                'llvm/lib/CodeGen/CJMetadata.cpp',
                 'llvm/lib/Target/X86/X86MCInstLower.cpp',
                 'llvm/lib/Target/AArch64/AArch64AsmPrinter.cpp']}}
 for target, triple in [('x86_64-macos', 'x86_64-apple-macosx11.0'),
