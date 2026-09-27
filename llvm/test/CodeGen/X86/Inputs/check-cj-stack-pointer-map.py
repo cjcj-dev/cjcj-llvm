@@ -49,11 +49,12 @@ for _ in range(rows):
     values.append((pc, indices))
 
 # Assert the semantic target before any incidental table-size expectation.
-live = bool(values) and not legacy and any(row[1][4] or row[1][5] for row in values)
+live = bool(values) and not legacy and bool(values[0][1][4] or values[0][1][5])
 print('TARGET sret_live_stack_pointer={} rows={} widths={} decoded={}'.format(
     live, rows, widths, values), flush=True)
 assert live, 'sret return PC must retain a live stack-pointer map'
-assert rows == 1, 'fixture must have one return PC'
+assert rows == 2, 'fixture has a call return PC and a return poll'
+assert values[1][1][4:] == [0, 0], 'sret pointer is dead at the return poll'
 
 symtab = next(s for s in sections if s[1] == 2)
 symstrings = data(sections[symtab[6]])
