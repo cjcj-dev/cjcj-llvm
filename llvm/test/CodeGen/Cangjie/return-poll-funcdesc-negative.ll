@@ -6,6 +6,7 @@
 ; RUN: llc --cangjie-pipeline -no-stacktrace-info -mtriple=arm64-apple-macosx15.0 %S/return-poll-funcdesc.ll -o %t.macho
 ; RUN: FileCheck %s --check-prefixes=META,MACHO < %t.macho
 ; RUN: FileCheck %s --check-prefix=LEAF < %t.macho
+; RUN: llc --cangjie-pipeline -no-stacktrace-info -mtriple=aarch64 %S/return-poll-funcdesc.ll -o - | FileCheck %s --check-prefix=NOOS
 ;
 ; Independent negative controls must stay green when eligible polls or their
 ; metadata bit are cut. LEAF scans the entire output, not just its final table.
@@ -53,3 +54,25 @@
 ; MACHO-NEXT: .quad {{.*}}
 ; META-NEXT: .{{long|word}} 0
 ; MACHO-NEXT: .{{long|word}} 0
+
+; NOOS-NOT: CJ_MCC_HandleReturnSafepoint
+; NOOS-LABEL: .Lmethod_desc.poll:
+; NOOS-NEXT: .word {{.*}}
+; NOOS-NEXT: .word {{.*}}
+; NOOS-NEXT: .word 0
+; NOOS-NEXT: .word 0
+; NOOS-NEXT: .word 0
+; NOOS-NEXT: .word 0
+; NOOS-NEXT: {{\.?Ltmp[0-9]+}}:
+; NOOS-NEXT: .word {{.*}}
+; NOOS-NEXT: .word 0
+; NOOS-LABEL: .Lmethod_desc.init:
+; NOOS-NEXT: .word {{.*}}
+; NOOS-NEXT: .word {{.*}}
+; NOOS-NEXT: .word 0
+; NOOS-NEXT: .word 0
+; NOOS-NEXT: .word 0
+; NOOS-NEXT: .word 0
+; NOOS-NEXT: {{\.?Ltmp[0-9]+}}:
+; NOOS-NEXT: .word {{.*}}
+; NOOS-NEXT: .word 0
