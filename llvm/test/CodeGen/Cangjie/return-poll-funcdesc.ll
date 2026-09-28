@@ -62,6 +62,7 @@ attributes #4 = { "cjinit" }
 ; META-NEXT: .long 0
 ; META-NEXT: .long 0
 ; META-NEXT: .long 0
+; META-NEXT: {{\.?Ltmp[0-9]+}}:
 ; ELF-NEXT: .long {{.*}}
 ; MACHO-NEXT: .quad {{.*}}
 ; META-NEXT: .long 1
@@ -73,6 +74,7 @@ attributes #4 = { "cjinit" }
 ; META-NEXT: .long 0
 ; META-NEXT: .long 0
 ; META-NEXT: .long 0
+; META-NEXT: {{\.?Ltmp[0-9]+}}:
 ; ELF-NEXT: .long {{.*}}
 ; MACHO-NEXT: .quad {{.*}}
 ; META-NEXT: .long 0
@@ -84,6 +86,7 @@ attributes #4 = { "cjinit" }
 ; META-NEXT: .long 0
 ; META-NEXT: .long 0
 ; META-NEXT: .long 0
+; META-NEXT: {{\.?Ltmp[0-9]+}}:
 ; ELF-NEXT: .long {{.*}}
 ; MACHO-NEXT: .quad {{.*}}
 ; META-NEXT: .long 0
@@ -95,6 +98,7 @@ attributes #4 = { "cjinit" }
 ; META-NEXT: .long 0
 ; META-NEXT: .long 0
 ; META-NEXT: .long 0
+; META-NEXT: {{\.?Ltmp[0-9]+}}:
 ; ELF-NEXT: .long {{.*}}
 ; MACHO-NEXT: .quad {{.*}}
 ; META-NEXT: .long 0
@@ -106,6 +110,7 @@ attributes #4 = { "cjinit" }
 ; META-NEXT: .long 0
 ; META-NEXT: .long 0
 ; META-NEXT: .long 0
+; META-NEXT: {{\.?Ltmp[0-9]+}}:
 ; ELF-NEXT: .long {{.*}}
 ; MACHO-NEXT: .quad {{.*}}
 ; META-NEXT: .long 1

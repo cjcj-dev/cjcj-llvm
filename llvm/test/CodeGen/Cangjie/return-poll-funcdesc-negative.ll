@@ -24,6 +24,7 @@
 ; META-NEXT: .long 0
 ; META-NEXT: .long 0
 ; META-NEXT: .long 0
+; META-NEXT: {{\.?Ltmp[0-9]+}}:
 ; ELF-NEXT: .long {{.*}}
 ; MACHO-NEXT: .quad {{.*}}
 ; META-NEXT: .long 0
@@ -35,6 +36,7 @@
 ; META-NEXT: .long 0
 ; META-NEXT: .long 0
 ; META-NEXT: .long 0
+; META-NEXT: {{\.?Ltmp[0-9]+}}:
 ; ELF-NEXT: .long {{.*}}
 ; MACHO-NEXT: .quad {{.*}}
 ; META-NEXT: .long 0
@@ -46,6 +48,7 @@
 ; META-NEXT: .long 0
 ; META-NEXT: .long 0
 ; META-NEXT: .long 0
+; META-NEXT: {{\.?Ltmp[0-9]+}}:
 ; ELF-NEXT: .long {{.*}}
 ; MACHO-NEXT: .quad {{.*}}
 ; META-NEXT: .long 0

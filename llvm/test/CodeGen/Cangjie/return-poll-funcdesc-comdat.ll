@@ -15,5 +15,6 @@ define linkonce_odr void @member() gc "cangjie" comdat($member) {
 ; CHECK-NEXT: .long 0
 ; CHECK-NEXT: .long 0
 ; CHECK-NEXT: .long 0
+; CHECK-NEXT: {{\.?Ltmp[0-9]+}}:
 ; CHECK-NEXT: .long {{.*}}
 ; CHECK-NEXT: .long 1
