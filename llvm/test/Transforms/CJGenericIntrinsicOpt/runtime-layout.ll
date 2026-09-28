@@ -1,5 +1,4 @@
 ; RUN: opt -passes=cj-generic-intrinsic-opt -S < %s | FileCheck %s
-; RUN: opt -cj-generic-intrinsic-opt -S < %s | FileCheck %s
 ; Actual TypeInfo producer field types, in runtime order (64-bit ABI).
 target datalayout = "e-p:64:64-p1:64:64-i64:64-n8:16:32:64-S128"
 %TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, %TypeInfo*, i8**, i8*, i8* }

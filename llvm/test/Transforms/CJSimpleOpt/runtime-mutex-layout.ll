@@ -1,5 +1,4 @@
 ; RUN: opt -passes=cj-simple-opt -S < %s | FileCheck %s
-; RUN: opt -cj-simple-opt -S < %s | FileCheck %s
 ; The emitted stub must address owner/count/state in the paired runtime layout.
 ; CHECK-LABEL: define internal void @CJMutexLockStub(
 ; CHECK: getelementptr i8, i8 addrspace(1)* %{{.*}}, i32 8
