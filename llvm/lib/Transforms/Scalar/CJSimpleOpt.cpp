@@ -779,7 +779,7 @@ struct ArraySizeConstantFold {
         return false;
       auto *Const = dyn_cast<ConstantInt>(GEP->getOperand(1));
       // Check whether GEP is to get array size.
-      return Const && Const->getZExtValue() == 8;
+      return Const && Const->getZExtValue() == CangjieRuntimeLayout::ArrayLengthOffset;
     }
     // %ArrayLayout.xxx = type { %ArrayBase, [ 0 * xxx ] }
     // %ArrayBase = type { %ObjLayout.Object, i64 }
