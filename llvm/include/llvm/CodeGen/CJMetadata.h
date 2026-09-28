@@ -33,6 +33,9 @@ class StackMaps;
 class GlobalVariable;
 class Module;
 
+/// Use the same eligibility decision for return instructions and funcdesc.
+bool needsCJReturnPoll(const Function &F, const Triple &TT);
+
 enum CJMetadataTable {
   // RW Section
   SDKVersionIdx,

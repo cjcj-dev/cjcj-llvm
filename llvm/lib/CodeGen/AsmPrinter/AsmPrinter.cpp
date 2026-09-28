@@ -4219,14 +4219,7 @@ int64_t AsmPrinter::getProtectAddrOffsetInCJTLS() const {
 }
 
 bool AsmPrinter::needsCJReturnPoll() const {
-  const Function &F = MF->getFunction();
-  const Triple &TT = TM.getTargetTriple();
-  return (TT.isOSLinux() || TT.isOSDarwin() ||
-          (TT.isOSWindows() && TT.getArch() == Triple::x86_64)) &&
-         F.hasCangjieGC() &&
-         !F.hasFnAttribute("gc-leaf-function") &&
-         !F.hasFnAttribute("cj_fast_call") &&
-         !F.hasFnAttribute(Attribute::Naked);
+  return llvm::needsCJReturnPoll(MF->getFunction(), TM.getTargetTriple());
 }
 
 int64_t AsmPrinter::getSafepointCheckAddrOffsetInCJTLS() const {

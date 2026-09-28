@@ -29,6 +29,15 @@
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
+bool needsCJReturnPoll(const Function &F, const Triple &TT) {
+  return (TT.isOSLinux() || TT.isOSDarwin() ||
+          (TT.isOSWindows() && TT.getArch() == Triple::x86_64)) &&
+         F.hasCangjieGC() &&
+         !F.hasFnAttribute("gc-leaf-function") &&
+         !F.hasFnAttribute("cj_fast_call") &&
+         !F.hasFnAttribute(Attribute::Naked);
+}
+
 static cl::opt<bool> NoStackTraceInfo("no-stacktrace-info", cl::init(false),
                                       cl::NotHidden,
                                       cl::desc("disable cj stack trace info"));
@@ -559,6 +568,13 @@ void CJMetadataInfo::emitDatas(const MCSymbol *FuncName,
   // Because the front is 64-bit aligned, it must be placed behind
   // the emitstacktraceinfo.
   emitEHTableOffset(FuncNumber);
+  // Keep all existing funcdesc offsets intact. Bit 0 describes the same
+  // eligibility used at RET emission; all other bits are reserved and zero.
+  const Function *F = M->getFunction(IsMachO ? FuncName->getName().substr(1)
+                                           : FuncName->getName());
+  OS.emitIntValue(F && needsCJReturnPoll(*F, TT) ? 1 : 0, 4);
+  if (IsMachO)
+    OS.emitIntValue(0, 4); // Keep the next descriptor's ehTable 8-byte aligned.
 }
 
 void CJMetadataInfo::emitMethodInfoTable() {
