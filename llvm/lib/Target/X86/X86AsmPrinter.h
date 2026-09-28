@@ -148,7 +148,6 @@ public:
 
   void emitMetadataAddress() override;
 
-  void emitGcStateCheck() override;
 
   void emitInstruction(const MachineInstr *MI) override;
 

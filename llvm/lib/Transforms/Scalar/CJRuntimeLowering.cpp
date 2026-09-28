@@ -338,7 +338,7 @@ public:
       CI->setArgOperand(1, ConstantInt::get(Type::getInt32Ty(C), Size));
     };
     auto VariableSizeAlign = [&](Value *Size, IRBuilder<> &IRB) {
-      auto *V = IRB.CreateAnd(IRB.CreateAdd(Size, IRB.getInt32(15)),
+      auto *V = IRB.CreateAnd(IRB.CreateAdd(Size, IRB.getInt32(ObjectHeadSize + 7)),
                               IRB.getInt32(~7));
       CI->setArgOperand(1, V);
     };

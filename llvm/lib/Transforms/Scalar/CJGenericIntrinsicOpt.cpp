@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/CodeGen/CangjieRuntimeLayout.h"
 #include "llvm/Transforms/Scalar/CJGenericIntrinsicOpt.h"
 
 #include "llvm/Analysis/AliasAnalysis.h"
@@ -78,21 +79,21 @@ static void lowerToMemcpy(CallInst *CI, Value *SizeOp,
     report_fatal_error("Unsupported process type!");
     break;
   case Intrinsic::cj_assign_generic: {
-    Idxs.push_back(ConstantInt::get(I32Ty, 8)); // 8: typeinfo* size
+    Idxs.push_back(ConstantInt::get(I32Ty, CangjieRuntimeLayout::ObjectHeaderSize));
     Value *DstPtr = IRB.CreateGEP(I8Ty, CI->getArgOperand(0), {Idxs});
     Value *SrcPtr = IRB.CreateGEP(I8Ty, CI->getArgOperand(1), {Idxs});
     NewInst = IRB.CreateMemCpy(DstPtr, Align(8), SrcPtr, Align(8), SizeOp);
     break;
   }
   case Intrinsic::cj_gcread_generic: {
-    Idxs.push_back(ConstantInt::get(I32Ty, 8)); // 8: typeinfo* size
+    Idxs.push_back(ConstantInt::get(I32Ty, CangjieRuntimeLayout::ObjectHeaderSize));
     Value *DstPtr = IRB.CreateGEP(I8Ty, CI->getArgOperand(0), {Idxs});
     NewInst = IRB.CreateMemCpy(DstPtr, Align(8), CI->getArgOperand(2), Align(8),
                                SizeOp);
     break;
   }
   case Intrinsic::cj_gcwrite_generic: {
-    Idxs.push_back(ConstantInt::get(I32Ty, 8)); // 8: typeinfo* size
+    Idxs.push_back(ConstantInt::get(I32Ty, CangjieRuntimeLayout::ObjectHeaderSize));
     Value *SrcPtr = IRB.CreateGEP(I8Ty, CI->getArgOperand(2), {Idxs});
     NewInst = IRB.CreateMemCpy(CI->getArgOperand(1), Align(8), SrcPtr, Align(8),
                                SizeOp);

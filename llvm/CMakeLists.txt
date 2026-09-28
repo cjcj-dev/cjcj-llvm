@@ -856,6 +856,28 @@ include(HandleLLVMOptions)
 find_package(Python3 ${LLVM_MINIMUM_PYTHON_VERSION} REQUIRED
     COMPONENTS Interpreter)
 
+# AOT runtime layout comes from the assertions compiled by the paired runtime.
+set(CANGJIE_RUNTIME_SOURCE_DIR "" CACHE PATH
+    "Paired runtime repository containing runtime/tools/generate-runtime-layout.py")
+set(CANGJIE_RUNTIME_LAYOUT_GENERATOR
+    "${CANGJIE_RUNTIME_SOURCE_DIR}/runtime/tools/generate-runtime-layout.py")
+if(NOT EXISTS "${CANGJIE_RUNTIME_LAYOUT_GENERATOR}")
+  message(FATAL_ERROR "Set CANGJIE_RUNTIME_SOURCE_DIR to the paired runtime source repository")
+endif()
+execute_process(
+  COMMAND "${Python3_EXECUTABLE}" "${CANGJIE_RUNTIME_LAYOUT_GENERATOR}"
+          --header "${LLVM_MAIN_INCLUDE_DIR}/llvm/CodeGen/CangjieRuntimeLayout.h"
+  RESULT_VARIABLE CANGJIE_RUNTIME_LAYOUT_RESULT)
+if(NOT CANGJIE_RUNTIME_LAYOUT_RESULT EQUAL 0)
+  message(FATAL_ERROR "Cangjie runtime layout header differs from runtime assertions")
+endif()
+# Recheck on incremental builds, before any LLVM translation unit is compiled.
+add_custom_target(cangjie-runtime-layout-check ALL
+  COMMAND "${Python3_EXECUTABLE}" "${CANGJIE_RUNTIME_LAYOUT_GENERATOR}"
+          --header "${LLVM_MAIN_INCLUDE_DIR}/llvm/CodeGen/CangjieRuntimeLayout.h"
+  VERBATIM)
+list(APPEND LLVM_COMMON_DEPENDS cangjie-runtime-layout-check)
+
 ######
 
 # Configure all of the various header file fragments LLVM uses which depend on

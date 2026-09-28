@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/CodeGen/CangjieRuntimeLayout.h"
 #include "llvm/CodeGen/CangjieTLABLayout.h"
 #include "AArch64.h"
 #include "AArch64MCInstLower.h"
@@ -268,7 +269,6 @@ private:
   void emitCJReturnPoll();
   void emitCJReturnPollStubs();
   int emitCJSafepointInlineCall(unsigned Index) override;
-  void emitGcStateCheck() override;
   void emitGetCJTLSData(int64_t Offset);
   void emitCangjieRuntimeCall(MCSymbol *Sym, bool IsTailCall = false);
 };
@@ -1340,32 +1340,6 @@ void AArch64AsmPrinter::emitGetCJTLSData(int64_t Offset) {
   EmitToStreamer(*OutStreamer, Ldr);
 }
 
-// Note: emit specific inst should update inst size info in
-// AArch64InstrInfo::getInstSizeInBytes for AArch64 at the same time
-void AArch64AsmPrinter::emitGcStateCheck() {
-  if (TM.getTargetTriple().isWebm()) {
-    // ldr x9, [x28, #MutatorOffsetInCJTLS]
-    // ldr x9, [x9, #0]
-    emitGetCJTLSData(getMutatorOffsetInCJTLS());
-    MCInst Ldr;
-    Ldr.setOpcode(AArch64::LDRXui);
-    Ldr.addOperand(MCOperand::createReg(AArch64::X9));
-    Ldr.addOperand(MCOperand::createReg(AArch64::X9));
-    Ldr.addOperand(MCOperand::createImm(0));
-    Ldr.addOperand(MCOperand::createImm(0));
-    EmitToStreamer(*OutStreamer, Ldr);
-  } else {
-    // lsr x9, x28, #56
-    MCInst Lsr;
-    Lsr.setOpcode(AArch64::UBFMXri);
-    Lsr.addOperand(MCOperand::createReg(AArch64::W9));
-    Lsr.addOperand(MCOperand::createReg(AArch64::X28));
-    Lsr.addOperand(MCOperand::createImm(56)); // 56: Shift bit
-    Lsr.addOperand(MCOperand::createImm(63)); // 63: Shift range
-    EmitToStreamer(*OutStreamer, Lsr);
-  }
-}
-
 void AArch64AsmPrinter::LowerSTATEPOINT(MCStreamer &OutStreamer, StackMaps &SM,
                                         const MachineInstr &MI) {
   StatepointOpers SOpers(&MI);
@@ -2102,7 +2076,8 @@ void AArch64AsmPrinter::emitMccNewObjectForCopyGC(
       MCInstBuilder(SUBSXrs).addReg(XZR).addReg(X5).addReg(X4).addImm(0);
   MCInst BranchGToLSLow =
       MCInstBuilder(Bcc).addImm(AArch64CC::GT).addExpr(SlowExpr);
-  MCInst SetKlass = MCInstBuilder(STRXui).addReg(X0).addReg(X3).addImm(0);
+  MCInst SetKlass = MCInstBuilder(STRXui).addReg(X0).addReg(X3)
+      .addImm(CangjieRuntimeLayout::ObjectStateWordOffset / 8);
   MCInst StoreNewAllocPtr =
       MCInstBuilder(STRXui).addReg(X5).addReg(X2)
           .addImm(CangjieTLABLayout::TopOffset / 8);
@@ -2211,9 +2186,11 @@ void AArch64AsmPrinter::emitCJNewArrayFastPath(const MachineInstr &MI,
       MCInstBuilder(SUBSXrs).addReg(XZR).addReg(X7).addReg(X6).addImm(0);
   MCInst BranchGToLSLow =
       MCInstBuilder(Bcc).addImm(AArch64CC::GT).addExpr(SlowExpr);
-  MCInst SetKlass = MCInstBuilder(STRXui).addReg(X0).addReg(X5).addImm(0);
+  MCInst SetKlass = MCInstBuilder(STRXui).addReg(X0).addReg(X5)
+      .addImm(CangjieRuntimeLayout::ObjectStateWordOffset / 8);
   MCInst StoreArrayLength =
-      MCInstBuilder(STRXui).addReg(X1).addReg(X5).addImm(1);
+      MCInstBuilder(STRXui).addReg(X1).addReg(X5)
+          .addImm(CangjieRuntimeLayout::ArrayLengthOffset / 8);
   MCInst StoreNewAllocPtr =
       MCInstBuilder(STRXui).addReg(X7).addReg(X4)
           .addImm(CangjieTLABLayout::TopOffset / 8);
@@ -2246,7 +2223,7 @@ void AArch64AsmPrinter::emitCJNewArrayFastPath(const MachineInstr &MI,
 }
 
 void AArch64AsmPrinter::emitGetCJThreadId() {
-  int64_t cjthreadIdOffset = 456;
+  int64_t cjthreadIdOffset = CangjieRuntimeLayout::ThreadIdAArch64Offset;
   // 8: each imm represents 8 In MCInst.
   int64_t OffsetDivisor = 8;
   auto &Ctx = OutStreamer->getContext();
@@ -2256,7 +2233,7 @@ void AArch64AsmPrinter::emitGetCJThreadId() {
   emitGetCJTLSData(getCJThreadOffsetInCJTLS());
   // cbz x9, .L_cjthread_id_end
   MCInst CbzInst;
-  CbzInst.setOpcode(AArch64::CBZW);
+  CbzInst.setOpcode(AArch64::CBZX);
   CbzInst.addOperand(MCOperand::createReg(AArch64::X9));
   CbzInst.addOperand(MCOperand::createExpr(MILabelExpr));
   OutStreamer->emitInstruction(CbzInst, getSubtargetInfo());

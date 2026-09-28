@@ -74,6 +74,7 @@ function(llvm_create_cross_target project_name target_name toolchain buildtype)
         -DCMAKE_CXX_COMPILER_LAUNCHER="${CMAKE_CXX_COMPILER_LAUNCHER}"
         ${CROSS_TOOLCHAIN_FLAGS_${target_name}} ${CMAKE_CURRENT_SOURCE_DIR}
         ${CROSS_TOOLCHAIN_FLAGS_${project_name}_${target_name}}
+        -DCANGJIE_RUNTIME_SOURCE_DIR="${CANGJIE_RUNTIME_SOURCE_DIR}"
         -DLLVM_TARGET_IS_CROSSCOMPILE_HOST=TRUE
         -DLLVM_TARGETS_TO_BUILD="${targets_to_build_arg}"
         -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD="${experimental_targets_to_build_arg}"

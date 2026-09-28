@@ -135,9 +135,6 @@ unsigned AArch64InstrInfo::getCangjieSpecificCallInstSizeInBytes(
     // which under large MachO expands BL to ADRP+LDR+BLR (+8B).
     return 12 + GotExtra; // 12B base + GOT-call expansion under large MachO
   }
-  if (Callee->getName().isGetGCPhase()) {
-    return 4; // 4: 4 bytes(1 insts) for GetGCPhase call
-  }
   const auto &CallerFunc = MI.getParent()->getParent()->getFunction();
   if (Callee->isCangjieNativeStub(CallerFunc)) {
     // emitCangjieCallStubInstImpl: 20B (extendStackAndInsertFFIInfoForJmp) +
