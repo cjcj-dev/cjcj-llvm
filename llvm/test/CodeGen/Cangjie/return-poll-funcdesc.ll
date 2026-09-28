@@ -47,6 +47,13 @@ define void @init() #4 gc "cangjie" {
   ret void
 }
 
+; An asm-name override is absent from Module::getFunction under the emitted
+; symbol spelling. Its descriptor conservatively records zero.
+define void @"\01asm_named"() gc "cangjie" {
+  call void @callee()
+  ret void
+}
+
 attributes #0 = { "gc-leaf-function" }
 attributes #1 = { "cj_fast_call" }
 attributes #2 = { naked }

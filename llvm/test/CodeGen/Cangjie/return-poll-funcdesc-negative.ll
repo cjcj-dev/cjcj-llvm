@@ -55,6 +55,19 @@
 ; META-NEXT: .{{long|word}} 0
 ; MACHO-NEXT: .{{long|word}} 0
 
+; META-LABEL: .Lmethod_desc.{{(returnpoll\.)?}}asm_named:
+; META-NEXT: .{{long|word}} {{.*}}
+; META-NEXT: .{{long|word}} {{.*}}
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: {{\.?Ltmp[0-9]+}}:
+; ELF-NEXT: .{{long|word}} {{.*}}
+; MACHO-NEXT: .quad {{.*}}
+; META-NEXT: .{{long|word}} 0
+; MACHO-NEXT: .{{long|word}} 0
+
 ; NOOS-NOT: CJ_MCC_HandleReturnSafepoint
 ; NOOS-LABEL: .Lmethod_desc.poll:
 ; NOOS-NEXT: .word {{.*}}
