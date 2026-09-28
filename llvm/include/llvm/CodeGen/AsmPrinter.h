@@ -578,7 +578,6 @@ public:
 
   virtual int emitStackGrow(const MachineInstr &) { return 0; }
 
-  virtual void emitGcStateCheck() {}
 
   virtual int emitCJSafepointInlineCall(unsigned) { return 0; }
 

@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/CodeGen/CangjieRuntimeLayout.h"
 #include "llvm/Transforms/Scalar/CJSimpleOpt.h"
 
 #include "llvm/ADT/SetVector.h"
@@ -449,17 +450,21 @@ struct MutexLockLower {
     Value *MutexPtr = F->getArg(0);
     Type *MutexType = MutexPtr->getType()->getNonOpaquePointerElementType();
     Value *MutexCjthreadIdPtr =
-        IRB.CreateBitCast(IRB.CreateGEP(MutexType, MutexPtr, IRB.getInt32(8)),
+        IRB.CreateBitCast(IRB.CreateGEP(MutexType, MutexPtr,
+                                      IRB.getInt32(CangjieRuntimeLayout::MutexOwnerOffset)),
                           Type::getInt64PtrTy(F->getContext(), 1));
     Value *MutexOwnCountPtr =
-        IRB.CreateBitCast(IRB.CreateGEP(MutexType, MutexPtr, IRB.getInt32(16)),
+        IRB.CreateBitCast(IRB.CreateGEP(MutexType, MutexPtr,
+                                      IRB.getInt32(CangjieRuntimeLayout::MutexCountOffset)),
                           Type::getInt64PtrTy(F->getContext(), 1));
     Value *MutexStatePtr =
-        IRB.CreateBitCast(IRB.CreateGEP(MutexType, MutexPtr, IRB.getInt32(24)),
+        IRB.CreateBitCast(IRB.CreateGEP(MutexType, MutexPtr,
+                                      IRB.getInt32(CangjieRuntimeLayout::MutexStateOffset)),
                           Type::getInt64PtrTy(F->getContext(), 1));
     Value *Expected = ConstantInt::get(IRB.getInt64Ty(), 0);
-    // 0x4: LOCKED flag which is defined in runtime
-    Value *Desired = ConstantInt::get(IRB.getInt64Ty(), 0x4);
+    // LOCKED flag from the runtime layout contract.
+    Value *Desired = ConstantInt::get(IRB.getInt64Ty(),
+                                      CangjieRuntimeLayout::MutexLocked);
     // try to get cj mutex
     AtomicCmpXchgInst *CmpRes =
         IRB.CreateAtomicCmpXchg(MutexStatePtr, Expected, Desired, MaybeAlign(),

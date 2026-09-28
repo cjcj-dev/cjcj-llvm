@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/CodeGen/CangjieRuntimeLayout.h"
 #include "llvm/CodeGen/CangjieTLABLayout.h"
 #include "MCTargetDesc/X86ATTInstPrinter.h"
 #include "MCTargetDesc/X86BaseInfo.h"
@@ -1466,21 +1467,6 @@ int X86AsmPrinter::emitStackGrow(const MachineInstr &MI) {
 
   // 5: instruction nums.
   return 5;
-}
-
-// load  tls data
-// movq  (%rax), %eax
-void X86AsmPrinter::emitGcStateCheck() {
-  emitGetCJTLSData(getMutatorOffsetInCJTLS());
-  MCInst LoadPollingPageInst;
-  LoadPollingPageInst.setOpcode(X86::MOV32rm);
-  LoadPollingPageInst.addOperand(MCOperand::createReg(X86::EAX));
-  LoadPollingPageInst.addOperand(MCOperand::createReg(X86::RAX));
-  LoadPollingPageInst.addOperand(MCOperand::createImm(1));
-  LoadPollingPageInst.addOperand(MCOperand::createReg(0));
-  LoadPollingPageInst.addOperand(MCOperand::createImm(0)); // GCPhase offset
-  LoadPollingPageInst.addOperand(MCOperand::createReg(0));
-  OutStreamer->emitInstruction(LoadPollingPageInst, getSubtargetInfo());
 }
 
 // load tls data
@@ -3391,7 +3377,7 @@ void X86AsmPrinter::emitMccNewObjectForCopyGC(ParamForEmitNewObj &Param) {
                         .addReg(AllocPtrReg)
                         .addImm(1)
                         .addReg(0)
-                        .addImm(0)
+                        .addImm(CangjieRuntimeLayout::ObjectStateWordOffset)
                         .addReg(0)
                         .addReg(ArgReg0);
   MCInst StoreNewAllocPtr = MCInstBuilder(X86::MOV64mr)
@@ -3555,14 +3541,14 @@ void X86AsmPrinter::emitCJNewArrayFastPath(const MachineInstr &MI,
                         .addReg(AllocPtrReg)
                         .addImm(1)
                         .addReg(0)
-                        .addImm(0)
+                        .addImm(CangjieRuntimeLayout::ObjectStateWordOffset)
                         .addReg(0)
                         .addReg(ArgReg0);
   MCInst StoreArrayLength = MCInstBuilder(X86::MOV64mr)
                                 .addReg(AllocPtrReg)
                                 .addImm(0)
                                 .addReg(0)
-                                .addImm(8)
+                                .addImm(CangjieRuntimeLayout::ArrayLengthOffset)
                                 .addReg(0)
                                 .addReg(ArgReg1);
   MCInst StoreNewAllocPtr = MCInstBuilder(X86::MOV64mr)
@@ -3721,8 +3707,8 @@ void X86AsmPrinter::emitGetCJThreadId() {
   const MCSymbolRefExpr *MILabelExpr = MCSymbolRefExpr::create(MILabel, OutContext);
   // movq 16(%r15), %rax
   emitGetCJTLSData(getCJThreadOffsetInCJTLS());
-  int64_t cjthreadIdOffset = 336;
-  int64_t cjthreadIdOffsetWin = 536;
+  int64_t cjthreadIdOffset = CangjieRuntimeLayout::ThreadIdX86Offset;
+  int64_t cjthreadIdOffsetWin = CangjieRuntimeLayout::ThreadIdWindowsX86Offset;
   if (getSubtargetInfo().getTargetTriple().isOSWindows()) {
     cjthreadIdOffset = cjthreadIdOffsetWin;
   }

@@ -918,7 +918,6 @@ namespace llvm {
 
     bool isCJStackCheck() const { return equals("CJ_MCC_StackCheck"); }
 
-    bool isGetGCPhase() const { return equals("GetGCPhase"); }
 
     bool isSetDebugLocation() const { return equals("SetDebugLocation"); }
 

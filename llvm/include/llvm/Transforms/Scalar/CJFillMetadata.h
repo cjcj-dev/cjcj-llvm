@@ -16,6 +16,7 @@
 #ifndef LLVM_TRANSFORMS_SCALAR_FILL_CJ_METADATA_H
 #define LLVM_TRANSFORMS_SCALAR_FILL_CJ_METADATA_H
 
+#include "llvm/CodeGen/CangjieRuntimeLayout.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/IR/Constants.h"
@@ -24,24 +25,24 @@
 
 namespace llvm {
 enum ClassInfoFieldType : uint8_t {
-  CIT_NAME = 0,
-  CIT_TYPE,
-  CIT_FLAG,
-  CIT_FIELD_NUM,
-  CIT_SIZE,
-  CIT_GCTIB = 5,
-  CIT_UUID,
-  CIT_ALIGN,
-  CIT_TYPE_ARG_NUM,      // generic type argumnet number
-  CIT_VALID_INHERIT_NUM, // valid inherit index
-  CIT_OFFSETS = 10,      // offset of fields
-  CIT_GENERIC_FROM,      // generic type template
-  CIT_TYPE_ARG,          // generic type arg[]
-  CIT_FIELD,             // fields[]
-  CIT_SUPER,             // super klass or component klass
-  CIT_VTABLE = 15,       // virtual extension def ref in extension_defs[]
-  CIT_ITABLE,            // interface hashtable
-  CIT_REFLECTION,        // reflection*
+  CIT_NAME = CangjieRuntimeLayout::TypeInfo::typeInfoNameIndex,
+  CIT_TYPE = CangjieRuntimeLayout::TypeInfo::typeIndex,
+  CIT_FLAG = CangjieRuntimeLayout::TypeInfo::flagIndex,
+  CIT_FIELD_NUM = CangjieRuntimeLayout::TypeInfo::fieldNumIndex,
+  CIT_SIZE = CangjieRuntimeLayout::TypeInfo::instanceSizeIndex,
+  CIT_GCTIB = CangjieRuntimeLayout::TypeInfo::gctibIndex,
+  CIT_UUID = CangjieRuntimeLayout::TypeInfo::uuidIndex,
+  CIT_ALIGN = CangjieRuntimeLayout::TypeInfo::alignIndex,
+  CIT_TYPE_ARG_NUM = CangjieRuntimeLayout::TypeInfo::typeArgsNumIndex,      // generic type argumnet number
+  CIT_VALID_INHERIT_NUM = CangjieRuntimeLayout::TypeInfo::validInheritNumIndex, // valid inherit index
+  CIT_OFFSETS = CangjieRuntimeLayout::TypeInfo::fieldOffsetsIndex,      // offset of fields
+  CIT_GENERIC_FROM = CangjieRuntimeLayout::TypeInfo::sourceGenericIndex,      // generic type template
+  CIT_TYPE_ARG = CangjieRuntimeLayout::TypeInfo::typeArgsIndex,          // generic type arg[]
+  CIT_FIELD = CangjieRuntimeLayout::TypeInfo::fieldsIndex,             // fields[]
+  CIT_SUPER = CangjieRuntimeLayout::TypeInfo::superTypeInfoIndex,             // super klass or component klass
+  CIT_VTABLE = CangjieRuntimeLayout::TypeInfo::vExtensionDataStartIndex,       // virtual extension def ref in extension_defs[]
+  CIT_ITABLE = CangjieRuntimeLayout::TypeInfo::mTableDescIndex,            // interface hashtable
+  CIT_REFLECTION = CangjieRuntimeLayout::TypeInfo::reflectInfoIndex,        // reflection*
   CIT_MAX,               // klass type length
 };
 
@@ -272,8 +273,8 @@ struct CJDisableImportLibReflection
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &) const;
 };
 
-constexpr uint32_t ArrayHeadSize = 16;
-constexpr uint32_t ObjectHeadSize = 8;
+constexpr uint32_t ArrayHeadSize = CangjieRuntimeLayout::ArrayHeaderSize;
+constexpr uint32_t ObjectHeadSize = CangjieRuntimeLayout::ObjectHeaderSize;
 constexpr uint32_t SyncSize = 168;
 constexpr uint32_t MaxAllocaObj = 10000;
 constexpr uint32_t MaxArrayFast = 4 * 1024; // 4kb

@@ -432,7 +432,6 @@ static bool isBBEligibleForOutline(llvm::BasicBlock *BB) {
         return false;
       }
       if (Callee->getName().isSetDebugLocation() ||
-          Callee->getName().isGetGCPhase() ||
           Callee->getName().startswith("__builtin_") ||
           Callee->getName().startswith("llvm.")) {
         return false;

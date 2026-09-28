@@ -4147,10 +4147,6 @@ bool AsmPrinter::tryEmitCangjieSpecificCallByMOSym(const MachineInstr *MI,
     return false;
   }
   StringRef FuncName = Callee->getName();
-  if (FuncName.isGetGCPhase()) {
-    emitGcStateCheck();
-    return true;
-  }
   // `call CJ_MCC_HandleSafepoint` in safepoint stub function.
   if (Caller.isCangjieSafepointStub() && Callee->isCangjieSafePoint()) {
     assert(EnableSafepointOutline && "outline is not enabled");
