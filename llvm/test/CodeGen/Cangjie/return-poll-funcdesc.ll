@@ -5,6 +5,9 @@
 ; RUN: llc --cangjie-pipeline -no-stacktrace-info -mtriple=arm64-apple-macosx15.0 %s -o %t.macho
 ; RUN: FileCheck %s --check-prefixes=META,MACHO < %t.macho
 ; RUN: FileCheck %s --check-prefix=A64 < %t.macho
+; RUN: llc --cangjie-pipeline -no-stacktrace-info -mtriple=aarch64-unknown-linux-gnu %s -o - | FileCheck %s --check-prefixes=META,ELF
+; RUN: llc --cangjie-pipeline -no-stacktrace-info -mtriple=x86_64-apple-macosx15.0 %s -o - | FileCheck %s --check-prefixes=META,MACHO
+; RUN: llc --cangjie-pipeline -no-stacktrace-info -mtriple=x86_64-pc-windows-msvc %s -o - | FileCheck %s --check-prefixes=META,ELF
 ;
 ; The descriptor word and RET poll share one eligibility decision. The four
 ; stacktrace words and EH offset retain their existing positions. Checking
