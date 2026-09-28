@@ -18,38 +18,38 @@
 ; NOPOLL-NOT: cmpq {{[0-9]+}}(%r15), %rsp
 ; NOPOLL-LABEL: leaf:
 ; META-LABEL: .Lmethod_desc.{{(returnpoll._)?}}no_poll:
-; META-NEXT: .long {{.*}}
-; META-NEXT: .long {{.*}}
-; META-NEXT: .long 0
-; META-NEXT: .long 0
-; META-NEXT: .long 0
-; META-NEXT: .long 0
+; META-NEXT: .{{long|word}} {{.*}}
+; META-NEXT: .{{long|word}} {{.*}}
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: .{{long|word}} 0
 ; META-NEXT: {{\.?Ltmp[0-9]+}}:
-; ELF-NEXT: .long {{.*}}
+; ELF-NEXT: .{{long|word}} {{.*}}
 ; MACHO-NEXT: .quad {{.*}}
-; META-NEXT: .long 0
-; MACHO-NEXT: .long 0
+; META-NEXT: .{{long|word}} 0
+; MACHO-NEXT: .{{long|word}} 0
 ; META-LABEL: .Lmethod_desc.{{(returnpoll._)?}}fast:
-; META-NEXT: .long {{.*}}
-; META-NEXT: .long {{.*}}
-; META-NEXT: .long 0
-; META-NEXT: .long 0
-; META-NEXT: .long 0
-; META-NEXT: .long 0
+; META-NEXT: .{{long|word}} {{.*}}
+; META-NEXT: .{{long|word}} {{.*}}
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: .{{long|word}} 0
 ; META-NEXT: {{\.?Ltmp[0-9]+}}:
-; ELF-NEXT: .long {{.*}}
+; ELF-NEXT: .{{long|word}} {{.*}}
 ; MACHO-NEXT: .quad {{.*}}
-; META-NEXT: .long 0
-; MACHO-NEXT: .long 0
+; META-NEXT: .{{long|word}} 0
+; MACHO-NEXT: .{{long|word}} 0
 ; META-LABEL: .Lmethod_desc.{{(returnpoll._)?}}bare:
-; META-NEXT: .long {{.*}}
-; META-NEXT: .long {{.*}}
-; META-NEXT: .long 0
-; META-NEXT: .long 0
-; META-NEXT: .long 0
-; META-NEXT: .long 0
+; META-NEXT: .{{long|word}} {{.*}}
+; META-NEXT: .{{long|word}} {{.*}}
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: .{{long|word}} 0
 ; META-NEXT: {{\.?Ltmp[0-9]+}}:
-; ELF-NEXT: .long {{.*}}
+; ELF-NEXT: .{{long|word}} {{.*}}
 ; MACHO-NEXT: .quad {{.*}}
-; META-NEXT: .long 0
-; MACHO-NEXT: .long 0
+; META-NEXT: .{{long|word}} 0
+; MACHO-NEXT: .{{long|word}} 0

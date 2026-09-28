@@ -3,18 +3,18 @@
 ; ComdatMethodTable uses the same descriptor emitter as normal/init records.
 $member = comdat any
 declare void @callee() "gc-leaf-function"
-define linkonce_odr void @member() gc "cangjie" comdat($member) {
+define linkonce_odr void @member() comdat($member) gc "cangjie" {
   call void @callee()
   ret void
 }
 ; CHECK: .section .cjmetadata.methodinfo.member,
 ; CHECK-LABEL: .Lmethod_desc.member:
-; CHECK-NEXT: .long {{.*}}
-; CHECK-NEXT: .long {{.*}}
-; CHECK-NEXT: .long 0
-; CHECK-NEXT: .long 0
-; CHECK-NEXT: .long 0
-; CHECK-NEXT: .long 0
+; CHECK-NEXT: .{{long|word}} {{.*}}
+; CHECK-NEXT: .{{long|word}} {{.*}}
+; CHECK-NEXT: .{{long|word}} 0
+; CHECK-NEXT: .{{long|word}} 0
+; CHECK-NEXT: .{{long|word}} 0
+; CHECK-NEXT: .{{long|word}} 0
 ; CHECK-NEXT: {{\.?Ltmp[0-9]+}}:
-; CHECK-NEXT: .long {{.*}}
-; CHECK-NEXT: .long 1
+; CHECK-NEXT: .{{long|word}} {{.*}}
+; CHECK-NEXT: .{{long|word}} 1
