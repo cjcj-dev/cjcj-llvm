@@ -537,6 +537,12 @@ struct GenericCopyOpt {
     // MemoryPhi may appear in gcread.ref
     if (isa<MemoryPhi>(End))
       return {nullptr, nullptr, nullptr};
+    // A reference read starts at a preceding definition, which is part of
+    // the interval checked for source writes. Generic copies exclude their
+    // own definition at the end of that interval.
+    bool IsRef = isa<IntrinsicInst>(Inst) &&
+                 cast<IntrinsicInst>(Inst)->getIntrinsicID() ==
+                     Intrinsic::cj_gcread_ref;
     // Offset of Loc.Ptr relative to Base, true: positive, false: negative
     SmallVector<std::pair<Value *, bool>, 4> Offsets;
     auto *BV = getDerivedOffset(const_cast<Value *>(Loc.Ptr), Offsets);
@@ -584,8 +590,9 @@ struct GenericCopyOpt {
         const Value *V = Base ? Base : Loc.Ptr;
         if (Ptr->stripPointerCasts() != V->stripPointerCasts() ||
             // Obviously, define source connot be changed in between.
-            hasMemoryDefBetween(MSSA, DT, DL, getSource(II), II->getNextNode(),
-                                InitEnd, false, true))
+            hasMemoryDefBetween(MSSA, DT, DL, getSource(II),
+                                IsRef ? II : II->getNextNode(), InitEnd, IsRef,
+                                true))
           Stop = true;
         else {
           // If Offset is set, keep it.
@@ -611,8 +618,9 @@ struct GenericCopyOpt {
             (TI && SizeFrom != TI->stripPointerCasts()) ||
             Ptr->stripPointerCasts() != V->stripPointerCasts();
         if (IsPointerNotMatch ||
-            hasMemoryDefBetween(MSSA, DT, DL, getSource(II), II->getNextNode(),
-                                InitEnd, false, true))
+            hasMemoryDefBetween(MSSA, DT, DL, getSource(II),
+                                IsRef ? II : II->getNextNode(), InitEnd, IsRef,
+                                true))
           Stop = true;
         else {
           SmallVector<std::pair<Value *, bool>, 4> TmpOffsets;
@@ -666,8 +674,9 @@ struct GenericCopyOpt {
             getSize(II) != Size || BP != Base ||
             Derived->stripPointerCasts() != Loc.Ptr->stripPointerCasts();
         if (IsPointerNotMatch ||
-            hasMemoryDefBetween(MSSA, DT, DL, getSource(II), II->getNextNode(),
-                                InitEnd, false, true))
+            hasMemoryDefBetween(MSSA, DT, DL, getSource(II),
+                                IsRef ? II : II->getNextNode(), InitEnd, IsRef,
+                                true))
           Stop = true;
         else {
           SmallVector<std::pair<Value *, bool>, 4> TmpOffsets;
@@ -779,8 +788,7 @@ struct GenericCopyOpt {
       return false;
     // 0: base ptr, 1: derived ptr, 2: size
     auto [RB, RP, RS] =
-        findPotentialEqualMem(CI, MA, MSSA.getMemoryAccess(CI), Loc, Base, TI,
-                              Size, Changed);
+        findPotentialEqualMem(CI, MA, MA, Loc, Base, TI, Size, Changed);
     if (!RP || RP == Loc.Ptr || (IID == Intrinsic::cj_gcwrite_generic && RB))
       return Changed;
     Analyzed.insert(CI);
