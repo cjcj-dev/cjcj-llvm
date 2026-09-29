@@ -54,12 +54,17 @@ def descriptor(name):
 
 
 def frame_size(head):
-    raw = at(head, 5) if head is not None else None
+    raw = at(head, 1) if head is not None else None
     if raw is None:
         return None
-    bits = int.from_bytes(raw, "little")
-    tag = bits & 15
-    return tag if tag < 12 else (bits >> 4) & ((1 << ((tag - 11) * 8)) - 1)
+    tag = raw[0] & 15
+    if tag < 12:
+        return tag
+    width = (tag - 11) * 8
+    raw = at(head, (4 + width + 7) // 8)
+    if raw is None:
+        return None
+    return (int.from_bytes(raw, "little") >> 4) & ((1 << width) - 1)
 
 
 # The assembly comment is emitted from the product's encoded FnInfo. Compare
