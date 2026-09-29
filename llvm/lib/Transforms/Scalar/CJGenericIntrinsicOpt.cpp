@@ -744,13 +744,16 @@ struct GenericCopyOpt {
     if (!isa<MemoryUse>(MUD))
       return MUD;
     auto *BB = MUD->getMemoryInst()->getParent();
+    // Unreachable blocks can form a cycle with no memory definitions.
+    if (!DT.isReachableFromEntry(BB))
+      return nullptr;
     auto *DefLists = MSSA.getBlockDefs(BB);
     while (!DefLists) {
       if (auto *Pred = BB->getUniquePredecessor()) {
         DefLists = MSSA.getBlockDefs(Pred);
         BB = Pred;
-      }
-      return nullptr;
+      } else
+        return nullptr;
     }
     for (auto I = DefLists->rbegin(), E = DefLists->rend(); I != E; ++I)
       if (MSSA.dominates(&*I, MUD))
