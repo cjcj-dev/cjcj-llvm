@@ -1011,16 +1011,20 @@ void AsmPrinter::emitFunctionHeader() {
     emitFunctionDescriptor();
 
   const Triple TT(F.getParent()->getTargetTriple());
-  if (F.hasCangjieGC() && !F.hasFnAttribute("leaf-function") &&
-      !TT.isOSBinFormatMachO()) {
-    MCSymbol *DescSymbol = OutContext.getOrCreateSymbol(
-        ".Lmethod_desc." + CurrentFnSym->getName());
-    MCSymbol *PCSym = OutContext.createTempSymbol();
-    OutStreamer->emitLabel(PCSym);
-    const MCExpr *MethodDescOffset = MCBinaryExpr::createSub(
-        MCSymbolRefExpr::create(DescSymbol, OutContext),
-        MCSymbolRefExpr::create(PCSym, OutContext), OutContext);
-    OutStreamer->emitValue(MethodDescOffset, 4);
+  if (F.hasCangjieGC() && !TT.isOSBinFormatMachO()) {
+    // Every managed entry has a slot, even when no descriptor is recorded.
+    if (F.hasFnAttribute("leaf-function")) {
+      OutStreamer->emitIntValue(0, 4);
+    } else {
+      MCSymbol *DescSymbol = OutContext.getOrCreateSymbol(
+          ".Lmethod_desc." + CurrentFnSym->getName());
+      MCSymbol *PCSym = OutContext.createTempSymbol();
+      OutStreamer->emitLabel(PCSym);
+      const MCExpr *MethodDescOffset = MCBinaryExpr::createSub(
+          MCSymbolRefExpr::create(DescSymbol, OutContext),
+          MCSymbolRefExpr::create(PCSym, OutContext), OutContext);
+      OutStreamer->emitValue(MethodDescOffset, 4);
+    }
   }
   // Emit the CurrentFnSym. This is a virtual function to allow targets to do
   // their wild and crazy things as required.
