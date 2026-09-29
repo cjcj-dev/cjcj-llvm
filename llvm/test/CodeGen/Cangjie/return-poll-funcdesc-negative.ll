@@ -9,8 +9,11 @@
 ; RUN: llc --cangjie-pipeline -no-stacktrace-info -mtriple=aarch64 %S/return-poll-funcdesc.ll -o - | FileCheck %s --check-prefix=NOOS
 ;
 ; Independent negative controls must stay green when eligible polls or their
-; metadata bit are cut. LEAF scans the entire output, not just its final table.
-; LEAF-NOT: .Lmethod_desc.{{(returnpoll._)?}}leaf:
+; metadata bit are cut. Legacy leaf input now has real metadata too.
+; LEAF-LABEL: .Lmethod_desc.{{(returnpoll._)?}}leaf:
+; LEAF-NEXT: .{{long|word}} .Lstack_map.{{_?}}leaf-
+; LEAF: .org .Lmethod_desc.{{(returnpoll._)?}}leaf+{{28|32}}, 0
+; LEAF-NEXT: .{{long|word}} 1
 ; NOPOLL-LABEL: no_poll:
 ; NOPOLL-NOT: cmpq {{[0-9]+}}(%r15), %rsp
 ; NOPOLL-LABEL: fast:
