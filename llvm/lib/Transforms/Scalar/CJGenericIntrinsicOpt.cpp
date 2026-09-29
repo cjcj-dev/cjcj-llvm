@@ -537,6 +537,12 @@ struct GenericCopyOpt {
     // MemoryPhi may appear in gcread.ref
     if (isa<MemoryPhi>(End))
       return {nullptr, nullptr, nullptr};
+    // A reference read starts at a preceding definition, which is part of
+    // the interval checked for source writes. Generic copies exclude their
+    // own definition at the end of that interval.
+    bool IsRef = isa<IntrinsicInst>(Inst) &&
+                 cast<IntrinsicInst>(Inst)->getIntrinsicID() ==
+                     Intrinsic::cj_gcread_ref;
     // Offset of Loc.Ptr relative to Base, true: positive, false: negative
     SmallVector<std::pair<Value *, bool>, 4> Offsets;
     auto *BV = getDerivedOffset(const_cast<Value *>(Loc.Ptr), Offsets);
@@ -574,6 +580,22 @@ struct GenericCopyOpt {
         break;
       auto *II = cast<IntrinsicInst>(Def->getMemoryInst());
 
+      if (IsRef) {
+        // The source-write helper skips MemoryPhi nodes. A ref read must not
+        // accept a copy relation across may-reach definitions on either path.
+        bool HasMemoryPhi = false;
+        for (MemoryAccess *MA = InitEnd;
+             MA != Def && !MSSA.isLiveOnEntryDef(MA);
+             MA = cast<MemoryUseOrDef>(MA)->getDefiningAccess()) {
+          if (isa<MemoryPhi>(MA)) {
+            HasMemoryPhi = true;
+            break;
+          }
+        }
+        if (HasMemoryPhi)
+          break;
+      }
+
       bool Stop = false;
       switch (II->getIntrinsicID()) {
       default:
@@ -584,8 +606,9 @@ struct GenericCopyOpt {
         const Value *V = Base ? Base : Loc.Ptr;
         if (Ptr->stripPointerCasts() != V->stripPointerCasts() ||
             // Obviously, define source connot be changed in between.
-            hasMemoryDefBetween(MSSA, DT, DL, getSource(II), II->getNextNode(),
-                                InitEnd, false, true))
+            hasMemoryDefBetween(MSSA, DT, DL, getSource(II),
+                                IsRef ? II : II->getNextNode(), InitEnd, IsRef,
+                                true))
           Stop = true;
         else {
           // If Offset is set, keep it.
@@ -611,8 +634,9 @@ struct GenericCopyOpt {
             (TI && SizeFrom != TI->stripPointerCasts()) ||
             Ptr->stripPointerCasts() != V->stripPointerCasts();
         if (IsPointerNotMatch ||
-            hasMemoryDefBetween(MSSA, DT, DL, getSource(II), II->getNextNode(),
-                                InitEnd, false, true))
+            hasMemoryDefBetween(MSSA, DT, DL, getSource(II),
+                                IsRef ? II : II->getNextNode(), InitEnd, IsRef,
+                                true))
           Stop = true;
         else {
           SmallVector<std::pair<Value *, bool>, 4> TmpOffsets;
@@ -666,8 +690,9 @@ struct GenericCopyOpt {
             getSize(II) != Size || BP != Base ||
             Derived->stripPointerCasts() != Loc.Ptr->stripPointerCasts();
         if (IsPointerNotMatch ||
-            hasMemoryDefBetween(MSSA, DT, DL, getSource(II), II->getNextNode(),
-                                InitEnd, false, true))
+            hasMemoryDefBetween(MSSA, DT, DL, getSource(II),
+                                IsRef ? II : II->getNextNode(), InitEnd, IsRef,
+                                true))
           Stop = true;
         else {
           SmallVector<std::pair<Value *, bool>, 4> TmpOffsets;
@@ -744,13 +769,16 @@ struct GenericCopyOpt {
     if (!isa<MemoryUse>(MUD))
       return MUD;
     auto *BB = MUD->getMemoryInst()->getParent();
+    // Unreachable blocks can form a cycle with no memory definitions.
+    if (!DT.isReachableFromEntry(BB))
+      return nullptr;
     auto *DefLists = MSSA.getBlockDefs(BB);
     while (!DefLists) {
       if (auto *Pred = BB->getUniquePredecessor()) {
         DefLists = MSSA.getBlockDefs(Pred);
         BB = Pred;
-      }
-      return nullptr;
+      } else
+        return nullptr;
     }
     for (auto I = DefLists->rbegin(), E = DefLists->rend(); I != E; ++I)
       if (MSSA.dominates(&*I, MUD))
