@@ -6,11 +6,11 @@
 ;
 ; Read the emitted object bytes, independently of assembly directives.
 ; The return-poll word is at offset 28 (ELF) or 32 (Mach-O).
-; ELF: 0010 00000000 00000000 {{([0-9a-f]{8})}} 01000000
+; ELF: {{^ *}}0010 00000000 00000000 {{([0-9a-f]{8})}} 01000000
 ; MACHO: Contents of section __CJ_METADATA,__cjmethodinfo:
-; MACHO-NEXT: {{[0-9a-f]+}} {{([0-9a-f]{8})}} {{([0-9a-f]{8})}} 00000000 00000000
-; MACHO-NEXT: {{[0-9a-f]+}} 00000000 00000000 {{([0-9a-f]{8})}} {{([0-9a-f]{8})}}
-; MACHO-NEXT: {{[0-9a-f]+}} 01000000 00000000
+; MACHO-NEXT: {{^ *[0-9a-f]+}} {{([0-9a-f]{8})}} {{([0-9a-f]{8})}} 00000000 00000000
+; MACHO-NEXT: {{^ *[0-9a-f]+}} 00000000 00000000 {{([0-9a-f]{8})}} {{([0-9a-f]{8})}}
+; MACHO-NEXT: {{^ *[0-9a-f]+}} 01000000 00000000
 
 declare void @callee() "gc-leaf-function"
 define void @poll() gc "cangjie" {
