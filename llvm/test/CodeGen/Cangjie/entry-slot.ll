@@ -8,16 +8,16 @@
 ;
 ; The non-leaf slot still refers to a real descriptor. The leaf has a slot
 ; but no descriptor. Native functions and Mach-O do not gain entry slots.
-; SLOT: .long .Lmethod_desc.slot_neighbor-
+; SLOT: .{{long|word}} .Lmethod_desc.slot_neighbor-
 ; SLOT-NEXT: slot_neighbor:
 ; MACHO-LABEL: {{^_slot_neighbor:}}
 ; ALL: .globl {{_?}}slot_leaf
-; SLOT: .long 0
+; SLOT: .{{long|word}} 0
 ; SLOT-NEXT: slot_leaf:
-; MACHO-NOT: .long
+; MACHO-NOT: .{{long|word}}
 ; MACHO-LABEL: {{^_slot_leaf:}}
 ; ALL: .globl {{_?}}slot_plain
-; ALL-NOT: .long
+; ALL-NOT: .{{long|word}}
 ; ALL-LABEL: {{^_?slot_plain:}}
 ; ALL-NOT: .Lmethod_desc.{{.*}}slot_leaf
 ; ALL: .Lmethod_desc.{{.*}}slot_neighbor:
