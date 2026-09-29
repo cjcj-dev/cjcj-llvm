@@ -779,7 +779,8 @@ struct GenericCopyOpt {
       return false;
     // 0: base ptr, 1: derived ptr, 2: size
     auto [RB, RP, RS] =
-        findPotentialEqualMem(CI, MA, MA, Loc, Base, TI, Size, Changed);
+        findPotentialEqualMem(CI, MA, MSSA.getMemoryAccess(CI), Loc, Base, TI,
+                              Size, Changed);
     if (!RP || RP == Loc.Ptr || (IID == Intrinsic::cj_gcwrite_generic && RB))
       return Changed;
     Analyzed.insert(CI);
