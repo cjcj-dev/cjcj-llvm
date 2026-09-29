@@ -580,6 +580,22 @@ struct GenericCopyOpt {
         break;
       auto *II = cast<IntrinsicInst>(Def->getMemoryInst());
 
+      if (IsRef) {
+        // The source-write helper skips MemoryPhi nodes. A ref read must not
+        // accept a copy relation across may-reach definitions on either path.
+        bool HasMemoryPhi = false;
+        for (MemoryAccess *MA = InitEnd;
+             MA != Def && !MSSA.isLiveOnEntryDef(MA);
+             MA = cast<MemoryUseOrDef>(MA)->getDefiningAccess()) {
+          if (isa<MemoryPhi>(MA)) {
+            HasMemoryPhi = true;
+            break;
+          }
+        }
+        if (HasMemoryPhi)
+          break;
+      }
+
       bool Stop = false;
       switch (II->getIntrinsicID()) {
       default:
