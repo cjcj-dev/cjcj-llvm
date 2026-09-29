@@ -14,3 +14,6 @@ define void @poll() gc "cangjie" {
   call void @callee()
   ret void
 }
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"Cangjie_PACKAGE_ID", !"returnpoll_layout"}
