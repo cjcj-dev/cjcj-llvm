@@ -1011,7 +1011,7 @@ void AsmPrinter::emitFunctionHeader() {
     emitFunctionDescriptor();
 
   const Triple TT(F.getParent()->getTargetTriple());
-  if (F.hasCangjieGC() && !TT.isOSBinFormatMachO()) {
+  if (CJPipeline && F.hasCangjieGC() && !TT.isOSBinFormatMachO()) {
     // Every managed entry refers to its function descriptor.
     MCSymbol *DescSymbol = OutContext.getOrCreateSymbol(
         ".Lmethod_desc." + CurrentFnSym->getName());
