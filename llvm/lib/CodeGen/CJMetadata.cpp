@@ -17,6 +17,7 @@
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/CangjieRuntimeLayout.h"
+#include "llvm/CodeGen/CodeGenPassBuilder.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/StackMaps.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -279,10 +280,13 @@ void CJMetadataInfo::recordCurrentFunc() {
   if (!F.hasCangjieGC())
     return;
 
-  // Even a function without callsites needs its actual frame information.
+  // Match AsmPrinter::emitCJMetadataInfo: only the Cangjie format needs
+  // function-only records. Even without callsites it needs the actual frame.
   // Record it while the MachineFunction is still available.
-  StackMaps::CallsiteInfo CSInfo;
-  SM.updateOrInsertFnInfo(AP.CurrentFnSym, CSInfo);
+  if (CJPipeline) {
+    StackMaps::CallsiteInfo CSInfo;
+    SM.updateOrInsertFnInfo(AP.CurrentFnSym, CSInfo);
+  }
 
   // pc + methodinfo. stackmap symbol
   if (F.hasComdat()) {

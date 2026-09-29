@@ -72,7 +72,7 @@ def frame_size(head):
 with open(sys.argv[2]) as stream:
     assembly = stream.read()
 expected_frames = dict((name, int(size)) for name, size in re.findall(
-    r"\.Lstack_map\.(slot_\w+):\s*#StackSize: (\d+)", assembly))
+    r"\.Lstack_map\.(slot_\w+):\s*(?:#|//)StackSize: (\d+)", assembly))
 
 neighbor = slot("slot_neighbor")
 leaf = slot("slot_leaf")

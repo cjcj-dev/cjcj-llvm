@@ -77,5 +77,7 @@ define void @plain_ret() {
 ; BOTH: .Lstack_map.ref_ret:
 ; X86: rax
 ; A64: x0
-; BOTH-NOT: .Lstack_map.leaf_ret:
+; A gc-leaf still has frame metadata, but has no return-poll callsite.
+; BOTH: .Lstack_map.leaf_ret:
+; BOTH: StackMapItem nums:0
 ; BOTH-NOT: .Lstack_map.plain_ret:
