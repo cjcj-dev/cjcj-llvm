@@ -86,6 +86,7 @@
 ; NOOS-NEXT: .word 0
 ; NOOS-NEXT: {{\.?Ltmp[0-9]+}}:
 ; NOOS-NEXT: .word {{.*}}
+; NOOS-NEXT: .org .Lmethod_desc.poll+28, 0
 ; NOOS-NEXT: .word 0
 ; NOOS-LABEL: .Lmethod_desc.init:
 ; NOOS-NEXT: .word {{.*}}
@@ -96,5 +97,5 @@
 ; NOOS-NEXT: .word 0
 ; NOOS-NEXT: {{\.?Ltmp[0-9]+}}:
 ; NOOS-NEXT: .word {{.*}}
-; NOOS-NEXT: .org .Lmethod_desc.poll+28, 0
+; NOOS-NEXT: .org .Lmethod_desc.init+28, 0
 ; NOOS-NEXT: .word 0
