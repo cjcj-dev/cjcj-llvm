@@ -72,6 +72,8 @@ attributes #4 = { "cjinit" }
 ; META-NEXT: {{\.?Ltmp[0-9]+}}:
 ; ELF-NEXT: .{{long|word}} {{.*}}
 ; MACHO-NEXT: .quad {{.*}}
+; ELF-NEXT: .org .Lmethod_desc.{{.*}}+28, 0
+; MACHO-NEXT: .org .Lmethod_desc.{{.*}}+32, 0
 ; META-NEXT: .{{long|word}} 1
 ; MACHO-NEXT: .{{long|word}} 0
 ; META-LABEL: .Lmethod_desc.{{(returnpoll._)?}}no_poll:
@@ -84,6 +86,8 @@ attributes #4 = { "cjinit" }
 ; META-NEXT: {{\.?Ltmp[0-9]+}}:
 ; ELF-NEXT: .{{long|word}} {{.*}}
 ; MACHO-NEXT: .quad {{.*}}
+; ELF-NEXT: .org .Lmethod_desc.{{.*}}+28, 0
+; MACHO-NEXT: .org .Lmethod_desc.{{.*}}+32, 0
 ; META-NEXT: .{{long|word}} 0
 ; MACHO-NEXT: .{{long|word}} 0
 ; META-LABEL: .Lmethod_desc.{{(returnpoll._)?}}fast:
@@ -96,6 +100,8 @@ attributes #4 = { "cjinit" }
 ; META-NEXT: {{\.?Ltmp[0-9]+}}:
 ; ELF-NEXT: .{{long|word}} {{.*}}
 ; MACHO-NEXT: .quad {{.*}}
+; ELF-NEXT: .org .Lmethod_desc.{{.*}}+28, 0
+; MACHO-NEXT: .org .Lmethod_desc.{{.*}}+32, 0
 ; META-NEXT: .{{long|word}} 0
 ; MACHO-NEXT: .{{long|word}} 0
 ; META-LABEL: .Lmethod_desc.{{(returnpoll._)?}}bare:
@@ -108,6 +114,8 @@ attributes #4 = { "cjinit" }
 ; META-NEXT: {{\.?Ltmp[0-9]+}}:
 ; ELF-NEXT: .{{long|word}} {{.*}}
 ; MACHO-NEXT: .quad {{.*}}
+; ELF-NEXT: .org .Lmethod_desc.{{.*}}+28, 0
+; MACHO-NEXT: .org .Lmethod_desc.{{.*}}+32, 0
 ; META-NEXT: .{{long|word}} 0
 ; MACHO-NEXT: .{{long|word}} 0
 ; META-LABEL: .Lmethod_desc.{{(returnpoll._)?}}init:
@@ -120,6 +128,8 @@ attributes #4 = { "cjinit" }
 ; META-NEXT: {{\.?Ltmp[0-9]+}}:
 ; ELF-NEXT: .{{long|word}} {{.*}}
 ; MACHO-NEXT: .quad {{.*}}
+; ELF-NEXT: .org .Lmethod_desc.{{.*}}+28, 0
+; MACHO-NEXT: .org .Lmethod_desc.{{.*}}+32, 0
 ; META-NEXT: .{{long|word}} 1
 ; MACHO-NEXT: .{{long|word}} 0
 ; META-NOT: .Lmethod_desc.{{(returnpoll._)?}}leaf:

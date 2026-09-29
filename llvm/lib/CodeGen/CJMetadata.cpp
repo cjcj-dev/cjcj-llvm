@@ -16,6 +16,7 @@
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/CodeGen/AsmPrinter.h"
+#include "llvm/CodeGen/CangjieRuntimeLayout.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/StackMaps.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -568,6 +569,14 @@ void CJMetadataInfo::emitDatas(const MCSymbol *FuncName,
   // Because the front is 64-bit aligned, it must be placed behind
   // the emitstacktraceinfo.
   emitEHTableOffset(FuncNumber);
+  const unsigned ReturnPollOffset =
+      IsMachO ? CangjieRuntimeLayout::FuncDescReturnPollOffsetMachO
+              : CangjieRuntimeLayout::FuncDescReturnPollOffsetELF;
+  OS.emitValueToOffset(
+      MCBinaryExpr::createAdd(MCSymbolRefExpr::create(DescSymbol, Context),
+                             MCConstantExpr::create(ReturnPollOffset, Context),
+                             Context),
+      0, SMLoc());
   // Keep all existing funcdesc offsets intact. Bit 0 describes the same
   // eligibility used at RET emission; all other bits are reserved and zero.
   const Function *F = M->getFunction(IsMachO ? FuncName->getName().substr(1)
