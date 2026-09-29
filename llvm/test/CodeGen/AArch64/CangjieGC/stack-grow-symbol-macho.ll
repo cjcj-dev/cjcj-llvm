@@ -33,3 +33,7 @@ declare token @llvm.cj.gc.statepoint(...)
 ; DARWIN-NOT: bl CJ_MCC_StackGrowStub
 ; ELF: bl CJ_MCC_StackGrowStub
 ; ELF-NOT: bl _CJ_MCC_StackGrowStub
+
+; Managed descriptors require the normal Mach-O package identity.
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"Cangjie_PACKAGE_ID", !"stackgrow"}

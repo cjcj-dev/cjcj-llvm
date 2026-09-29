@@ -17,6 +17,7 @@
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/CodeGen/CangjieRuntimeLayout.h"
+#include "llvm/CodeGen/CodeGenPassBuilder.h"
 #include "llvm/CodeGen/GCMetadata.h"
 #include "llvm/CodeGen/StackMaps.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -276,8 +277,16 @@ void CJMetadataInfo::recordExternalMethod() {
 
 void CJMetadataInfo::recordCurrentFunc() {
   const Function &F = AP.MF->getFunction();
-  if (!F.hasCangjieGC() || F.hasFnAttribute("leaf-function"))
+  if (!F.hasCangjieGC())
     return;
+
+  // Match AsmPrinter::emitCJMetadataInfo: only the Cangjie format needs
+  // function-only records. Even without callsites it needs the actual frame.
+  // Record it while the MachineFunction is still available.
+  if (CJPipeline) {
+    StackMaps::CallsiteInfo CSInfo;
+    SM.updateOrInsertFnInfo(AP.CurrentFnSym, CSInfo);
+  }
 
   // pc + methodinfo. stackmap symbol
   if (F.hasComdat()) {

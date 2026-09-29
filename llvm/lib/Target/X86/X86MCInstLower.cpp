@@ -3067,25 +3067,21 @@ void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
     OutStreamer->emitLabel(NextIns);
     if (MF->getTarget().getTargetTriple().isOSBinFormatMachO()) {
       Function &Func = MF->getFunction();
-      if (!Func.hasFnAttribute("leaf-function")) {
-        Metadata *MD = Func.getParent()->getModuleFlag("Cangjie_PACKAGE_ID");
-        if (MD == nullptr)
-          report_fatal_error("There is not cangjie package id in module!");
-        StringRef PACKAGEID = dyn_cast<MDString>(MD)->getString();
-        MCSymbol *DescSymbol = OutContext.getOrCreateSymbol(
-            ".Lmethod_desc." + PACKAGEID + "._" + MF->getName());
-        EmitAndCountInstruction(
-            MCInstBuilder(X86::LEA64r)
-                .addReg(X86::R10)
-                .addReg(X86::RIP)
-                .addImm(0)
-                .addReg(0)
-                .addExpr(MCSymbolRefExpr::create(DescSymbol, OutContext))
-                .addReg(0));
-        EmitAndCountInstruction(MCInstBuilder(X86::PUSH64r).addReg(X86::R10));
-      } else {
-        EmitAndCountInstruction(MCInstBuilder(X86::PUSH64r).addReg(X86::RIP));
-      }
+      Metadata *MD = Func.getParent()->getModuleFlag("Cangjie_PACKAGE_ID");
+      if (MD == nullptr)
+        report_fatal_error("There is not cangjie package id in module!");
+      StringRef PACKAGEID = dyn_cast<MDString>(MD)->getString();
+      MCSymbol *DescSymbol = OutContext.getOrCreateSymbol(
+          ".Lmethod_desc." + PACKAGEID + "._" + MF->getName());
+      EmitAndCountInstruction(
+          MCInstBuilder(X86::LEA64r)
+              .addReg(X86::R10)
+              .addReg(X86::RIP)
+              .addImm(0)
+              .addReg(0)
+              .addExpr(MCSymbolRefExpr::create(DescSymbol, OutContext))
+              .addReg(0));
+      EmitAndCountInstruction(MCInstBuilder(X86::PUSH64r).addReg(X86::R10));
     }
     return;
   }

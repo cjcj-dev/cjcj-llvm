@@ -118,6 +118,20 @@ attributes #4 = { "cjinit" }
 ; MACHO-NEXT: .org .Lmethod_desc.{{.*}}+32, 0
 ; META-NEXT: .{{long|word}} 0
 ; MACHO-NEXT: .{{long|word}} 0
+; META-LABEL: .Lmethod_desc.{{(returnpoll._)?}}leaf:
+; META-NEXT: .{{long|word}} {{.*}}
+; META-NEXT: .{{long|word}} {{.*}}
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: .{{long|word}} 0
+; META-NEXT: {{\.?Ltmp[0-9]+}}:
+; ELF-NEXT: .{{long|word}} {{.*}}
+; MACHO-NEXT: .quad {{.*}}
+; ELF-NEXT: .org .Lmethod_desc.{{.*}}+28, 0
+; MACHO-NEXT: .org .Lmethod_desc.{{.*}}+32, 0
+; META-NEXT: .{{long|word}} 1
+; MACHO-NEXT: .{{long|word}} 0
 ; META-LABEL: .Lmethod_desc.{{(returnpoll._)?}}init:
 ; META-NEXT: .{{long|word}} {{.*}}
 ; META-NEXT: .{{long|word}} {{.*}}
@@ -132,4 +146,3 @@ attributes #4 = { "cjinit" }
 ; MACHO-NEXT: .org .Lmethod_desc.{{.*}}+32, 0
 ; META-NEXT: .{{long|word}} 1
 ; MACHO-NEXT: .{{long|word}} 0
-; META-NOT: .Lmethod_desc.{{(returnpoll._)?}}leaf:

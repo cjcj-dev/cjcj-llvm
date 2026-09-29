@@ -2,7 +2,7 @@
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 -stack-trace-format=simple  < %s
 
 ; CHECK: .Lmethod_desc.cj_entry$:
-; CHECK-NEXT:  .long   0
+; CHECK-NEXT:  .long   .Lstack_map.cj_entry$-.Lmethod_desc.cj_entry$
 ; CHECK-NEXT:  .long   .Lfunc_end0-.Lfunc_begin0
 ; CHECK-NEXT:  .long   0
 ; CHECK-NEXT:  .long   0
