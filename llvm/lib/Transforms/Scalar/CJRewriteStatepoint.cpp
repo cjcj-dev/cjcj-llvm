@@ -3172,13 +3172,8 @@ bool CJRewriteStatepoint::runOnFunction(Function &F, DominatorTree &DT,
       }
     }
   }
-  // Mark the leaf-function attribute, if the function has no any callsite.
-  // The functions marked "leaf-function" do not emit methodinfo in
-  // CJMetadata.cpp.
-  if (!HasCallSite) {
-    F.addFnAttr(Attribute::get(F.getContext(), "leaf-function"));
+  if (!HasCallSite)
     return MadeChange;
-  }
 
   // Return early if no work to do.
   if (ParsePointNeeded.empty())

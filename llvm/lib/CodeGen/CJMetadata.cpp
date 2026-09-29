@@ -276,8 +276,13 @@ void CJMetadataInfo::recordExternalMethod() {
 
 void CJMetadataInfo::recordCurrentFunc() {
   const Function &F = AP.MF->getFunction();
-  if (!F.hasCangjieGC() || F.hasFnAttribute("leaf-function"))
+  if (!F.hasCangjieGC())
     return;
+
+  // Even a function without callsites needs its actual frame information.
+  // Record it while the MachineFunction is still available.
+  StackMaps::CallsiteInfo CSInfo;
+  SM.updateOrInsertFnInfo(AP.CurrentFnSym, CSInfo);
 
   // pc + methodinfo. stackmap symbol
   if (F.hasComdat()) {

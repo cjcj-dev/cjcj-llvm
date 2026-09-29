@@ -1567,33 +1567,31 @@ void AArch64AsmPrinter::emitInstruction(const MachineInstr *MI) {
     MCInst AdrpInst;
     Function &Func = MF->getFunction();
     const MCExpr *Expr = nullptr;
-    if (!Func.hasFnAttribute("leaf-function")) {
-      Metadata *MD = Func.getParent()->getModuleFlag("Cangjie_PACKAGE_ID");
-      if (MD == nullptr) {
-        report_fatal_error("There is not cangjie package id in module!");
-      }
-      StringRef PACKAGEID = dyn_cast<MDString>(MD)->getString();
-      MCSymbol *DescSymbol = OutContext.getOrCreateSymbol(
-          ".Lmethod_desc." + PACKAGEID + "._" + MF->getName());
-      Expr = MCSymbolRefExpr::create(
-          DescSymbol, MCSymbolRefExpr::VK_PAGE, OutContext);
-      // adrp x10, .Lmethod_desc.PACKAGEID.xxx@PAGE
-      AdrpInst.setOpcode(AArch64::ADRP);
-      AdrpInst.addOperand(MCOperand::createReg(AArch64::X10));
-      AdrpInst.addOperand(MCOperand::createExpr(Expr));
-      EmitToStreamer(*OutStreamer, AdrpInst);
-
-      MCInst AddInst;
-      const MCExpr *AddExpr = MCSymbolRefExpr::create(
-          DescSymbol, MCSymbolRefExpr::VK_PAGEOFF, OutContext);
-      // add x10, x10, .Lmethod_desc.PACKAGEID.xxx@PAGEOFF
-      AddInst.setOpcode(AArch64::ADDXri);
-      AddInst.addOperand(MCOperand::createReg(AArch64::X10));
-      AddInst.addOperand(MCOperand::createReg(AArch64::X10));
-      AddInst.addOperand(MCOperand::createExpr(AddExpr));
-      AddInst.addOperand(MCOperand::createImm(AArch64_AM::getShiftValue(0)));
-      EmitToStreamer(*OutStreamer, AddInst);
+    Metadata *MD = Func.getParent()->getModuleFlag("Cangjie_PACKAGE_ID");
+    if (MD == nullptr) {
+      report_fatal_error("There is not cangjie package id in module!");
     }
+    StringRef PACKAGEID = dyn_cast<MDString>(MD)->getString();
+    MCSymbol *DescSymbol = OutContext.getOrCreateSymbol(
+        ".Lmethod_desc." + PACKAGEID + "._" + MF->getName());
+    Expr = MCSymbolRefExpr::create(
+        DescSymbol, MCSymbolRefExpr::VK_PAGE, OutContext);
+    // adrp x10, .Lmethod_desc.PACKAGEID.xxx@PAGE
+    AdrpInst.setOpcode(AArch64::ADRP);
+    AdrpInst.addOperand(MCOperand::createReg(AArch64::X10));
+    AdrpInst.addOperand(MCOperand::createExpr(Expr));
+    EmitToStreamer(*OutStreamer, AdrpInst);
+
+    MCInst AddInst;
+    const MCExpr *AddExpr = MCSymbolRefExpr::create(
+        DescSymbol, MCSymbolRefExpr::VK_PAGEOFF, OutContext);
+    // add x10, x10, .Lmethod_desc.PACKAGEID.xxx@PAGEOFF
+    AddInst.setOpcode(AArch64::ADDXri);
+    AddInst.addOperand(MCOperand::createReg(AArch64::X10));
+    AddInst.addOperand(MCOperand::createReg(AArch64::X10));
+    AddInst.addOperand(MCOperand::createExpr(AddExpr));
+    AddInst.addOperand(MCOperand::createImm(AArch64_AM::getShiftValue(0)));
+    EmitToStreamer(*OutStreamer, AddInst);
     return;
   }
   case AArch64::HINT: {

@@ -12,9 +12,11 @@
 ; MACHO: .quad {{.*}}func_begin0
 ; MACHO-NEXT: .quad .Lmethod_desc.funcmap._map_first
 ; MACHO: __cjfuncmap
+; MACHO: .quad {{.*}}func_begin2
+; MACHO-NEXT: .quad .Lmethod_desc.funcmap._map_leaf
+; MACHO: __cjfuncmap
 ; MACHO: .quad {{.*}}func_begin1
 ; MACHO-NEXT: .quad .Lmethod_desc.funcmap._map_init
-; MACHO-NOT: .quad .Lmethod_desc.funcmap._map_leaf
 ; MACHO-NOT: .quad .Lmethod_desc.funcmap._map_plain
 ; ELF-NOT: __cjfuncmap
 ; ELF: .Lmethod_desc.map_first

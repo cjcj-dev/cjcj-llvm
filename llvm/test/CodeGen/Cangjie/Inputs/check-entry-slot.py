@@ -19,7 +19,7 @@ for section in sections:
     for pos in range(section[4], section[4] + section[5], section[9]):
         name, info, other, index, value, size = struct.unpack_from("<IBBHQQ", data, pos)
         name = names[name:names.index(b"\0", name)].decode()
-        if name in ("slot_neighbor", "slot_leaf", "slot_plain"):
+        if name in ("slot_neighbor", "slot_leaf", "slot_gc_leaf", "slot_plain"):
             symbols[name] = (index, value, size)
 
 
@@ -36,9 +36,9 @@ leaf = slot("slot_leaf")
 functions = sorted((value, name) for name, (_, value, _) in symbols.items())
 checks = [
     ("neighbor_nonzero_slot", neighbor != b"\0" * 4, neighbor.hex()),
-    ("leaf_zero_slot", leaf == b"\0" * 4, leaf.hex()),
+    ("leaf_nonzero_slot", leaf != b"\0" * 4, leaf.hex()),
     ("adjacent_managed_functions",
-     [name for _, name in functions] == ["slot_neighbor", "slot_leaf", "slot_plain"]
+     [name for _, name in functions] == ["slot_neighbor", "slot_leaf", "slot_gc_leaf", "slot_plain"]
      and symbols["slot_neighbor"][0] == symbols["slot_leaf"][0], str(functions)),
 ]
 # Evaluate every target even when another fails, so an early assertion cannot
