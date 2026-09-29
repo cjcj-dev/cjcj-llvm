@@ -15,6 +15,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/CodeGen/CangjieRuntimeLayout.h"
 #include "llvm/IR/CJIntrinsics.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
@@ -618,7 +619,7 @@ static bool isAllocation(CallInst *CI) {
   // MArray consists of the type pointer and the pointer-sized MIndex length.
   const uint64_t HeaderBytes = 2 * DL.getPointerSize(1);
   if (!Length || Length->isNegative() ||
-      Length->getValue().ugt((64 * 1024 - HeaderBytes) / ElementBytes))
+      Length->getValue().ugt((CangjieRuntimeLayout::ArrayInitSegmentSize - HeaderBytes) / ElementBytes))
     return false;
   return true;
 }
