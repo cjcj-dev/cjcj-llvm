@@ -1,6 +1,9 @@
+; RUN: opt -passes=cj-generic-intrinsic-opt --cangjie-pipeline -S < %s | FileCheck %s --check-prefix=REF
 ; RUN: opt -passes=cj-generic-intrinsic-opt --cangjie-pipeline -S < %s | FileCheck %s
 ; C0: unrelated local Def exercises the existing scan.
 
+; Check the redirected read independently of the offset sequence.
+; REF: %value = call i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)* %src, i8 addrspace(1)* addrspace(1)* {{%[^ )]+}})
 ; CHECK-LABEL: define {{.*}} @test(
 ; CHECK: [[SUM:%.*]] = add i64 %read_offset, %offset
 ; CHECK-NEXT: [[OFF:%.*]] = sub i64 [[SUM]], 8
