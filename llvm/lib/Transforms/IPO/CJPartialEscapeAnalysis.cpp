@@ -18,7 +18,6 @@
 #include "queue"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
@@ -27,7 +26,6 @@
 #include "llvm/Analysis/DomTreeUpdater.h"
 #include "llvm/Analysis/LazyCallGraph.h"
 #include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
@@ -79,8 +77,6 @@ static cl::opt<unsigned> CJMaxNonMoveArraySize("cj-max-nonmove-array-size",
 namespace llvm {
 cl::opt<bool> CJDisablePEA("cj-disable-partial-ea",
                                   cl::Hidden, cl::init(false));
-cl::opt<bool> CJEASupportFinalizer("cj-ea-support-finalizer", cl::Hidden,
-                                   cl::init(true));
 
 GlobalVariable *getNewKlass(CallBase *I) {
   GlobalVariable *Klass =
@@ -164,666 +160,34 @@ bool isRewriteableCangjieMallocFunc(Function *F) {
   return false;
 }
 
-bool isCangjieNewFinalizerFunc(Function *F) {
-  return F->getName().startswith("CJ_MCC_NewFinalizer");
-}
-
-// Get the finalizer method (~init) for a class described by the given TypeInfo
-// global variable.
-Function *getFinalizerMethod(GlobalVariable *Klass, Module *M) {
-  if (Klass == nullptr || !Klass->hasInitializer())
-    return nullptr;
-
-  TypeInfo TI(Klass);
-
-  if (!TI.isGenericType()) {
-    Value *Ptr = TI.get(CIT_GENERIC_FROM)->stripPointerCasts();
-    if (auto *F = dyn_cast<Function>(Ptr))
-      return F;
-  }
-
-  LLVM_DEBUG(dbgs() << "Cannot extract finalizer method from TypeInfo.\n");
-  return nullptr;
-}
-
-// True if some path from CreateBB reaches a function exit that is not a
-// normal return (unreachable / resume). Invoke itself is not an exit: both
-// the normal and unwind successors are followed. A catch-all pad emitted by
-// runFinalizerUnwindProtection ends in unreachable after rethrow, so a later
-// candidate whose allocation can reach that pad is rejected. That is
-// conservative: remaining finalizers in the same function then stay on the
-// heap in EscapeAnalysisImpl (and in any later cj-pea run on the SCC).
-// CatchSwitchInst / CatchReturnInst / CleanupReturnInst are not checked:
-// Cangjie EH is invoke + landingpad (Itanium-style personality), not Windows
-// funclet EH, so those terminators do not appear in cj-pea IR.
-static bool hasNonReturnExitPath(BasicBlock *CreateBB) {
-  SmallDenseSet<BasicBlock *> VisitedBB;
-  SmallVector<BasicBlock *> Stack;
-  Stack.push_back(CreateBB);
-  while (!Stack.empty()) {
-    BasicBlock *BB = Stack.pop_back_val();
-    if (!VisitedBB.insert(BB).second)
-      continue;
-    Instruction *T = BB->getTerminator();
-    if (isa<UnreachableInst>(T) || isa<ResumeInst>(T))
-      return true;
-    for (BasicBlock *Succ : successors(BB))
-      if (VisitedBB.count(Succ) == 0)
-        Stack.push_back(Succ);
-  }
-  return false;
-}
-
-// True if Alloc has constructed the object on every path to I and no
-// destructor point in DestroyPoints dominates I. DestroyPoints are either
-// the planned insert points (gate) or the inserted ~init calls (rewrite).
-// DestroyRange is a range of Instruction* (insert points) or CallInst*
-// (emitted dtors); both convert to Instruction* in the loop.
-template <typename DestroyRange>
-static bool finalizerLiveAt(const Instruction *Alloc, Instruction *I,
-                            const DestroyRange &DestroyPoints,
-                            DominatorTree &DT) {
-  bool Constructed;
-  if (auto *II = dyn_cast<InvokeInst>(Alloc))
-    Constructed = DT.dominates(II->getNormalDest(), I->getParent());
-  else
-    Constructed = DT.dominates(Alloc, I);
-  if (!Constructed)
-    return false;
-  for (Instruction *P : DestroyPoints)
-    // dominates() is not reflexive for two instructions in one block.
-    if (P == I || DT.dominates(P, I))
-      return false;
-  return true;
-}
-
-// Classify a user of a NewFinalizer-derived value.
-// Follow: pointer derived from the object (keep walking).
-// Stop: a real use that must happen before ~init, but does not create a new
-//       alias of the object pointer.
-// Reject: PHI / memory / GC-field / publishing the pointer — PEA's escape
-//         result cannot prove the destructor point.
-enum class FinalizerUseKind { Follow, Stop, Reject };
-
-// Loads and stores around the object. Memory ops never extend the SSA
-// alias chain, so this returns only Stop or Reject: a load result is
-// either a GC-typed alias of whatever is in memory (reject) or plain
-// non-GC data (stop), and a store through an object-derived pointer
-// writes a field (stop). The store's VALUE is the dangerous direction:
-// if it aliases the object — SSA-derived from it, or one of the followed
-// aliases passed as Cur (e.g. a return-argument call result, where
-// findMemoryBasePointer stops at the call) — storing it anywhere, even
-// into the object's own non-GC field, plants the alias where a later
-// non-GC load reads it back off the SSA chain, and its uses are not
-// constrained to precede ~init. That publishes an alias like
-// cj_gcwrite_ref's arg0 (untrackedAliasArgs), so reject it the same way.
-// The same invariant (object aliases never enter memory) is what makes
-// aggregate loads containing GC pointers safe to stop at: any such alias
-// store is rejected, so none exists to be loaded.
-static FinalizerUseKind classifyFinalizerMemUse(Instruction *I, Value *Cur,
-                                                Value *NewFinalizer) {
-  if (auto *SI = dyn_cast<StoreInst>(I)) {
-    if (SI->getValueOperand() == Cur ||
-        findMemoryBasePointer(SI->getValueOperand()) == NewFinalizer)
-      return FinalizerUseKind::Reject;
-    return findMemoryBasePointer(SI->getPointerOperand()) == NewFinalizer
-               ? FinalizerUseKind::Stop
-               : FinalizerUseKind::Reject;
-  }
-  auto *Load = dyn_cast<LoadInst>(I);
-  if (!Load)
-    return FinalizerUseKind::Reject;
-  return isGCPointerType(Load->getType()) ? FinalizerUseKind::Reject
-                                          : FinalizerUseKind::Stop;
-}
-
-// Operand indices through which a GC intrinsic may hand this walk an
-// untracked alias of the object: reads (the result may alias the object
-// through a self-referential field), writes that store a GC reference
-// into memory, and copies whose destination is untracked memory. The
-// object on a destination side instead is a plain write (stop). Positions
-// follow the intrinsic definitions in Intrinsics.td; note EA groups
-// cj_copy_struct_field under handleGCWriteAgg (op0/op1), do not "align"
-// these indices with it.
-static ArrayRef<unsigned> untrackedAliasArgs(Intrinsic::ID Id) {
-  // Backing arrays must be static: ArrayRef only views them.
-  static constexpr unsigned Arg0[] = {0};
-  static constexpr unsigned Arg1[] = {1};
-  static constexpr unsigned Arg2[] = {2};
-  static constexpr unsigned Args12[] = {1, 2};
-  static constexpr unsigned Args23[] = {2, 3};
-  switch (Id) {
-  case Intrinsic::cj_gcwrite_ref:
-    // arg0 = stored value (arg2 = field address)
-  case Intrinsic::cj_gcread_static_ref:
-    // arg0 = address read
-  case Intrinsic::cj_gcwrite_static_ref:
-    // arg0 = value published to a static. Escape analysis already rejects
-    // this flow; stay defensive in case the gate order changes.
-    return Arg0;
-  case Intrinsic::cj_gcread_ref:
-  case Intrinsic::cj_gcread_weakref:
-    // arg1 = field address
-  case Intrinsic::cj_gcwrite_static_struct:
-  case Intrinsic::cj_gcread_static_struct:
-  case Intrinsic::cj_assign_generic:
-    // arg1 = source
-  case Intrinsic::memcpy:
-  case Intrinsic::memcpy_inline:
-  case Intrinsic::memmove:
-    // The plain-IR form of the same content-copy hazard: arg1 = source.
-    return Arg1;
-  case Intrinsic::cj_gcwrite_struct:
-    return Arg2; // arg2 = source
-  case Intrinsic::cj_gcread_struct:
-    return Args12; // arg1/arg2 = source side
-  case Intrinsic::cj_array_copy_ref:
-  case Intrinsic::cj_array_copy_struct:
-  case Intrinsic::cj_copy_struct_field:
-    // 5-arg copies (DstObj/DstPtr/SrcObj/SrcPtr/Size): arg2/arg3 = source.
-    return Args23;
-  default:
-    return {};
-  }
-}
-
-// Call-like uses. cj_gc_result re-materializes the same object pointer
-// (follow it). GC intrinsics that read the object or copy its contents out
-// produce an alias this walk cannot track: the read result / copy target
-// may alias the object through a self-referential field, and its uses are
-// not constrained to precede ~init. They are rejected like the GC-pointer
-// load in classifyFinalizerMemUse (at cj-pea time field accesses are still
-// these intrinsics, so the load rule alone does not fire). An intrinsic
-// whose untracked-alias operands do not involve the object is a plain
-// use. Ordinary (non-intrinsic) calls need more than EA's no-capture
-// verdict — see the memory-effect gate in the body.
-static FinalizerUseKind classifyFinalizerCallUse(CallBase *CB, Value *Cur,
-                                                 Value *NewFinalizer) {
-  const Function *Callee = CB->getCalledFunction();
-  const Intrinsic::ID Id =
-      Callee ? Callee->getIntrinsicID() : Intrinsic::not_intrinsic;
-  if (Id == Intrinsic::cj_gc_result && CB->arg_size() == 1 &&
-      CB->getArgOperand(0) == Cur)
-    return FinalizerUseKind::Follow;
-  for (unsigned Idx : untrackedAliasArgs(Id)) {
-    if (Idx < CB->arg_size() &&
-        (CB->getArgOperand(Idx) == Cur ||
-         findMemoryBasePointer(CB->getArgOperand(Idx)) == NewFinalizer))
-      return FinalizerUseKind::Reject;
-  }
-  // The object appears on no untracked-alias operand. Modeled GC
-  // intrinsics reach here with the object on a safe side, and memset
-  // writes non-pointer data: neither plants an alias into memory. Any
-  // OTHER intrinsic is not trusted by default — an unmodeled one falls
-  // to an empty untrackedAliasArgs entry, so without this check a newly
-  // added intrinsic would silently be assumed alias-safe; it must be
-  // audited into untrackedAliasArgs instead.
-  if (Id != Intrinsic::not_intrinsic) {
-    if (Id != Intrinsic::memset && untrackedAliasArgs(Id).empty())
-      return FinalizerUseKind::Reject;
-    return CB->getType()->isPointerTy() ? FinalizerUseKind::Follow
-                                        : FinalizerUseKind::Stop;
-  }
-  // An ordinary or indirect call taking the object. EA's no-capture
-  // verdict is blind to stores of non-GC values (visitStoreInst returns
-  // early), so even a nocapture callee can plant an argument-derived
-  // alias into the object's own non-GC field, where a later non-GC load
-  // reads it back off the SSA chain. Trust only a memory-effect proof
-  // that the call cannot write at all (function attrs are inferred
-  // before cj-pea in the cangjie pipeline). A pointer result of such a
-  // call may still alias the object (a return-this / return-argument
-  // callee), so it is followed like a derived pointer: a PHI or store on
-  // it then hits the rejects in classifyFinalizerUse /
-  // classifyFinalizerMemUse. A non-pointer result cannot alias the
-  // object and is a plain use.
-  if (!CB->doesNotAccessMemory() && !CB->onlyReadsMemory())
-    return FinalizerUseKind::Reject;
-  return CB->getType()->isPointerTy() ? FinalizerUseKind::Follow
-                                      : FinalizerUseKind::Stop;
-}
-
-static FinalizerUseKind classifyFinalizerUse(Instruction *I, Value *Cur,
-                                             Instruction *NewFinalizer) {
-  // Publishing the pointer via PHI / select / aggregate ops / return, or
-  // reading the GC pointer back, creates an alias whose destructor point
-  // PEA's escape result cannot prove.
-  if (isa<PHINode>(I) || isa<SelectInst>(I) || isa<ReturnInst>(I) ||
-      isa<InsertValueInst>(I) || isa<ExtractValueInst>(I))
-    return FinalizerUseKind::Reject;
-  // A pointer derived from the object: keep walking.
-  if (isa<BitCastInst>(I) || isa<AddrSpaceCastInst>(I) ||
-      isa<GetElementPtrInst>(I))
-    return FinalizerUseKind::Follow;
-  if (isa<StoreInst>(I) || isa<LoadInst>(I))
-    return classifyFinalizerMemUse(I, Cur, NewFinalizer);
-  if (auto *CB = dyn_cast<CallBase>(I))
-    return classifyFinalizerCallUse(CB, Cur, NewFinalizer);
-  return FinalizerUseKind::Reject;
-}
-
-// Insert ~init at the unique latch terminator if:
-// - the allocation is in this loop (any block, not only the latch);
-// - every modeled use is in the loop and happens before that terminator;
-// - the terminator post-dominates the allocation and every use, so no path
-//   (including unwind/unreachable) can skip destruction.
-// PHI, GC-field loads, and stores of the object pointer elsewhere stay
-// rejected: those were miscompiled when the first PEA-finalizer patch
-// inserted at the allocation-block terminator.
-static bool
-collectLoopFinalizerInsertPoint(Instruction *NewFinalizer, BasicBlock *CreateBB,
-                                LoopInfo &LI, DominatorTree &DT,
-                                SmallVectorImpl<Instruction *> &Points) {
-  Loop *L = LI.getLoopFor(CreateBB);
-  if (!L)
-    return false;
-
-  BasicBlock *Latch = L->getLoopLatch();
-  if (!Latch)
-    return false;
-  SmallVector<BasicBlock *, 4> ExitingBlocks;
-  L->getExitingBlocks(ExitingBlocks);
-  if (ExitingBlocks.size() != 1)
-    return false;
-
-  // Return has no CFG successor, so it is not reported by getExitingBlocks().
-  // It would bypass the latch insertion point and skip destruction.
-  for (BasicBlock *BB : L->blocks())
-    if (isa<ReturnInst>(BB->getTerminator()))
-      return false;
-
-  Instruction *InsertPoint = Latch->getTerminator();
-  if (!DT.dominates(NewFinalizer, InsertPoint))
-    return false;
-
-  PostDominatorTree PDT(*CreateBB->getParent());
-  if (!PDT.dominates(InsertPoint, NewFinalizer))
-    return false;
-
-  SmallVector<Value *, 16> Worklist;
-  SmallPtrSet<Value *, 16> VisitedValues;
-  SmallVector<Instruction *> UseInsts;
-  Worklist.push_back(NewFinalizer);
-  while (!Worklist.empty()) {
-    Value *V = Worklist.pop_back_val();
-    if (!VisitedValues.insert(V).second)
-      continue;
-    for (User *U : V->users()) {
-      Instruction *I = dyn_cast<Instruction>(U);
-      if (!I || !L->contains(I->getParent()))
-        return false;
-      // Debug and lifetime intrinsics are pseudo uses with no runtime
-      // semantics; they must not block a proven destructor point.
-      if (isa<DbgInfoIntrinsic>(I) || I->isLifetimeStartOrEnd())
-        continue;
-      const FinalizerUseKind Kind = classifyFinalizerUse(I, V, NewFinalizer);
-      if (Kind == FinalizerUseKind::Reject)
-        return false;
-      // Stop and Follow are both real uses that must happen before ~init;
-      // only Follow keeps deriving new pointers from the object.
-      UseInsts.push_back(I);
-      if (Kind == FinalizerUseKind::Follow)
-        Worklist.push_back(I);
-    }
-  }
-
-  for (Instruction *U : UseInsts) {
-    // The latch terminator itself may be a use (an invoke on the object):
-    // inserting ~init before it would destroy the object before that use.
-    if (U == InsertPoint)
-      return false;
-    if (!PDT.dominates(InsertPoint, U))
-      return false;
-  }
-
-  Points.push_back(InsertPoint);
-  return true;
-}
-
-static void collectFinalizerInsertPointsImpl(
-    Instruction *NewFinalizer, BasicBlock *CreateBB, LoopInfo *LI,
-    DominatorTree *DT, SmallVectorImpl<Instruction *> &Points) {
-  Instruction *Term = CreateBB->getTerminator();
-  if (isa<ReturnInst>(Term)) {
-    // musttail is glued to ret, so ~init cannot be inserted there. Leave
-    // Points empty (Cangjie codegen does not emit musttail).
-    if (DT != nullptr && DT->dominates(NewFinalizer, Term) &&
-        Term->getParent()->getTerminatingMustTailCall() == nullptr)
-      Points.push_back(Term);
-    return;
-  }
-
-  if (LI && LI->getLoopFor(CreateBB)) {
-    if (DT != nullptr)
-      collectLoopFinalizerInsertPoint(NewFinalizer, CreateBB, *LI, *DT, Points);
-    return;
-  }
-
-  SmallSet<BasicBlock *, 16> VisitedBB;
-  SmallVector<BasicBlock *, 8> Stack;
-  Stack.push_back(CreateBB);
-  // A return that cannot receive ~init (not dominated, or terminating
-  // musttail) makes the set incomplete; drop every point.
-  bool HasUnusableExit = false;
-  while (!Stack.empty()) {
-    BasicBlock *BB = Stack.pop_back_val();
-    if (!VisitedBB.insert(BB).second)
-      continue;
-    Instruction *T = BB->getTerminator();
-    if (isa<ReturnInst>(T)) {
-      if (DT == nullptr || !DT->dominates(NewFinalizer, T) ||
-          T->getParent()->getTerminatingMustTailCall()) {
-        HasUnusableExit = true;
-      } else {
-        Points.push_back(T);
-      }
-      continue;
-    }
-    for (BasicBlock *Succ : successors(BB))
-      if (VisitedBB.count(Succ) == 0)
-        Stack.push_back(Succ);
-  }
-  if (HasUnusableExit)
-    Points.clear();
-}
-
-// Check whether at least one valid insertion point exists for the explicit
-// ~init call of a stack-allocated finalizer.
-static bool hasFinalizerInsertPoints(Instruction *NewFinalizer,
-                                     BasicBlock *CreateBB, LoopInfo *LI,
-                                     DominatorTree *DT) {
-  SmallVector<Instruction *, 4> Points;
-  collectFinalizerInsertPointsImpl(NewFinalizer, CreateBB, LI, DT, Points);
-  return !Points.empty();
-}
-
-static bool canStackAllocateFinalizer(CallBase *CB, Module *M, LoopInfo *LI) {
-  if (!CJEASupportFinalizer)
-    return false;
-  // landingpad (and therefore invoke unwind) requires a personality fn.
-  // Cangjie functions with bodies always have one: BuildCJFunc sets
-  // __cj_personality_v0$. Reject CFFI wrappers / declarations here rather
-  // than scanning live may-throw calls that cannot be converted.
-  if (!CB->getFunction()->hasPersonalityFn())
-    return false;
-  GlobalVariable *Klass = getNewKlass(CB);
-  if (Klass == nullptr)
-    return false;
-  Function *FinalizerMethod = getFinalizerMethod(Klass, M);
-  if (FinalizerMethod == nullptr)
-    return false;
-  // Reject a finalizer whose ~init may throw. An uncaught exception
-  // escaping a finalizer is implementation-defined ("class 终结器" spec);
-  // running ~init synchronously at the insert point would change the
-  // observable behavior of such programs (HLT class_finalizer_spec_20024),
-  // so keep may-throw finalizers on the GC heap.
-  if (!FinalizerMethod->doesNotThrow())
-    return false;
-  // A may-throw plain call between the allocation and ~init unwinds on an
-  // edge the CFG does not model (issue #204);
-  // runFinalizerUnwindProtection converts those calls to invokes.
-  BasicBlock *BB = CB->getParent();
-  DominatorTree DT(*BB->getParent());
-  // Loop-local objects: the latch post-dominator check already rejects paths
-  // that skip ~init. A function-wide walk would also see post-loop unwind
-  // exits and wrongly refuse the inner-loop allocation.
-  const bool InLoop = LI && LI->getLoopFor(BB);
-  if (!InLoop && hasNonReturnExitPath(BB))
-    return false;
-  if (!hasFinalizerInsertPoints(CB, BB, LI, &DT))
-    return false;
-  return true;
+static bool isFinalizableAllocation(CallBase *CB, GlobalVariable *Klass) {
+  if (CB->getCalledFunction()->getName().startswith("CJ_MCC_NewFinalizer"))
+    return true;
+  if (Klass->hasAttribute("HasFinalizer"))
+    return true;
+  return Klass->hasInitializer() &&
+         (TypeInfo(Klass).getTypeFlag() & TF_HAS_FINALIZER);
 }
 
 class NonEscapeRewriter : public InstVisitor<NonEscapeRewriter> {
   friend class InstVisitor<NonEscapeRewriter>;
 
 public:
-  explicit NonEscapeRewriter(CallGraphUpdater *CGUpdater, Module *M,
-                             LoopInfo *LI = nullptr)
-      : CGUpdater(CGUpdater), M(M), LI(LI) {
+  explicit NonEscapeRewriter(CallGraphUpdater *CGUpdater, Module *M)
+      : CGUpdater(CGUpdater), M(M) {
     CJMemset = Intrinsic::getDeclaration(
         M, Intrinsic::cj_memset,
         {IntegerType::getInt8PtrTy(M->getContext(), 0)});
   }
 
-  void setLoopInfo(LoopInfo *LoopInfo) { LI = LoopInfo; }
-
-  bool prepareFinalizer(SmallVectorImpl<Instruction *> &InsertPoints) {
-    CallBase *CB = dyn_cast<CallBase>(OldInst);
-    if (!CB || !CB->getCalledFunction() ||
-        !isCangjieNewFinalizerFunc(CB->getCalledFunction()))
-      return true;
-    if (!CJEASupportFinalizer)
-      return false;
-    if (!CB->getFunction()->hasPersonalityFn())
-      return false;
-    IsFinalizer = true;
-    FinalizerKlass = getNewKlass(CB);
-    FinalizerMethod = getFinalizerMethod(FinalizerKlass, M);
-    FinalizerInsertBB = CB->getParent();
-    if (FinalizerMethod == nullptr)
-      return false;
-    // Same nounwind gate as canStackAllocateFinalizer: the analysis gate and
-    // this rewrite gate must reach the same verdict.
-    if (!FinalizerMethod->doesNotThrow())
-      return false;
-    // Same loop exemption as canStackAllocateFinalizer: the analysis gate
-    // and this rewrite gate must reach the same verdict (see the escape
-    // pre-flight comment in EADepthImpl).
-    const bool InLoop = LI && LI->getLoopFor(FinalizerInsertBB);
-    if (!InLoop && hasNonReturnExitPath(FinalizerInsertBB))
-      return false;
-    collectFinalizerInsertPoints(InsertPoints);
-    if (InsertPoints.empty())
-      return false;
-    return true;
-  }
-
   bool rewrite(Instruction *Old, BasicBlock *NewInstInsertBB) {
     OldInst = Old;
     Visited.clear();
-    IsFinalizer = false;
-    FinalizerMethod = nullptr;
-    FinalizerInsertBB = nullptr;
-    FinalizerKlass = nullptr;
-    SmallVector<Instruction *, 4> InsertPoints;
-    if (!prepareFinalizer(InsertPoints)) {
-      return false;
-    }
     if (!createNewAllocaInst(NewInstInsertBB)) {
       return false;
     }
     rewriteNewInst();
-    if (IsFinalizer && FinalizerInsertBB != nullptr) {
-      insertFinalizerCall(InsertPoints);
-    }
     return true;
-  }
-
-  void collectFinalizerInsertPoints(SmallVectorImpl<Instruction *> &Points) {
-    DominatorTree DT(*FinalizerInsertBB->getParent());
-    collectFinalizerInsertPointsImpl(OldInst, FinalizerInsertBB, LI, &DT,
-                                     Points);
-  }
-
-  // A finalizer object stack-promoted in this run, awaiting function-level
-  // unwind protection (runFinalizerUnwindProtection).
-  struct PromotedFinalizer {
-    AllocaInst *Alloca;
-    GlobalVariable *Klass;
-    Function *Method;
-    CallBase *AllocCall;
-    // Used only while collectFinalizerHazardSites runs. A listed CallInst may
-    // itself be converted to invoke (changeToInvokeAndSplitBasicBlock deletes
-    // it); do not dereference DtorCalls after convertFinalizerHazards.
-    SmallVector<CallInst *> DtorCalls;
-  };
-
-  CallInst *emitFinalizerCall(IRBuilder<> &Builder, Instruction *Alloca,
-                              GlobalVariable *FinalizerKlass,
-                              Function *FinalizerMethod) {
-    Type *PI8AS1Ty = Type::getInt8PtrTy(M->getContext(), 1);
-    Value *ObjPtr = Builder.CreateAddrSpaceCast(Alloca, PI8AS1Ty);
-    SmallVector<Value *> Args;
-    Args.push_back(ObjPtr);
-    // ~init is either (this) or (this, TypeInfo*). Pass this class's TypeInfo
-    // when the lowered function expects it.
-    if (FinalizerMethod->getFunctionType()->getNumParams() > 1) {
-      Value *OuterTI = Builder.CreateBitCast(
-          FinalizerKlass, FinalizerMethod->getFunctionType()->getParamType(1));
-      Args.push_back(OuterTI);
-    }
-    return Builder.CreateCall(FinalizerMethod, Args);
-  }
-
-  void insertFinalizerCall(SmallVectorImpl<Instruction *> &InsertPoints) {
-    PromotedFinalizer PF;
-    PF.Alloca = NewInst;
-    PF.Klass = FinalizerKlass;
-    PF.Method = FinalizerMethod;
-    PF.AllocCall = cast<CallBase>(OldInst);
-    for (Instruction *InsertPoint : InsertPoints) {
-      // Several objects may share one insert point: destruct in reverse
-      // rewrite order of this rewriter (not program allocation order),
-      // matching the unwind pads.
-      CallInst *&FirstDtor = FirstDtorCallAtPoint[InsertPoint];
-      IRBuilder<> Builder(FirstDtor != nullptr ? FirstDtor : InsertPoint);
-      Builder.SetCurrentDebugLocation(InsertPoint->getDebugLoc());
-      CallInst *Dtor =
-          emitFinalizerCall(Builder, NewInst, FinalizerKlass, FinalizerMethod);
-      PF.DtorCalls.push_back(Dtor);
-      FirstDtor = Dtor;
-    }
-    PromotedFinalizers.push_back(std::move(PF));
-    if (CGUpdater && !InsertPoints.empty())
-      CGUpdater->reanalyzeFunction(*FinalizerInsertBB->getParent());
-  }
-
-  using HazardSite = std::pair<CallInst *, SmallVector<PromotedFinalizer *>>;
-
-  void collectFinalizerHazardSites(
-      Function *F, const SmallVectorImpl<PromotedFinalizer *> &Promoted,
-      DominatorTree &DT, SmallVectorImpl<HazardSite> &Sites) {
-    SmallDenseSet<Instruction *> DeadAllocs;
-    for (PromotedFinalizer *PF : Promoted)
-      DeadAllocs.insert(PF->AllocCall);
-    for (BasicBlock &BB : *F) {
-      for (Instruction &I : BB) {
-        auto *CI = dyn_cast<CallInst>(&I);
-        if (CI == nullptr || !CI->mayThrow() || DeadAllocs.count(CI))
-          continue;
-        SmallVector<PromotedFinalizer *> Live;
-        for (PromotedFinalizer *PF : Promoted) {
-          if (finalizerLiveAt(PF->AllocCall, CI, PF->DtorCalls, DT))
-            Live.push_back(PF);
-        }
-        if (Live.empty())
-          continue;
-        Sites.push_back({CI, std::move(Live)});
-      }
-    }
-  }
-
-  static bool sameLiveSet(const SmallVectorImpl<PromotedFinalizer *> &A,
-                          const SmallVectorImpl<PromotedFinalizer *> &B) {
-    return A.size() == B.size() && std::equal(A.begin(), A.end(), B.begin());
-  }
-
-  BasicBlock *
-  createFinalizerUnwindPad(Function *F,
-                           const SmallVectorImpl<PromotedFinalizer *> &Live,
-                           DebugLoc DL, Function *GetWrapper,
-                           Function *PostThrow, Function *ThrowEx) {
-    LLVMContext &Ctx = M->getContext();
-    BasicBlock *Pad = BasicBlock::Create(Ctx, "cj.finalizer.unwind", F);
-    IRBuilder<> Builder(Pad);
-    // 1 = catch-all clause.
-    LandingPadInst *LP =
-        Builder.CreateLandingPad(Type::getTokenTy(Ctx), 1, "finalizer.lp");
-    LP->addClause(
-        ConstantPointerNull::get(cast<PointerType>(Type::getInt8PtrTy(Ctx))));
-    Builder.SetCurrentDebugLocation(DL);
-    Value *Wrapper = Builder.CreateCall(GetWrapper);
-    Value *Ex = Builder.CreateCall(PostThrow, {Wrapper});
-    for (PromotedFinalizer *PF : reverse(Live))
-      emitFinalizerCall(Builder, PF->Alloca, PF->Klass, PF->Method);
-    Builder.CreateCall(ThrowEx, {Ex});
-    Builder.CreateUnreachable();
-    return Pad;
-  }
-
-  void convertFinalizerHazards(Function *F,
-                               SmallVectorImpl<HazardSite> &Sites) {
-    LLVMContext &Ctx = M->getContext();
-    Type *PI8Ty = Type::getInt8PtrTy(Ctx);
-    Type *PI8AS1Ty = Type::getInt8PtrTy(Ctx, 1);
-    Function *GetWrapper = M->declareCJRuntimeFunc(
-        "CJ_MCC_GetExceptionWrapper", FunctionType::get(PI8Ty, {}), true);
-    GetWrapper->addFnAttr(Attribute::NoUnwind);
-    Function *PostThrow = M->declareCJRuntimeFunc(
-        "CJ_MCC_PostThrowException",
-        FunctionType::get(PI8AS1Ty, {PI8Ty}, false), true);
-    PostThrow->addFnAttr(Attribute::NoUnwind);
-    Function *ThrowEx = M->declareCJRuntimeFunc(
-        "CJ_MCC_ThrowException",
-        FunctionType::get(Type::getVoidTy(Ctx), {PI8AS1Ty}, false), true);
-    ThrowEx->setDoesNotReturn();
-
-    SmallVector<std::pair<BasicBlock *, SmallVector<PromotedFinalizer *>>> Pads;
-    auto FindPad = [&](const SmallVectorImpl<PromotedFinalizer *> &Live) {
-      for (auto &Existing : Pads)
-        if (sameLiveSet(Existing.second, Live))
-          return Existing.first;
-      return static_cast<BasicBlock *>(nullptr);
-    };
-    for (auto &Site : Sites) {
-      BasicBlock *Pad = FindPad(Site.second);
-      if (Pad == nullptr) {
-        Pad =
-            createFinalizerUnwindPad(F, Site.second, Site.first->getDebugLoc(),
-                                     GetWrapper, PostThrow, ThrowEx);
-        Pads.push_back({Pad, Site.second});
-      }
-      CallInst *CI = Site.first;
-      CI->setTailCallKind(CallInst::TCK_None);
-      // Deletes CI (may be a ~init listed in PromotedFinalizer::DtorCalls).
-      changeToInvokeAndSplitBasicBlock(CI, Pad);
-    }
-  }
-
-  // Convert every may-throw plain call that can execute while a promoted
-  // finalizer is live into an invoke unwinding to a catch-all pad that runs
-  // pending ~init calls and rethrows (issue #204).
-  bool runFinalizerUnwindProtection() {
-    if (PromotedFinalizers.empty())
-      return false;
-    MapVector<Function *, SmallVector<PromotedFinalizer *>> ByFunc;
-    for (PromotedFinalizer &PF : PromotedFinalizers)
-      ByFunc[PF.AllocCall->getFunction()].push_back(&PF);
-
-    bool Changed = false;
-    for (auto &Entry : ByFunc) {
-      Function *F = Entry.first;
-      DominatorTree DT(*F);
-      SmallVector<HazardSite> Sites;
-      collectFinalizerHazardSites(F, Entry.second, DT, Sites);
-      if (Sites.empty())
-        continue;
-      convertFinalizerHazards(F, Sites);
-      Changed = true;
-      if (CGUpdater)
-        CGUpdater->reanalyzeFunction(*F);
-    }
-    for (Instruction *I : DeferredFinalizerAllocs) {
-      if (auto *II = dyn_cast<InvokeInst>(I)) {
-        IRBuilder<> BrIRB(II);
-        BrIRB.CreateBr(II->getNormalDest());
-        II->getUnwindDest()->removePredecessor(II->getParent());
-      }
-      I->eraseFromParent();
-    }
-    DeferredFinalizerAllocs.clear();
-    return Changed;
   }
 
   bool handleStructAS1Cast(AllocaInst *Old) {
@@ -1115,12 +479,6 @@ private:
     Type *PI8AS1Ty = Type::getInt8PtrTy(I->getContext(), 1);
     Value *BI = IRB.CreateAddrSpaceCast(NewInst, PI8AS1Ty);
     OldInst->replaceAllUsesWith(BI);
-    if (IsFinalizer) {
-      // Keep the dead allocation as the dominance anchor for the
-      // unwind-protection live-set scan; erase after that scan.
-      DeferredFinalizerAllocs.push_back(OldInst);
-      return;
-    }
     if (auto II = dyn_cast<InvokeInst>(OldInst)) {
       IRBuilder<> BrIRB(OldInst);
       BrIRB.CreateBr(II->getNormalDest());
@@ -1166,15 +524,7 @@ private:
   Function *CJMemset;
   SmallVector<Instruction *, 8> Queue;
   SmallSetVector<User *, 8> Visited;
-  bool IsFinalizer = false;
-  Function *FinalizerMethod = nullptr;
-  BasicBlock *FinalizerInsertBB = nullptr;
-  GlobalVariable *FinalizerKlass = nullptr;
-  SmallVector<PromotedFinalizer> PromotedFinalizers;
-  SmallVector<Instruction *> DeferredFinalizerAllocs;
-  DenseMap<Instruction *, CallInst *> FirstDtorCallAtPoint;
   bool StructAS1Replace = false;
-  LoopInfo *LI = nullptr;
   static DenseMap<PHINode *, SmallSetVector<Instruction *, 8>> RewritePhiIncoming;
   DenseMap<SelectInst *, SmallSetVector<Instruction *, 8>> RewriteSIIncoming;
   DenseMap<CallInst *, SmallSetVector<Instruction *, 8>> RewriteArrayCopy;
@@ -1413,7 +763,7 @@ public:
       : ObjectLocation(NewLoc, V, F, LoopDepth) {
     CallBase *I = dyn_cast<CallBase>(V);
     GlobalVariable *Klass = getNewKlass(I);
-    if (Klass == nullptr) {
+    if (Klass == nullptr || isFinalizableAllocation(I, Klass)) {
       Escaped = true;
       return;
     }
@@ -1588,22 +938,6 @@ public:
           }
           ObjectLocation *Loc =
               new NewLocation(ObjectVal, Func, LoopDepth, PreHeader);
-          // For NewFinalizer, pre-flight the rewrite conditions during the
-          // first (EADepthImpl) analysis phase.  If the object cannot be
-          // stack-allocated , mark it escaped now so that walkEdges propagates
-          // the escape to every object referenced by this finalizer (e.g.
-          // closures captured by the finalizer's free lambda). This must happen
-          // here, before walkEdges runs, because the second phase
-          // (EscapeAnalysisImpl) runs after ObjectLocation graph is destroyed.
-          if (!Loc->Escaped) {
-            if (auto *CB = dyn_cast<CallBase>(ObjectVal)) {
-              Function *Callee = CB->getCalledFunction();
-              if (Callee && isCangjieNewFinalizerFunc(Callee) &&
-                  !canStackAllocateFinalizer(CB, M, &LI)) {
-                Loc->Escaped = true;
-              }
-            }
-          }
           AllLocations.push_back(Loc);
           ValueToLocMap[ObjectVal] = Loc;
           enqueueUsers(ObjectVal);
@@ -1697,8 +1031,6 @@ public:
       // New Obj in loop can't handle now.
       if (!AllLocations[i]->isEscaped()) {
         NewLocation *New = dyn_cast<NewLocation>(AllLocations[i]);
-        Function *F = dyn_cast<Instruction>(New->Val)->getParent()->getParent();
-        Rewriter.setLoopInfo(&LookupLoopInfo(*F));
         Changed |= Rewriter.rewrite(dyn_cast<Instruction>(New->Val),
                                     New->NewInstInsertBB);
       }
@@ -1708,7 +1040,6 @@ public:
     for (unsigned i = 0; i < StructCastToAS1.size(); i++) {
       Changed |= Rewriter.handleStructAS1Cast(StructCastToAS1[i]);
     }
-    Changed |= Rewriter.runFinalizerUnwindProtection();
 
     for (unsigned i = 0; i < AllLocations.size(); i++) {
       delete AllLocations[i];
@@ -3556,15 +2887,12 @@ public:
       if (!OnceEscapedValue.count(Partial.first)) {
         LLVM_DEBUG(dbgs() << "not escaped obj:");
         LLVM_DEBUG(dbgs() << "  " << *Partial.first << "\n");
-        Function *F = Partial.first->getParent()->getParent();
-        Rewriter.setLoopInfo(&LookupLoopInfo(*F));
         Changed |= Rewriter.rewrite(Partial.first, Partial.second);
       } else {
         LLVM_DEBUG(dbgs() << "partial escaped obj:");
         LLVM_DEBUG(dbgs() << "  " << *Partial.first << "\n");
       }
     }
-    Changed |= Rewriter.runFinalizerUnwindProtection();
 
     cleanupAnalysisState();
     return Changed;
@@ -4114,21 +3442,14 @@ public:
     handleMemcpyOrWriteAgg(&I, P, V, CSI);
   }
 
-  bool tryStackAllocateNewFinalizer(CallBase *CB) {
+  bool tryStackAllocate(CallBase *CB) {
     Function *Callee = CB->getCalledFunction();
     if (!Callee || !isRewriteableCangjieMallocFunc(Callee))
       return false;
     GlobalVariable *Klass = getNewKlass(CB);
-    if (Klass == nullptr) {
+    if (Klass == nullptr || isFinalizableAllocation(CB, Klass)) {
       setEscaped(GCPtr::create(CB, *this, LI), CB->getParent());
       return true;
-    }
-    if (isCangjieNewFinalizerFunc(Callee)) {
-      LoopInfo *CurLI = &LookupLoopInfo(*CB->getParent()->getParent());
-      if (!canStackAllocateFinalizer(CB, M, CurLI)) {
-        setEscaped(GCPtr::create(CB, *this, LI), CB->getParent());
-        return true;
-      }
     }
     bool HasRefs = false;
     uint32_t AllocaSize = 0;
@@ -4145,7 +3466,7 @@ public:
   }
 
   void visitInvokeInst(InvokeInst &II) {
-    if (tryStackAllocateNewFinalizer(&II)) {
+    if (tryStackAllocate(&II)) {
       return;
     }
     handleCallArgs(II);
@@ -4156,7 +3477,7 @@ public:
       if (handleCangjieSL(&CI)) {
         return;
       }
-      if (tryStackAllocateNewFinalizer(&CI)) {
+      if (tryStackAllocate(&CI)) {
         return;
       }
     }
