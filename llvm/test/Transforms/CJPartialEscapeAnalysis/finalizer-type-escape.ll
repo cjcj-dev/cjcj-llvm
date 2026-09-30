@@ -13,8 +13,8 @@
 declare i8 addrspace(1)* @CJ_MCC_NewObject(i8*, i32)
 declare i32 @__cj_personality_v0(...)
 attributes #0 = { "HasFinalizer" }
-!0 = !{i64 8, %Payload* null}
-!1 = !{i64 8, %Holder* null}
+!0 = !{!"Payload"}
+!1 = !{!"Holder"}
 
 ; CHECK-LABEL: @final_call(
 ; CHECK: call {{.*}}@CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @final.ti
