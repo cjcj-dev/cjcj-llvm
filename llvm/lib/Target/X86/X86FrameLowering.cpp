@@ -107,6 +107,7 @@ bool X86FrameLowering::hasFP(const MachineFunction &MF) const {
           MF.getInfo<X86MachineFunctionInfo>()->hasPreallocatedCall() ||
           MF.callsUnwindInit() || MF.hasEHFunclets() || MF.callsEHReturn() ||
           MFI.hasStackMap() || MFI.hasPatchPoint() ||
+          (CJPipeline && MF.getFunction().hasCangjieGC()) ||
           (isWin64Prologue(MF) && MFI.hasCopyImplyingStackAdjustment()) ||
           CangjieJIT);
 }
