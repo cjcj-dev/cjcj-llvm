@@ -101,6 +101,10 @@ if len(sys.argv) > 2 and sys.argv[2] == "--export":
 # Every target verdict is printed and evaluated, even when another fails.
 # This distinguishes a rejected ordinary site from a lost return PC.
 checks = {
+    "ORDINARY_STRUCT_RETAINED": "ordinary_struct" in maps and len(maps["ordinary_struct"]["rows"]) == 1
+        and bool(maps["ordinary_struct"]["rows"][0][2]),
+    "ORDINARY_LINE_RETAINED": "ordinary_line" in maps and len(maps["ordinary_line"]["rows"]) == 1
+        and bool(maps["ordinary_line"]["rows"][0][3]),
     "ORDINARY_EMPTY_REJECTED": "ordinary_empty" in maps and not maps["ordinary_empty"]["rows"],
     "ORDINARY_ROOT_RETAINED": "ordinary_root" in maps and len(maps["ordinary_root"]["rows"]) == 1
         and any(maps["ordinary_root"]["rows"][0][1:3]),
