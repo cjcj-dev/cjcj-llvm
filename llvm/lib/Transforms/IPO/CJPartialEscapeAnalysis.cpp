@@ -165,8 +165,10 @@ static bool isFinalizableAllocation(CallBase *CB, GlobalVariable *Klass) {
     return true;
   if (Klass->hasAttribute("HasFinalizer"))
     return true;
-  return Klass->hasInitializer() &&
-         (TypeInfo(Klass).getTypeFlag() & TF_HAS_FINALIZER);
+  if (!Klass->hasInitializer())
+    return false;
+  Constant *Flags = Klass->getInitializer()->getAggregateElement(CIT_FLAG);
+  return cast<ConstantInt>(Flags)->getZExtValue() & TF_HAS_FINALIZER;
 }
 
 class NonEscapeRewriter : public InstVisitor<NonEscapeRewriter> {
