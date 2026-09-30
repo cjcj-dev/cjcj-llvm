@@ -26,6 +26,7 @@ def string(buf, offset):
 
 
 symbols = {}
+functions = set()
 for index, section in enumerate(sections):
     if section[1] != 2:
         continue
@@ -33,7 +34,10 @@ for index, section in enumerate(sections):
     for offset in range(0, section[5], section[9]):
         name, info, other, sec, value, size = struct.unpack_from(
             "<IBBHQQ", data(index), offset)
-        table.append((string(data(section[6]), name), sec, value, size))
+        symbol = (string(data(section[6]), name), sec, value, size)
+        table.append(symbol)
+        if info & 15 == 2:  # STT_FUNC, not sized data with a preceding relocation
+            functions.add(symbol)
     symbols[index] = table
 
 relocations = {}
@@ -80,7 +84,7 @@ maps = {}
 for table in symbols.values():
     for symbol in table:
         name, section, start, size = symbol
-        if size and (section, start - 4) in relocations:
+        if symbol in functions and size and (section, start - 4) in relocations:
             maps[name] = decode(symbol)
 returns = []
 for table in symbols.values():
@@ -88,7 +92,7 @@ for table in symbols.values():
         if not re.search(r"cj_return_pc[0-9]+$", label):
             continue
         owners = [s for t in symbols.values() for s in t
-                  if s[3] and s[1] == section and s[2] <= pc < s[2] + s[3]]
+                  if s in functions and s[3] and s[1] == section and s[2] <= pc < s[2] + s[3]]
         assert len(owners) == 1, (label, owners)
         owner = owners[0]
         returns.append([owner[0], pc - owner[2]])
