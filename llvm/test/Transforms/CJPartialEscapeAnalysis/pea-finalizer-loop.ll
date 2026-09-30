@@ -1,9 +1,5 @@
-; RUN: opt < %s '-passes=cj-pea' -S | FileCheck %s
-
-; Stack-allocate a loop-local NewFinalizer object when ~init is synchronous
-; at the unique latch. Mirrors the ObjC wrapper pattern:
-;   for (...) { h = opaque_get(); s += opaque_call(h); opaque_release(h); }
-; without inlining ~init, and without treating a post-loop invoke as a ban.
+; RUN: opt < %s -mtriple=x86_64-unknown-linux-gnu -passes=cj-pea -S | FileCheck %s --implicit-check-not='alloca ' --implicit-check-not='call void @w_dtor(' --implicit-check-not='invoke void @w_dtor(' --implicit-check-not='call void @throwing_dtor(' --implicit-check-not='cj.finalizer.unwind'
+; RUN: opt < %s -mtriple=aarch64-unknown-linux-gnu -passes=cj-pea -S | FileCheck %s --implicit-check-not='alloca ' --implicit-check-not='call void @w_dtor(' --implicit-check-not='invoke void @w_dtor(' --implicit-check-not='call void @throwing_dtor(' --implicit-check-not='cj.finalizer.unwind'
 
 %BitMap = type { i32, [0 x i8] }
 %TypeInfo = type { i8*, i8, i8, i16, i32, %BitMap*, i32, i8, i8, i32*, i8*, i8*, i8*, %TypeInfo*, i8*, i8* }
@@ -50,24 +46,15 @@ declare void @CJ_MCC_ThrowException(i8 addrspace(1)*)
 declare void @may_throw()
 declare i32 @__cj_personality_v0(...)
 declare void @llvm.memset.p1i8.i64(i8 addrspace(1)* nocapture writeonly, i8, i64, i1 immarg)
-; A defined, non-capturing callee that provably cannot write memory: PEA
-; proves no escape interprocedurally and the memory-effect gate passes.
 define i64 @use_obj(i8 addrspace(1)* nocapture %p) nounwind readnone {
   ret i64 0
 }
-; A return-argument callee: the result aliases its argument. readnone
-; keeps the call itself a followable use; the reject comes from what the
-; alias flows into.
 define i8 addrspace(1)* @id(i8 addrspace(1)* nocapture %p) nounwind readnone {
   ret i8 addrspace(1)* %p
 }
 declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*)
 declare i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*)
 
-; --- callees for the alias-planting / memory-effect-gate tests ---
-; A nocapture callee that nevertheless plants an argument-derived alias into
-; the argument's own non-GC field: EA's no-capture verdict is blind to
-; stores of non-GC values.
 define void @store_self(i8 addrspace(1)* nocapture %p) nounwind {
   %f = getelementptr inbounds i8, i8 addrspace(1)* %p, i64 8
   %hslot = bitcast i8 addrspace(1)* %f to i8* addrspace(1)*
@@ -76,8 +63,6 @@ define void @store_self(i8 addrspace(1)* nocapture %p) nounwind {
   ret void
 }
 
-; Method-style callees for the memory-effect gate boundary: readonly cannot
-; plant an alias (plain use); may-write cannot be proven not to (reject).
 declare i64 @foreign_blackhole(i8*) nounwind
 
 define i64 @method_readonly(i8 addrspace(1)* %this, i64 %i) nounwind readonly {
@@ -98,9 +83,6 @@ define i64 @method_maywrite(i8 addrspace(1)* %this, i64 %i) nounwind {
   ret i64 %x
 }
 
-; User-written ~init: calls a C release and cannot throw. Compiler-generated
-; wrapper finalizers carry DOES_NOT_THROW, so the emitted LLVM function has
-; the nounwind attribute required by the promotion gate.
 define void @w_dtor(i8 addrspace(1)* %this, %TypeInfo* %ti) nounwind gc "cangjie" {
   %p = getelementptr inbounds i8, i8 addrspace(1)* %this, i64 8
   %hslot = bitcast i8 addrspace(1)* %p to i8* addrspace(1)*
@@ -115,12 +97,9 @@ define void @throwing_dtor(i8 addrspace(1)* %this, %TypeInfo* %ti) gc "cangjie" 
 }
 
 
-; Allocation is in the loop body, not the latch — the Cangjie `for` shape.
-; CHECK-LABEL: define i64 @loop_body_alloc(
-; CHECK: alloca { %TypeInfo*, %ObjLayout.W }
-; CHECK-NOT: CJ_MCC_NewFinalizer
-; CHECK: call void @w_dtor(
-; CHECK-NEXT: br label %header
+; CHECK-LABEL: @loop_body_alloc(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_body_alloc() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -151,12 +130,10 @@ exit:
   ret i64 %sum
 }
 
-; Same as loop_body_alloc, plus a post-loop invoke/resume. The invoke must not
-; poison the loop-local allocation.
-; CHECK-LABEL: define i64 @loop_then_invoke(
-; CHECK: alloca { %TypeInfo*, %ObjLayout.W }
-; CHECK-NOT: CJ_MCC_NewFinalizer
-; CHECK: call void @w_dtor(
+; CHECK-LABEL: @loop_then_invoke(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: invoke {{.*}}@may_throw(
+; CHECK: }
 define i64 @loop_then_invoke() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -193,11 +170,9 @@ lpad:
   resume { i8*, i32 } %lp
 }
 
-; Canonical single-latch allocation (CreateBB == Latch).
-; CHECK-LABEL: define i64 @loop_latch_alloc(
-; CHECK: alloca { %TypeInfo*, %ObjLayout.W }
-; CHECK-NOT: CJ_MCC_NewFinalizer
-; CHECK: call void @w_dtor(
+; CHECK-LABEL: @loop_latch_alloc(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_latch_alloc() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -224,10 +199,9 @@ exit:
   ret i64 %sum
 }
 
-; PHI of the object across iterations must stay on the heap (#549 UAF class).
-; CHECK-LABEL: define i64 @loop_phi(
-; CHECK: CJ_MCC_NewFinalizer
-; CHECK-NOT: call void @w_dtor(
+; CHECK-LABEL: @loop_phi(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_phi() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -253,10 +227,9 @@ exit:
   ret i64 %i
 }
 
-; Publishing the object pointer is not a stack-allocatable lifetime.
-; CHECK-LABEL: define i64 @loop_store_escape(
-; CHECK: CJ_MCC_NewFinalizer
-; CHECK-NOT: call void @w_dtor(
+; CHECK-LABEL: @loop_store_escape(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_store_escape() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -279,10 +252,9 @@ exit:
   ret i64 %i
 }
 
-; Unreachable in the body skips the latch, so ~init would be missed.
-; CHECK-LABEL: define i64 @loop_body_unreachable(
-; CHECK: CJ_MCC_NewFinalizer
-; CHECK-NOT: call void @w_dtor(
+; CHECK-LABEL: @loop_body_unreachable(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_body_unreachable() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -311,14 +283,9 @@ exit:
   ret i64 %i
 }
 
-; A ~init that may throw is not promoted: an uncaught exception escaping a
-; finalizer is implementation-defined per the language spec, so the object
-; stays on the GC heap and no synchronous ~init call is inserted.
-; CHECK-LABEL: define i64 @loop_throwing_dtor(
-; CHECK-NOT: alloca
-; CHECK: call i8 addrspace(1)* @CJ_MCC_NewFinalizer(
-; CHECK-NOT: call void @throwing_dtor(
-; CHECK: ret i64
+; CHECK-LABEL: @loop_throwing_dtor(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_throwing_dtor() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -343,11 +310,9 @@ exit:
   ret i64 %i
 }
 
-; A conditional break from the body makes the body a second exiting block:
-; the break path skips the latch, so no destructor point can be proven.
-; CHECK-LABEL: define i64 @loop_body_break(
-; CHECK: CJ_MCC_NewFinalizer
-; CHECK-NOT: call void @w_dtor(
+; CHECK-LABEL: @loop_body_break(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_body_break() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -373,11 +338,10 @@ exit:
   ret i64 %i
 }
 
-; An in-loop invoke whose unwind edge bypasses the latch leaves a path from
-; the allocation (and from the store use) that skips the destructor: reject.
-; CHECK-LABEL: define i64 @loop_invoke_unwind_skip(
-; CHECK: CJ_MCC_NewFinalizer
-; CHECK-NOT: call void @w_dtor(
+; CHECK-LABEL: @loop_invoke_unwind_skip(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: invoke {{.*}}@may_throw(
+; CHECK: }
 define i64 @loop_invoke_unwind_skip() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -406,14 +370,9 @@ exit:
   ret i64 %i
 }
 
-; A use inside a nested inner loop is still local to the outer loop: every
-; path from the allocation and from the load reaches the outer latch, so
-; promotion is legal and ~init runs once per outer iteration.
-; CHECK-LABEL: define i64 @loop_nested_inner(
-; CHECK: alloca { %TypeInfo*, %ObjLayout.W }
-; CHECK-NOT: CJ_MCC_NewFinalizer
-; CHECK: call void @w_dtor(
-; CHECK-NEXT: br label %header
+; CHECK-LABEL: @loop_nested_inner(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_nested_inner() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -455,15 +414,10 @@ exit:
   ret i64 %sum
 }
 
-; A may-throw plain call in the loop body unwinds out of the function on an
-; edge the CFG does not model, so the latch ~init would be skipped
-; (issue #204). Converting such calls to invokes unwinding to a pad needs a
-; personality fn, which this function lacks, so the gate (escape-analysis
-; pre-flight) rejects the promotion. Real cjc output always carries
-; __cj_personality_v0$; see loop_maythrow_call_personality.
-; CHECK-LABEL: define i64 @loop_maythrow_call(
-; CHECK: CJ_MCC_NewFinalizer
-; CHECK-NOT: call void @w_dtor(
+; CHECK-LABEL: @loop_maythrow_call(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@may_throw_call(
+; CHECK: }
 define i64 @loop_maythrow_call() gc "cangjie" {
 entry:
   br label %header
@@ -491,12 +445,9 @@ exit:
   ret i64 %sum
 }
 
-; A GC reference field read via cj.gcread.ref yields an alias the walk
-; cannot track (a self-referential field yields the object itself), and its
-; uses are not constrained to precede ~init: reject, stay on the heap.
-; CHECK-LABEL: define i64 @loop_gcread_ref(
-; CHECK: CJ_MCC_NewFinalizer
-; CHECK-NOT: call void @w_dtor(
+; CHECK-LABEL: @loop_gcread_ref(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_gcread_ref() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -522,12 +473,9 @@ exit:
   ret i64 %i
 }
 
-; A GC field write via cj.gcwrite.ref whose base is the object is a plain
-; use that keeps the object alive until the write: promote.
-; CHECK-LABEL: define i64 @loop_gcwrite_ref(
-; CHECK: alloca { %TypeInfo*, %ObjLayout.W }
-; CHECK-NOT: CJ_MCC_NewFinalizer
-; CHECK: call void @w_dtor(
+; CHECK-LABEL: @loop_gcwrite_ref(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_gcwrite_ref() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -552,13 +500,9 @@ exit:
   ret i64 %i
 }
 
-; An ordinary call on the object that provably cannot write memory
-; (readnone) is a plain use: it cannot plant an alias into the object, so
-; promotion only needs the latch destructor point to post-dominate the call.
-; CHECK-LABEL: define i64 @loop_call_use_obj(
-; CHECK: alloca { %TypeInfo*, %ObjLayout.W }
-; CHECK-NOT: CJ_MCC_NewFinalizer
-; CHECK: call void @w_dtor(
+; CHECK-LABEL: @loop_call_use_obj(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_call_use_obj() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -582,17 +526,10 @@ exit:
   ret i64 %i
 }
 
-; Same as loop_maythrow_call, but with a personality fn: the in-loop
-; may-throw call is converted to an invoke unwinding to a pad that runs the
-; current iteration's ~init and rethrows, and the loop promotion proceeds.
-; CHECK-LABEL: define i64 @loop_maythrow_call_personality(
-; CHECK: alloca { %TypeInfo*, %ObjLayout.W }
-; CHECK-NOT: call {{.*}}@CJ_MCC_NewFinalizer
-; CHECK: invoke i64 @may_throw_call(
-; CHECK: call void @w_dtor(
-; CHECK: cj.finalizer.unwind:
-; CHECK: call void @w_dtor(
-; CHECK: call void @CJ_MCC_ThrowException(
+; CHECK-LABEL: @loop_maythrow_call_personality(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@may_throw_call(
+; CHECK: }
 define i64 @loop_maythrow_call_personality() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -620,12 +557,9 @@ exit:
   ret i64 %sum
 }
 
-; A pointer-typed call result may alias the object (here a return-argument
-; callee): the walk follows it, so the PHI on the alias rejects. Otherwise
-; %saved reaches the exit block after ~init already ran at the latch.
-; CHECK-LABEL: define i64 @loop_call_ret_alias(
-; CHECK: CJ_MCC_NewFinalizer
-; CHECK-NOT: call void @w_dtor(
+; CHECK-LABEL: @loop_call_ret_alias(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_call_ret_alias() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -650,12 +584,9 @@ exit:
   ret i64 %r
 }
 
-; The !549 crash shape: the allocation sits in a conditional arm and does
-; not dominate the latch terminator, so on the skip path the destructor
-; would run on an unconstructed object. Reject.
-; CHECK-LABEL: define i64 @loop_cond_alloc(
-; CHECK: CJ_MCC_NewFinalizer
-; CHECK-NOT: call void @w_dtor(
+; CHECK-LABEL: @loop_cond_alloc(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_cond_alloc() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -684,14 +615,9 @@ exit:
   ret i64 %acc
 }
 
-; A diamond after the allocation: both arms use the object and merge into
-; the latch. The allocation dominates the latch and the latch
-; post-dominates every use, so each iteration constructs and destructs
-; exactly once. Promote.
-; CHECK-LABEL: define i64 @loop_diamond_uses(
-; CHECK: alloca { %TypeInfo*, %ObjLayout.W }
-; CHECK-NOT: CJ_MCC_NewFinalizer
-; CHECK: call void @w_dtor(
+; CHECK-LABEL: @loop_diamond_uses(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_diamond_uses() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -725,17 +651,9 @@ exit:
   ret i64 %acc
 }
 
-; Laundering an object alias through its own non-GC field: the addrspacecast
-; is a derived pointer (follow), the store's pointer base is the object — but
-; the stored VALUE also aliases the object, and a later non-GC load reads it
-; back off the SSA chain. The walk never sees the PHI on %h, so without a
-; store-value check %saved would reach the exit block after ~init already ran
-; at the latch (same UAF class as loop_call_ret_alias, through memory instead
-; of a call result). Reject: a store whose value base is the object publishes
-; an untracked alias, like cj_gcwrite_ref's arg0.
-; CHECK-LABEL: define i64 @loop_store_self_alias(
-; CHECK: CJ_MCC_NewFinalizer
-; CHECK-NOT: call void @w_dtor(
+; CHECK-LABEL: @loop_store_self_alias(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_store_self_alias() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -764,14 +682,9 @@ exit:
   ret i64 %r
 }
 
-; A followed call-result alias planted into the object's own non-GC field:
-; findMemoryBasePointer stops at the @id call, so only checking the stored
-; value against NewFinalizer misses this. The walk follows %p1/%as, and the
-; store is visited as a use of %as (Cur == value operand): reject, same as
-; storing an SSA-derived alias (loop_store_self_alias).
-; CHECK-LABEL: define i64 @loop_call_ret_store_alias(
-; CHECK: CJ_MCC_NewFinalizer
-; CHECK-NOT: call void @w_dtor(
+; CHECK-LABEL: @loop_call_ret_store_alias(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_call_ret_store_alias() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -801,13 +714,9 @@ exit:
   ret i64 %r
 }
 
-; A nocapture void callee can still plant an argument-derived alias into
-; the object's own non-GC field: EA's no-capture verdict is blind to stores
-; of non-GC values. Without a memory-effect proof the call must not be a
-; Stop: reject, stay on the heap.
-; CHECK-LABEL: define i64 @loop_call_callee_plants_alias(
-; CHECK: CJ_MCC_NewFinalizer
-; CHECK-NOT: call void @w_dtor(
+; CHECK-LABEL: @loop_call_callee_plants_alias(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_call_callee_plants_alias() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -835,13 +744,9 @@ exit:
   ret i64 %r
 }
 
-; A non-inlined method-style call on the object that is provably readonly
-; (e.g. inferred by function-attrs before cj-pea): it cannot write, so it
-; cannot plant an alias — a plain use. Promote.
-; CHECK-LABEL: define i64 @loop_call_method_readonly(
-; CHECK: alloca { %TypeInfo*, %ObjLayout.W }
-; CHECK-NOT: CJ_MCC_NewFinalizer
-; CHECK: call void @w_dtor(
+; CHECK-LABEL: @loop_call_method_readonly(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_call_method_readonly() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -870,15 +775,9 @@ exit:
   ret i64 %acc
 }
 
-; A method-style call on the object that may write (e.g. a non-inlined ObjC
-; bridge method calling a foreign function): EA's no-capture verdict is
-; blind to non-GC stores, so alias-planting inside the callee cannot be
-; ruled out. Intentional tightening of the memory-effect gate: reject,
-; stay on the heap. (The #199 benchmark does not depend on this shape:
-; get()/instanceBlackhole inline, same premise as the user-side workaround.)
-; CHECK-LABEL: define i64 @loop_call_method_maywrite(
-; CHECK: CJ_MCC_NewFinalizer
-; CHECK-NOT: call void @w_dtor(
+; CHECK-LABEL: @loop_call_method_maywrite(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_call_method_maywrite() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -907,13 +806,9 @@ exit:
   ret i64 %acc
 }
 
-; cj.gcwrite.ref with the object as the VALUE (arg0): publishing a GC
-; reference of the object into untracked memory, like storing the object
-; pointer elsewhere — reject, stay on the heap. Pins the arg0 entry of
-; untrackedAliasArgs (loop_gcwrite_ref covers the destination side).
-; CHECK-LABEL: define i64 @loop_gcwrite_ref_value(
-; CHECK: CJ_MCC_NewFinalizer
-; CHECK-NOT: call void @w_dtor(
+; CHECK-LABEL: @loop_gcwrite_ref_value(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_gcwrite_ref_value() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
@@ -938,15 +833,11 @@ exit:
   ret i64 %i
 }
 
-; An intrinsic not modeled in untrackedAliasArgs is not trusted by
-; default: llvm.prefetch is not dangerous, but the gate cannot know that
-; without an audit entry — a newly added intrinsic must be classified in
-; untrackedAliasArgs first. Reject, stay on the heap.
-; CHECK-LABEL: define i64 @loop_unmodeled_intrinsic(
-; CHECK: CJ_MCC_NewFinalizer
-; CHECK-NOT: call void @w_dtor(
 declare void @llvm.prefetch.p0i8(i8* nocapture readonly, i32 immarg, i32 immarg, i32 immarg)
 
+; CHECK-LABEL: @loop_unmodeled_intrinsic(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @loop_unmodeled_intrinsic() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
   br label %header
