@@ -1,5 +1,7 @@
 ; RUN: opt < %s -mtriple=x86_64-unknown-linux-gnu -passes=cj-pea -S | FileCheck %s --implicit-check-not='alloca '
 ; RUN: opt < %s -mtriple=aarch64-unknown-linux-gnu -passes=cj-pea -S | FileCheck %s --implicit-check-not='alloca '
+; RUN: opt < %s -mtriple=x86_64-unknown-linux-gnu -passes=cj-pea -cj-disable-partial-ea -S | FileCheck %s --implicit-check-not='alloca '
+; RUN: opt < %s -mtriple=aarch64-unknown-linux-gnu -passes=cj-pea -cj-disable-partial-ea -S | FileCheck %s --implicit-check-not='alloca '
 
 %TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, %TypeInfo*, i8*, i8*, i8* }
 %Payload = type { i64 }
