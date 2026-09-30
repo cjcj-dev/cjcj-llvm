@@ -82,17 +82,17 @@ for table in symbols.values():
         name, section, start, size = symbol
         if size and (section, start - 4) in relocations:
             maps[name] = decode(symbol)
+returns = []
+for table in symbols.values():
+    for label, section, pc, size in table:
+        if not re.search(r"cj_return_pc[0-9]+$", label):
+            continue
+        owners = [s for t in symbols.values() for s in t
+                  if s[3] and s[1] == section and s[2] <= pc < s[2] + s[3]]
+        assert len(owners) == 1, (label, owners)
+        owner = owners[0]
+        returns.append([owner[0], pc - owner[2]])
 if len(sys.argv) > 2 and sys.argv[2] == "--export":
-    returns = []
-    for table in symbols.values():
-        for label, section, pc, size in table:
-            if not re.search(r"cj_return_pc[0-9]+$", label):
-                continue
-            owners = [s for t in symbols.values() for s in t
-                      if s[3] and s[1] == section and s[2] <= pc < s[2] + s[3]]
-            assert len(owners) == 1, (label, owners)
-            owner = owners[0]
-            returns.append([owner[0], pc - owner[2]])
     output = {"object_sha256": hashlib.sha256(raw).hexdigest(),
               "maps": maps, "return_pcs": sorted(returns)}
     print(json.dumps(output, sort_keys=True))
@@ -100,7 +100,15 @@ if len(sys.argv) > 2 and sys.argv[2] == "--export":
 
 # Every target verdict is printed and evaluated, even when another fails.
 # This distinguishes a rejected ordinary site from a lost return PC.
+def exact_return(name):
+    sites = [pc for fn, pc in returns if fn == name]
+    rows = maps.get(name, {}).get("rows", [])
+    return len(sites) == 1 and len(rows) == 1 and rows[0][0] == sites[0]
+
 checks = {
+    "EXACT_RETURN_PC_MATCHES": all(exact_return(name) for name in ("return_empty", "return_root")),
+    "NEIGHBOR_PC_EXCLUDED": all(exact_return(name) and not any(row[0] == pc + 1 for row in maps[name]["rows"])
+        for name, pc in returns if name in ("return_empty", "return_root")),
     "ORDINARY_STRUCT_RETAINED": "ordinary_struct" in maps and len(maps["ordinary_struct"]["rows"]) == 1
         and bool(maps["ordinary_struct"]["rows"][0][2]),
     "ORDINARY_LINE_RETAINED": "ordinary_line" in maps and len(maps["ordinary_line"]["rows"]) == 1
