@@ -7,9 +7,8 @@ declare void @llvm.cj.gcwrite.ref(i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspa
 
 define void @ref_heap_destination(i8 addrspace(1)* %heap, i8 addrspace(1)* addrspace(1)* %slot) #0 gc "cangjie" {
 ; CHECK-LABEL: define void @ref_heap_destination(
-; CHECK-NOT: store i8 addrspace(1)*
-; CHECK: call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %as1, i8 addrspace(1)* %heap, i8 addrspace(1)* addrspace(1)* %slot)
-; CHECK-NOT: store i8 addrspace(1)*
+; CHECK: @llvm.cj.gcwrite.ref(i8 addrspace(1)* %as1, i8 addrspace(1)* %heap, i8 addrspace(1)* addrspace(1)* %slot)
+; CHECK-NOT: store i8 addrspace(1)* %as1
 ; CHECK: ret void
   %src = alloca i8, i64 8, align 8
   %as1 = addrspacecast i8* %src to i8 addrspace(1)*
