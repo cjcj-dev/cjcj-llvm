@@ -1,6 +1,8 @@
-; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnu -filetype=obj --save-temp-labels %s -o %t.o
+; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnu -filetype=asm %s -o %t.s
+; RUN: llvm-mc -triple=x86_64-unknown-linux-gnu -filetype=obj --save-temp-labels %t.s -o %t.o
 ; RUN: %python %S/Inputs/check-empty-callsite-domain.py %t.o
-; RUN: llc --cangjie-pipeline -mtriple=aarch64-unknown-linux-gnu -filetype=obj --save-temp-labels %s -o %t.a64.o
+; RUN: llc --cangjie-pipeline -mtriple=aarch64-unknown-linux-gnu -filetype=asm %s -o %t.a64.s
+; RUN: llvm-mc -triple=aarch64-unknown-linux-gnu -filetype=obj --save-temp-labels %t.a64.s -o %t.a64.o
 ; RUN: %python %S/Inputs/check-empty-callsite-domain.py %t.a64.o
 ;
 ; Ordinary records follow upstream StackMaps.cpp:774-778 (5d095aed).
