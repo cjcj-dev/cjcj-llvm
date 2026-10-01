@@ -58,6 +58,8 @@ def decode(symbol):
     _, section, start, size = symbol
     metadata, offset = target(section, start - 4)
     stackmap, offset = target(metadata, offset)
+    if stackmap == 0:  # SHN_UNDEF chain: not a relocated stackmap descriptor
+        return None
     buf = data(stackmap)[offset:]
     cursor = 0
     def take(width):
@@ -85,7 +87,9 @@ for table in symbols.values():
     for symbol in table:
         name, section, start, size = symbol
         if symbol in functions and size and (section, start - 4) in relocations:
-            maps[name] = decode(symbol)
+            decoded = decode(symbol)
+            if decoded is not None:
+                maps[name] = decoded
 returns = []
 for table in symbols.values():
     for label, section, pc, size in table:
