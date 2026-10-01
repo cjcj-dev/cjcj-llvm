@@ -116,6 +116,15 @@ else:
     for (sec, pos), (callee, addend) in relocations.items():
         if sec == section and start <= pos < start + size and callee[0] == "checkpoint":
             call_returns.append(pos + 4 - start)
+if name == "no_root_stack":
+    # Upstream StackMaps.cpp:774-778 excludes an ordinary empty callsite.
+    # The independent return-poll map does not qualify the call-return PC.
+    okay = bool(call_returns) and all(not any(row[0] == pc for row in rows)
+                                      for pc in call_returns)
+    print(json.dumps({"sha256": hashlib.sha256(raw).hexdigest(), "function": name,
+                      "call_returns": call_returns, "rows": rows}, sort_keys=True))
+    print("EMPTY_CALL_RETURN_EXCLUDED=" + str(okay), flush=True)
+    sys.exit(0 if okay else 1)
 calls = []
 for pc in call_returns:
     matches = [row for row in rows if row[0] == pc]

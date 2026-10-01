@@ -446,6 +446,9 @@ private:
   bool IsAArch64 = false;
   bool IsARM = false;
 
+  FunctionInfo &getOrInsertFnInfo(const MCSymbol *FnSym);
+  void insertCallsiteInfo(const MCSymbol *FnSym, CallsiteInfo &CallInfo);
+
   void processArrayType(ArrayType *ST, int64_t RefOffset,
                         LocationVec &Locations, unsigned Reg,
                         const GCStrategy *GS) const;
