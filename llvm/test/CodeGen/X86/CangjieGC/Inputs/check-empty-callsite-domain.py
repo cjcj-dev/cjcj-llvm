@@ -57,8 +57,10 @@ def target(section, pos):
 def decode(symbol):
     _, section, start, size = symbol
     metadata, offset = target(section, start - 4)
+    if metadata == 0:  # SHN_UNDEF chain: not a relocated stackmap descriptor
+        return None
     stackmap, offset = target(metadata, offset)
-    if stackmap == 0:  # SHN_UNDEF chain: not a relocated stackmap descriptor
+    if stackmap == 0:
         return None
     buf = data(stackmap)[offset:]
     cursor = 0
