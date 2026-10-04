@@ -65,6 +65,9 @@ def main():
     try:
         require(sha(a.authorization) == a.authorization_sha256, 'authorization hash differs')
         auth = json.loads(Path(a.authorization).read_text())
+        envelope.update(execution=auth['execution'],
+                        authorization_sha256=a.authorization_sha256,
+                        deadline_utc=auth['deadline_utc'])
         ledger = Path(auth['ledger'])
         require(ledger.is_absolute() and ledger.resolve() == ledger and not ledger.is_symlink(), 'ledger path differs')
         lock = ledger.with_name(ledger.name + '.lock').open('a')
