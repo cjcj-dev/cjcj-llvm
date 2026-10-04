@@ -1297,7 +1297,7 @@ int AArch64AsmPrinter::emitStackOverflowCall(const MachineInstr &MI) {
   using namespace AArch64;
   unsigned FrameSize = calculateFrameSize(MF, MI);
   unsigned AddSize = MI.peekCJStackSize();
-  if (AddSize) {
+  if (AddSize && MF->getFunction().hasCangjieGC()) {
     emitCangjieLayoutState(CJLayoutBits & ~2U);
     if (!EnableStackGrow)
       CJEmittedCallBits &= ~2U;

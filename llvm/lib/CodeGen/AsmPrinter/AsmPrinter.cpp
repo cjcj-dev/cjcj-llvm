@@ -454,6 +454,8 @@ void AsmPrinter::recordCangjieCall(MCStreamer &S, const MCInst &Inst) {
   // Every real call is an event, including calls inside statepoint and
   // generated-pseudo expansions. Jumps and zero-instruction markers are not.
   if (CJEmittingInstruction && MF->getFunction().hasCangjieGC() &&
+      CJQualification.Entry->isInSection() &&
+      &CJQualification.Entry->getSection() == S.getCurrentSectionOnly() &&
       TM.getMCInstrInfo()->get(Inst.getOpcode()).isCall()) {
     auto *ReturnPC = createTempSymbol("cj_call_return");
     S.emitLabel(ReturnPC);

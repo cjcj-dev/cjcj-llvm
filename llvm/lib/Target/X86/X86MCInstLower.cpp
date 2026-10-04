@@ -1326,8 +1326,10 @@ int X86AsmPrinter::emitSOFECall(const MachineInstr &MI) {
   }
 
   if (AddSize > 0) {
-    CJEmittedCallBits &= ~2U;
-    emitCangjieLayoutState(CJLayoutBits & ~2U);
+    if (MF->getFunction().hasCangjieGC()) {
+      CJEmittedCallBits &= ~2U;
+      emitCangjieLayoutState(CJLayoutBits & ~2U);
+    }
     MCInst Add;
     Add.setOpcode(X86::ADD64ri32);
     Add.addOperand(MCOperand::createReg(X86::RSP));
