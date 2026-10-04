@@ -1383,7 +1383,6 @@ void AArch64AsmPrinter::LowerSTATEPOINT(MCStreamer &OutStreamer, StackMaps &SM,
           IsTailCallStatepoint ? AArch64::TCRETURNdi : CallOpcode;
       if (tryEmitCangjieSpecificCallByMOSym(&MI, CallTarget,
                                             CangjieCallOpcode)) {
-        SM.recordCJStackMap(MI);
         return;
       }
       MCInstLowering.lowerOperand(CallTarget, CallTargetMCOp);
@@ -1450,7 +1449,7 @@ void AArch64AsmPrinter::LowerFAULTING_OP(const MachineInstr &FaultingMI) {
   }
 
   OutStreamer->AddComment("on-fault: " + HandlerLabel->getName());
-  OutStreamer->emitInstruction(MI, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, MI);
 }
 
 void AArch64AsmPrinter::emitFMov0(const MachineInstr &MI) {
@@ -2139,6 +2138,8 @@ void AArch64AsmPrinter::emitCJThrowException(const MachineInstr *MI,
                                              const MachineOperand &MOSym,
                                              unsigned Opcode) {
   emitCangjieRuntimeCall(getSymbol(MOSym.getGlobal()));
+  if (isStatepointOpcode(MI->getOpcode()))
+    SM.recordCJStackMap(*MI);
   StackMaps::CallsiteInfo CSInfo;
   SM.updateOrInsertFnInfo(CurrentFnSym, CSInfo);
 }
@@ -2235,7 +2236,7 @@ void AArch64AsmPrinter::emitGetCJThreadId() {
   CbzInst.setOpcode(AArch64::CBZX);
   CbzInst.addOperand(MCOperand::createReg(AArch64::X9));
   CbzInst.addOperand(MCOperand::createExpr(MILabelExpr));
-  OutStreamer->emitInstruction(CbzInst, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, CbzInst);
   // ldr x9, [x9, #456]
   MCInst LoadCJThreadInst;
   LoadCJThreadInst.setOpcode(AArch64::LDRXui);

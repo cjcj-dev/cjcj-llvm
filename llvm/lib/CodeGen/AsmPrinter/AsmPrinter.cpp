@@ -91,6 +91,7 @@
 #include "llvm/MC/MCDirectives.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCSectionCOFF.h"
 #include "llvm/MC/MCSectionELF.h"
@@ -427,6 +428,16 @@ const MCSubtargetInfo &AsmPrinter::getSubtargetInfo() const {
 
 void AsmPrinter::EmitToStreamer(MCStreamer &S, const MCInst &Inst) {
   S.emitInstruction(Inst, getSubtargetInfo());
+  // Qualify the return PC at the hardware-call emission, before any following
+  // adaptation instructions. Marker MIs never reach this branch.
+  if (CJEmittingInstruction && MF->getFunction().hasCangjieGC() &&
+      !isStatepointOpcode(CJEmittingInstruction->getOpcode()) &&
+      TM.getMCInstrInfo()->get(Inst.getOpcode()).isCall()) {
+    auto *ReturnPC = createTempSymbol("cj_call_return");
+    S.emitLabel(ReturnPC);
+    CJQualification.Sites.push_back(
+        {ReturnPC, 1, uint16_t(CJInstructionLayout.lookup(CJEmittingInstruction))});
+  }
 }
 
 void AsmPrinter::emitInitialRawDwarfLocDirective(const MachineFunction &MF) {
@@ -1696,7 +1707,9 @@ void AsmPrinter::emitFunctionBody() {
           OutStreamer->emitRawComment("ARITH_FENCE");
         break;
       default:
+        CJEmittingInstruction = &MI;
         emitInstruction(&MI);
+        CJEmittingInstruction = nullptr;
         if (CanDoExtraAnalysis) {
           MCInst MCI;
           MCI.setOpcode(MI.getOpcode());
@@ -1708,15 +1721,6 @@ void AsmPrinter::emitFunctionBody() {
       }
 
       if (CangjieSrc) {
-        // Ordinary hardware calls without a root map still have a real return
-        // site for EH/trace. Statepoint labels are recorded by StackMaps.
-        if (MI.isCall() && !MI.isPseudo() &&
-            !isStatepointOpcode(MI.getOpcode())) {
-          auto *ReturnPC = createTempSymbol("cj_call_return");
-          OutStreamer->emitLabel(ReturnPC);
-          CJQualification.Sites.push_back(
-              {ReturnPC, 1, uint16_t(CJInstructionLayout.lookup(&MI))});
-        }
         uint32_t After = CJTransfer(MI, CJLayoutBits);
         if (After != CJLayoutBits)
           emitCangjieLayoutState(After);

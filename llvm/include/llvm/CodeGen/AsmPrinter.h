@@ -105,6 +105,7 @@ public:
   MCCangjieQualification CJQualification;
   uint32_t CJLayoutBits = 0;
   DenseMap<const MachineInstr *, uint32_t> CJInstructionLayout;
+  const MachineInstr *CJEmittingInstruction = nullptr;
 
   // Target physical register effects clear qualification before execution.
   virtual uint32_t getCangjieLayoutClearBits(const MachineInstr &MI) const;
