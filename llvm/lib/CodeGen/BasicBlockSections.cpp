@@ -78,6 +78,7 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
@@ -307,6 +308,13 @@ bool BasicBlockSections::runOnMachineFunction(MachineFunction &MF) {
   auto BBSectionsType = MF.getTarget().getBBSectionsType();
   assert(BBSectionsType != BasicBlockSection::None &&
          "BB Sections not enabled!");
+
+  // Labels preserve a single text extent. Explicit section partitioning
+  // cannot be encoded by CJ's scalar codeSize and compressed PC offsets.
+  if (MF.getFunction().hasCangjieGC() &&
+      BBSectionsType != BasicBlockSection::Labels)
+    report_fatal_error(Twine("Cangjie AOT qualification requires one text extent: ") +
+                       MF.getName());
 
   // Check for source drift.  If the source has changed since the profiles
   // were obtained, optimizing basic blocks might be sub-optimal.
