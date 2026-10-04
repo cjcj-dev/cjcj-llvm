@@ -1412,6 +1412,7 @@ int X86AsmPrinter::emitStackGrow(const MachineInstr &MI) {
   if (!IsWindowsAndNoRecoverd) {
     NumBytes = FrameSize - AllocaSize; // will unwind stack size
     if (NumBytes > 0) {
+      emitCangjieLayoutState(CJLayoutBits & ~2U);
       MCInst Add;
       Add.setOpcode(X86::ADD64ri32);
       Add.addOperand(MCOperand::createReg(X86::RSP));
@@ -1422,6 +1423,7 @@ int X86AsmPrinter::emitStackGrow(const MachineInstr &MI) {
     }
   } else {
     if (NeedAlign) {
+      emitCangjieLayoutState(CJLayoutBits & ~2U);
       MCInst PushInst; // Use push to align sp to 16 bytes.
       PushInst.setOpcode(X86::PUSH64i32);
       PushInst.addOperand(MCOperand::createImm(AllocaSize));
@@ -2030,6 +2032,10 @@ void X86AsmPrinter::LowerPATCHABLE_EVENT_CALL(const MachineInstr &MI,
       SrcRegs[I] = getX86SubSuperRegister(Op->getReg(), 64);
       if (SrcRegs[I] != DestRegs[I]) {
         UsedMask[I] = true;
+        if (MF->getFunction().hasCangjieGC()) {
+          CJEmittedCallBits &= ~2U;
+          emitCangjieLayoutState(CJLayoutBits & ~2U);
+        }
         EmitAndCountInstruction(
             MCInstBuilder(X86::PUSH64r).addReg(DestRegs[I]));
       } else {
@@ -2065,6 +2071,8 @@ void X86AsmPrinter::LowerPATCHABLE_EVENT_CALL(const MachineInstr &MI,
       emitX86Nops(*OutStreamer, 1, Subtarget);
 
   OutStreamer->AddComment("xray custom event end.");
+  if (MF->getFunction().hasCangjieGC())
+    emitCangjieLayoutState(CJInstructionLayout.lookup(&MI));
 
   // Record the sled version. Version 0 of this sled was spelled differently, so
   // we let the runtime handle the different offsets we're using. Version 2
@@ -2128,6 +2136,10 @@ void X86AsmPrinter::LowerPATCHABLE_TYPED_EVENT_CALL(const MachineInstr &MI,
       SrcRegs[I] = getX86SubSuperRegister(Op->getReg(), 64);
       if (SrcRegs[I] != DestRegs[I]) {
         UsedMask[I] = true;
+        if (MF->getFunction().hasCangjieGC()) {
+          CJEmittedCallBits &= ~2U;
+          emitCangjieLayoutState(CJLayoutBits & ~2U);
+        }
         EmitAndCountInstruction(
             MCInstBuilder(X86::PUSH64r).addReg(DestRegs[I]));
       } else {
@@ -2168,6 +2180,8 @@ void X86AsmPrinter::LowerPATCHABLE_TYPED_EVENT_CALL(const MachineInstr &MI,
       emitX86Nops(*OutStreamer, 1, Subtarget);
 
   OutStreamer->AddComment("xray typed event end.");
+  if (MF->getFunction().hasCangjieGC())
+    emitCangjieLayoutState(CJInstructionLayout.lookup(&MI));
 
   // Record the sled version.
   recordSled(CurSled, MI, SledKind::TYPED_EVENT, 2);
@@ -3728,6 +3742,8 @@ void X86AsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
     // movq xxx.CJStubGV(%rip), %r11
     // movq r11 16(rsp)
     // movq $OnStackParamSize 8(rsp)
+    if (MF->getFunction().hasCangjieGC())
+      emitCangjieLayoutState(CJLayoutBits & ~2U);
     extendStackAndInsertFFIInfoForJmp(MovGVToR11, CallFrameSize);
   } else {
     assert(
@@ -3737,6 +3753,8 @@ void X86AsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
     // pushq r11
     // pushq $OnStackParamSize
     EmitAndCountInstruction(MovGVToR11);
+    if (MF->getFunction().hasCangjieGC())
+      emitCangjieLayoutState(CJLayoutBits & ~2U);
     EmitAndCountInstruction(MCInstBuilder(X86::PUSH64r).addReg(X86::R11));
     EmitAndCountInstruction(
         MCInstBuilder(X86::PUSH64i32).addImm(CallFrameSize));
@@ -3756,6 +3774,8 @@ void X86AsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
   // Then emit the call
   EmitToStreamer(*OutStreamer, TemInst);
   SM.recordCJStackMap(*MI);
+  if (MF->getFunction().hasCangjieGC() && Opcode == X86::CALL64pcrel32)
+    emitCangjieLayoutState(CJInstructionLayout.lookup(MI));
   return;
 }
 

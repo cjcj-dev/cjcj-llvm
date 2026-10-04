@@ -1331,6 +1331,8 @@ int AArch64AsmPrinter::emitStackOverflowCall(const MachineInstr &MI) {
 
     // revert sp
     emitSubSP(AddSize);
+    if (MF->getFunction().hasCangjieGC())
+      emitCangjieLayoutState(CJInstructionLayout.lookup(&MI));
     return 6; // 6: instruction nums.
   }
 }
@@ -2037,11 +2039,15 @@ void AArch64AsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
   // MCC_XXXStub expect the end of caller stack is like:
   // |  callee-addr                        |
   // |  param-stack-size (16 bytes align)  |
+  if (MF->getFunction().hasCangjieGC())
+    emitCangjieLayoutState(CJLayoutBits & ~2U);
   extendStackAndInsertFFIInfoForJmp(SymOriAddr, SymOriAddrLo12, CallFrameSize);
   assert((Opcode == AArch64::TCRETURNdi || Opcode == AArch64::BL) &&
          "Opcode should be BL or TCRETURNdi for Cangjie Call Stub");
   emitCangjieRuntimeCall(getSymbol(F), Opcode == AArch64::TCRETURNdi);
   SM.recordCJStackMap(*MI);
+  if (MF->getFunction().hasCangjieGC() && Opcode == AArch64::BL)
+    emitCangjieLayoutState(CJInstructionLayout.lookup(MI));
   return;
 }
 
