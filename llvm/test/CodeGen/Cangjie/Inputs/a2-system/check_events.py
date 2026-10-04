@@ -48,7 +48,8 @@ def source_contract(text, name, machine):
     sp = ('~{rsp}' in text or 'pushq %' in text) if machine == 62 else ('~{sp}' in text or 'sub sp, sp,' in text)
     clear = 3 if fp else (2 if sp else 0)
     ids = {int(x) for x in re.findall(r'@llvm\.(?:cj\.gc|experimental\.gc)\.statepoint[^\s(]*\(i64\s+(\d+)', text)}
-    patches = [int(x) for x in re.findall(r'@llvm\.(?:cj\.gc|experimental\.gc)\.statepoint[^\s(]*\(i64\s+\d+,\s*i32\s+(\d+)', text) if int(x)]
+    patches = [(int(i), int(n)) for i, n in re.findall(
+        r'@llvm\.(?:cj\.gc|experimental\.gc)\.statepoint[^\s(]*\(i64\s+(\d+),\s*i32\s+(\d+)', text) if int(n)]
     return managed, eligible, root, clear, ids, patches
 
 
@@ -122,6 +123,8 @@ def check(a, report):
     identity(a.source, a.source_sha256)
     identity(a.object, a.object_sha256)
     identity(a.objdump, a.objdump_sha256)
+    identity(a.witness, a.witness_sha256)
+    witness = json.loads(Path(a.witness).read_text())
     elf = reader.ELF(Path(a.object).read_bytes())
     fns = [f for f in elf.functions if f['name'] == a.function]
     reader.require(len(fns) == 1, 'ambiguous function identity')
@@ -152,25 +155,47 @@ def check(a, report):
     rows = [struct.unpack_from('<IHH', maps, q[1]+16+8*nt+8*i) for i in range(nq)]
     ins = reader.instructions(elf, d.stdout, fn)
     calls, polls, branches, saved, rets = observations(elf, fn, ins)
+    # Coverage is a prerequisite, separate from the relation assertions below.
+    # A missing branch is UNRESOLVED, never an accepted narrow-cut failure.
+    reader.require(len(calls) >= witness['min_calls'], 'PRECONDITION_CALL_COUNT')
+    reader.require(len(polls) >= witness['min_polls'], 'PRECONDITION_POLL_COUNT')
+    def matching_calls(pattern):
+        return {pc for pc, refs in calls.items()
+                if any(re.fullmatch(pattern, ref) for ref in refs)}
+    branch_calls = {}
+    for required in witness['required_calls']:
+        pcs = matching_calls(required['symbol_regex'])
+        reader.require(len(pcs) >= required['min_count'],
+                       'PRECONDITION_BRANCH: ' + required['name'])
+        branch_calls[required['name']] = sorted(pcs)
+    reader.require(not witness['require_nonempty_return'] or (root != 0 and polls),
+                   'PRECONDITION_NONEMPTY_RETURN_ABI')
+    report.update(coverage=dict(calls=sorted(calls), polls=sorted(polls),
+                                branches=branch_calls, witness=witness))
     kinds = {}
     for pc, refs in calls.items():
         is_stub = ((3 in ids or 4 in ids) and any('Safepoint' in x for x in refs)) or (
                    5 in ids and a.grow and any('CJ_MCC_StackGrowStub' in x for x in refs))
         kinds[pc] = 2 if is_stub else 1
     reserved = set()
-    if patches:
-        reader.require(len(patches) == 1, 'UNRESOLVED_MULTIPLE_PATCH_REGIONS')
+    # LowerSTATEPOINT routes these IDs before it examines PatchBytes. Preserve
+    # those legal inputs; only the actual reserved route has a NOP completion PC.
+    reserved_patches = [(i, n) for i, n in patches if not (
+        a.pipeline and ((i == 3 and not a.outline) or i in (5, 6)))]
+    if reserved_patches:
+        reader.require(len(reserved_patches) == 1, 'UNRESOLVED_MULTIPLE_PATCH_REGIONS')
+        patch_id, patch_bytes = reserved_patches[0]
         nops, run = [], []
         for inst in ins + [(0, b'', '')]:
             if re.match(r'nop\w*\b', inst[2]):
                 run.append(inst)
             else:
-                if run and sum(len(x[1]) for x in run) == patches[0]:
+                if run and sum(len(x[1]) for x in run) == patch_bytes:
                     nops.append(run[-1][0]+len(run[-1][1])-fn['value'])
                 run = []
         reader.require(len(nops) == 1, 'UNRESOLVED_PATCH_REGION_IDENTITY')
         reserved.update(nops)
-        kinds[nops[0]] = 2 if 3 in ids or 4 in ids else 1
+        kinds[nops[0]] = 2 if patch_id in (3, 4) else 1
     expected = {(pc, kind) for pc, kind in kinds.items()} | {(pc, 3) for pc in polls}
     actual = {(pc, kind) for pc, kind, bits in rows}
     graph_ref = elf.relative(mi, at)
@@ -194,17 +219,26 @@ def check(a, report):
     if clear:
         reader.require('call void asm' in text and not re.search(r'call void @', text), 'UNRESOLVED_MIXED_ASM_LAYOUT_WITNESS')
         assertion('asm_layout_clear', all(not (bits & clear) for pc,kind,bits in rows if kind in (1,2)), dict(clear=clear, calls=len(calls)))
+    graph_pcs = set()
+    for required in witness['graph_calls']:
+        pcs = matching_calls(required['symbol_regex'])
+        reader.require(len(pcs) >= required['min_count'], 'PRECONDITION_GRAPH_SAVE_POINT')
+        graph_pcs.update(pcs)
     if '"gc-live"' in text:
-        reader.require(len(calls) == 1, 'UNRESOLVED_MULTICALL_GRAPH_SOURCE')
-        assertion('live_call_graph', all(pc in graph['rows'] and graph['rows'][pc]['state'] == 'nonempty' for pc in calls), 'G decoded independently at the actual H PC')
+        reader.require(graph_pcs, 'UNRESOLVED_GRAPH_SAVE_POINT_SPECIFICATION')
+    if graph_pcs:
+        assertion('live_call_graph', all(pc in graph['rows'] and graph['rows'][pc]['state'] == 'nonempty' for pc in graph_pcs),
+                  dict(independent_machine_saved_pcs=sorted(graph_pcs)))
 
 
 def main():
     p = argparse.ArgumentParser()
-    for name in ('source', 'source-sha256', 'object', 'object-sha256', 'objdump', 'objdump-sha256', 'out'):
+    for name in ('source', 'source-sha256', 'object', 'object-sha256', 'objdump', 'objdump-sha256', 'witness', 'witness-sha256', 'out'):
         p.add_argument('--' + name, required=True)
     p.add_argument('--function', default='test')
     p.add_argument('--grow', action='store_true')
+    p.add_argument('--pipeline', action='store_true')
+    p.add_argument('--outline', action='store_true')
     a = p.parse_args()
     report = dict(status='UNRESOLVED', scope='finite ELF64 ET_REL encoding; not complete saved-layout or runtime acceptance',
                   managed_runtime_qualification=False, checker_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
