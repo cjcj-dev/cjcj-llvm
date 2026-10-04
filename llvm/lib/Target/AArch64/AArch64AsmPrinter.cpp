@@ -1415,7 +1415,8 @@ void AArch64AsmPrinter::LowerSTATEPOINT(MCStreamer &OutStreamer, StackMaps &SM,
 
   // `call CJ_Safepoint_Stub` in cangjie function.
   if (EnableSafepointOutline &&
-      SOpers.getID() == Cangjie::CJStatepointID::SafepointStub)
+      SOpers.getID() == Cangjie::CJStatepointID::SafepointStub &&
+      !SOpers.getNumPatchBytes())
     return SM.recordCJStackMap(MI, true);
 
   auto &Ctx = OutStreamer.getContext();
@@ -1427,7 +1428,9 @@ void AArch64AsmPrinter::LowerSTATEPOINT(MCStreamer &OutStreamer, StackMaps &SM,
     if (SOpers.getNumPatchBytes())
       recordCangjieReservedCall(*MILabel, MI);
   }
-  SM.recordStatepoint(*MILabel, MI);
+  SM.recordStatepoint(*MILabel, MI,
+                     EnableSafepointOutline &&
+                         SOpers.getID() == Cangjie::CJStatepointID::SafepointStub);
 }
 
 void AArch64AsmPrinter::LowerFAULTING_OP(const MachineInstr &FaultingMI) {

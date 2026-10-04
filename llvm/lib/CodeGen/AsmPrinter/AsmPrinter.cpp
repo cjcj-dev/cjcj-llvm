@@ -477,7 +477,7 @@ void AsmPrinter::recordCangjieReservedCall(const MCSymbol &PC,
   // This is encoding support, not proof that an unpatched NOP region can run.
   if (MF->getFunction().hasCangjieGC())
     CJQualification.Sites.push_back(
-        {&PC, 1, uint16_t(CJInstructionLayout.lookup(&MI))});
+        {&PC, CJEmittedCallKind, uint16_t(CJInstructionLayout.lookup(&MI))});
 }
 
 void AsmPrinter::emitInitialRawDwarfLocDirective(const MachineFunction &MF) {

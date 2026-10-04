@@ -1756,7 +1756,8 @@ void X86AsmPrinter::LowerSTATEPOINT(const MachineInstr &MI,
   }
 
   if (EnableSafepointOutline &&
-      SOpers.getID() == Cangjie::CJStatepointID::SafepointStub)
+      SOpers.getID() == Cangjie::CJStatepointID::SafepointStub &&
+      !SOpers.getNumPatchBytes())
     return SM.recordCJStackMap(MI, true);
 
   // Record our statepoint node in the same section used by STACKMAP
@@ -1770,7 +1771,9 @@ void X86AsmPrinter::LowerSTATEPOINT(const MachineInstr &MI,
     if (SOpers.getNumPatchBytes())
       recordCangjieReservedCall(*MILabel, MI);
   }
-  SM.recordStatepoint(*MILabel, MI);
+  SM.recordStatepoint(*MILabel, MI,
+                     EnableSafepointOutline &&
+                         SOpers.getID() == Cangjie::CJStatepointID::SafepointStub);
 }
 
 void X86AsmPrinter::LowerFAULTING_OP(const MachineInstr &FaultingMI,
