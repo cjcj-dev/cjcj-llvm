@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Execute only a prehashed P0 allowlist, sequentially, with a global stop.
+"""Sequential P0 allowlist with one pinned authorization ledger and receipts.
 
-No retries, no codegen, no repair after failure. The plan and all records are
-persisted before launch; a stopped tail is explicitly NOT_RUN. Run via box/wf.
+A ledger is provisioned once by the authorizer, never created/reset by this
+runner. Hold its nonblocking lock through execution. Reserve consumption before
+launch; an interrupted batch remains stopped. Receipts bind every continuation.
 """
 import argparse
 import datetime
+import fcntl
 import hashlib
 import json
 import os
@@ -14,77 +16,173 @@ import subprocess
 import time
 from pathlib import Path
 
+
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
+
+def utc():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def write(path, value):
+    # Atomic replacement; callers hold the stable sibling lock inode.
+    tmp = path.with_name(path.name + '.new')
+    with tmp.open('w') as f:
+        f.write(json.dumps(value, indent=2) + '\n')
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def require(condition, reason):
+    if not condition:
+        raise RuntimeError(reason)
+
+
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('--plan',required=True)
-    p.add_argument('--plan-sha256',required=True)
-    p.add_argument('--out',required=True)
+    p.add_argument('--plan', required=True)
+    p.add_argument('--plan-sha256', required=True)
+    p.add_argument('--authorization', required=True)
+    p.add_argument('--authorization-sha256', required=True)
+    p.add_argument('--out', required=True)
     a = p.parse_args()
-    resource.setrlimit(resource.RLIMIT_CORE,(0,0))
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     out = Path(a.out)
-    out.mkdir(parents=True,exist_ok=True)
-    plan = json.loads(Path(a.plan).read_text())
-    records = [{'id':r['id'],'status':'NOT_RUN','reason':'not yet started'} for r in plan['commands']]
-    stopped = False
+    out.mkdir(parents=True, exist_ok=False)
+    records, state, lock, ledger = [], None, None, None
+    envelope = {'started_utc': utc(), 'plan_sha256': a.plan_sha256,
+                'runner_sha256': sha(__file__), 'status': 'STOPPED',
+                'reason': 'preflight incomplete', 'records': records,
+                'subprocesses_started': 0}
     start = time.monotonic()
     def save():
-        (out/'records.json').write_text(json.dumps({'records':records,'stopped':stopped,'wall':time.monotonic()-start,
-            'counts':{kind:sum(r.get('launched',False) and r.get('kind') == kind for r in records) for kind in ('syntax','object')}},indent=2)+'\n')
-    save()
+        envelope['wall'] = time.monotonic() - start
+        write(out / 'records.json', envelope)
     try:
-        assert sha(a.plan) == a.plan_sha256, 'plan hash differs'
-        assert sum(c['kind'] == 'syntax' for c in plan['commands']) <= 36
-        assert sum(c['kind'] == 'object' for c in plan['commands']) <= 8
-        # Check all declared tools, scripts, and original objects before any
-        # launch. Missing prerequisites stop this whole frozen plan.
-        for item in plan['identities']:
-            assert sha(item['path']) == item['sha256'], 'identity differs: '+item['path']
-        (out/'identity-status.json').write_text(json.dumps({'status':'VERIFIED','identities':plan['identities']},indent=2)+'\n')
-        for i,c in enumerate(plan['commands']):
-            if datetime.datetime.now(datetime.timezone.utc).isoformat() >= plan['deadline_utc']:
-                raise RuntimeError('absolute deadline reached')
-            argv = c['argv']
-            if c['kind'] == 'syntax':
-                assert argv[0] == plan['llvm_as'] and len(argv) == 4 and argv[2] == '-o' and argv[3] == os.devnull
+        require(sha(a.authorization) == a.authorization_sha256, 'authorization hash differs')
+        auth = json.loads(Path(a.authorization).read_text())
+        ledger = Path(auth['ledger'])
+        require(ledger.is_absolute() and ledger.resolve() == ledger and not ledger.is_symlink(), 'ledger path differs')
+        lock = ledger.with_name(ledger.name + '.lock').open('a')
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lock.close()
+            lock = None
+            raise RuntimeError('chain already running')
+        # Missing state is an error, never an invitation to start a new chain.
+        state = json.loads(ledger.read_text())
+        require(state['authorization_sha256'] == a.authorization_sha256, 'ledger authorization differs')
+        require(state['execution'] == auth['execution'], 'ledger execution differs')
+        require(state['status'] == 'SUCCESS', 'chain stopped')
+        require(sha(a.plan) == a.plan_sha256, 'plan hash differs')
+        plan = json.loads(Path(a.plan).read_text())
+        envelope.update(execution=auth['execution'], source_manifest=plan['source_manifest'],
+                        authorization_sha256=a.authorization_sha256,
+                        deadline_utc=auth['deadline_utc'])
+        require(plan['execution'] == auth['execution'], 'execution identity differs')
+        require(plan['authorization_sha256'] == a.authorization_sha256, 'plan authorization differs')
+        require(sha(__file__) == auth['runner_sha256'], 'runner identity differs')
+        require(all(auth['execution'].get(k) not in (None, '', 'UNKNOWN')
+                    for k in ('lane', 'role', 'run', 'session', 'candidate')), 'execution identity unknown')
+        deadline = datetime.datetime.fromisoformat(auth['deadline_utc'])
+        require(deadline.tzinfo is not None, 'deadline timezone missing')
+        require(datetime.datetime.now(datetime.timezone.utc) < deadline, 'absolute deadline reached')
+        if state['last_receipt'] is None:
+            require(plan['prior_receipt'] is None, 'unexpected prior receipt')
+        else:
+            prior = plan['prior_receipt']
+            require(prior is not None, 'prior receipt missing')
+            require(prior == state['last_receipt'], 'prior receipt binding differs')
+            require(sha(prior['path']) == prior['sha256'], 'prior receipt hash differs')
+            receipt = json.loads(Path(prior['path']).read_text())
+            require(receipt['execution'] == auth['execution'], 'prior execution differs')
+            require(receipt['status'] == 'SUCCESS', 'prior receipt stopped')
+            require(receipt['cumulative_counts'] == state['counts'], 'prior counts differ')
+        identities = {x['path']: x['sha256'] for x in plan['identities']}
+        for path, digest in identities.items():
+            require(sha(path) == digest, 'identity differs: ' + path)
+        demand = {'syntax': 0, 'object': 0, 'subprocesses': 0}
+        for c in plan['commands']:
+            kind, argv = c['kind'], c['argv']
+            require(kind in ('syntax', 'object'), 'unknown command kind')
+            if kind == 'syntax':
+                require(argv[0] == plan['llvm_as'] and len(argv) == 4 and argv[2:] == ['-o', os.devnull], 'syntax argv differs')
+                paths = argv[:2]
+                children = 1
             else:
-                assert argv[:2] == ['python3',plan['checker']]
-            r = records[i]
-            r.update({'kind':c['kind'],'argv':argv,'status':'RUNNING','launched':True,'started_utc':datetime.datetime.now(datetime.timezone.utc).isoformat()})
+                require(argv[:2] == ['python3', plan['checker']], 'object argv differs')
+                paths = [plan['checker']]
+                # Checker itself plus its one objdump invocation.
+                children = 2
+            require(all(path in identities for path in paths), 'command identity missing')
+            demand[kind] += 1
+            demand['subprocesses'] += children
+            records.append({'id': c['id'], 'kind': kind, 'status': 'NOT_RUN', 'reason': 'not yet started', 'launched': False})
+        require(len({r['id'] for r in records}) == len(records), 'duplicate command id')
+        for kind, count in demand.items():
+            require(state['counts'][kind] + count <= auth['limits'][kind], 'cumulative budget exceeded: ' + kind)
+        # Reserve this entire batch before spawning. An interruption cannot
+        # recover a SUCCESS ledger or reuse already reserved consumption.
+        state['status'] = 'STOPPED'
+        state['reserved_counts'] = {k: state['counts'][k] + demand[k] for k in demand}
+        write(ledger, state)
+        save()
+        for c, r in zip(plan['commands'], records):
+            require(datetime.datetime.now(datetime.timezone.utc) < deadline, 'absolute deadline reached')
+            r.update(status='RUNNING', reason='command running', launched=True, started_utc=utc(), argv=c['argv'])
+            state['counts'][c['kind']] += 1
+            state['counts']['subprocesses'] += 1 if c['kind'] == 'syntax' else 2
+            write(ledger, state)
+            envelope['subprocesses_started'] += 1
             save()
-            before = time.monotonic()
-            proc = subprocess.run(argv,capture_output=True,text=True,timeout=30)
-            (out/(c['id']+'.stdout')).write_text(proc.stdout)
-            (out/(c['id']+'.stderr')).write_text(proc.stderr)
-            (out/(c['id']+'.rc')).write_text(str(proc.returncode)+'\n')
-            r.update({'rc':proc.returncode,'wall':time.monotonic()-before,'stdout':str(out/(c['id']+'.stdout')),'stderr':str(out/(c['id']+'.stderr'))})
-            assert proc.returncode == c['expected_rc'], 'unexpected rc: '+c['id']
+            proc = subprocess.run(c['argv'], capture_output=True, text=True,
+                                  timeout=min(30, (deadline - datetime.datetime.now(datetime.timezone.utc)).total_seconds()))
+            for suffix, value in (('stdout', proc.stdout), ('stderr', proc.stderr), ('rc', str(proc.returncode) + '\n')):
+                (out / (c['id'] + '.' + suffix)).write_text(value)
+            r.update(rc=proc.returncode, finished_utc=utc())
+            require(proc.returncode == c['expected_rc'], 'unexpected rc: ' + c['id'])
             if c['kind'] == 'object':
                 result = json.loads(Path(c['result']).read_text())
-                failed = [x['axis'] for x in result.get('assertions',[]) if not x['passed']]
-                assert result.get('status') in ('PASS','FAIL') and failed == c['expected_failed_axes'], 'target not reached or failure axes differ: '+c['id']
-                assert all(x['reached'] for x in result['assertions']), 'target assertion not reached'
+                failed = [x['axis'] for x in result.get('assertions', []) if not x['passed']]
+                require(result.get('status') in ('PASS', 'FAIL') and failed == c['expected_failed_axes'], 'target failure axes differ: ' + c['id'])
+                require(all(x['reached'] for x in result['assertions']), 'target assertion not reached')
                 r['assertions'] = result['assertions']
-            r['status'] = 'EXPECTED'
+                # The checker reports actual nested invocation evidence.
+                require(result['objdump_rc'] == 0, 'objdump failed')
+                envelope['subprocesses_started'] += 1
+            r.update(status='EXPECTED', reason='expected result observed')
             save()
-            print(c['id'], 'rc='+str(proc.returncode), 'wall='+str(round(r['wall'],3)),flush=True)
         for item in plan['original_objects']:
-            assert sha(item['path']) == item['sha256'], 'original object changed'
+            require(sha(item['path']) == item['sha256'], 'original object changed')
+        envelope.update(status='SUCCESS', reason='all expected results observed', cumulative_counts=state['counts'])
         save()
+        state.update(status='SUCCESS', last_receipt={'path': str((out / 'records.json').resolve()), 'sha256': sha(out / 'records.json')})
+        write(ledger, state)
+        print('SUCCESS', flush=True)
         return 0
-    except (AssertionError,RuntimeError,OSError,ValueError,subprocess.TimeoutExpired) as e:
-        stopped = True
+    except (RuntimeError, OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as e:
+        reason = str(e)
         for r in records:
             if r['status'] == 'RUNNING':
-                r['status'] = 'UNEXPECTED'
-            if r['status'] == 'NOT_RUN':
-                r['reason'] = 'global stop: '+str(e)
-        (out/'STOP.txt').write_text(str(e)+'\n')
+                r.update(status='UNEXPECTED', reason=reason)
+            elif r['status'] == 'NOT_RUN':
+                r['reason'] = 'chain stop: ' + reason
+        envelope.update(status='STOPPED', reason=reason)
+        if state is not None and lock is not None:
+            state['status'] = 'STOPPED'
+            write(ledger, state)
+            envelope['cumulative_counts'] = state['counts']
+        (out / 'STOP.txt').write_text(reason + '\n')
         save()
-        print('STOP',str(e),flush=True)
+        print('STOP', reason, flush=True)
         return 1
+    finally:
+        if lock is not None:
+            lock.close()
+
 
 if __name__ == '__main__':
     raise SystemExit(main())

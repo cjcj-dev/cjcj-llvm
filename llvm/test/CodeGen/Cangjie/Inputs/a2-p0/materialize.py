@@ -7,6 +7,7 @@ The inherited edge/platform inventory remains present even for unresolved cases.
 import argparse
 import hashlib
 import json
+import datetime
 from pathlib import Path
 
 REF = '466752f2b0a17156dadcb48ce1f6fde9c623f352'
@@ -23,8 +24,15 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--inherited', required=True)
     p.add_argument('--out', required=True)
+    p.add_argument('--execution-identity', required=True)
     a = p.parse_args()
-    inherited = json.loads(Path(a.inherited).read_text())
+    source_manifest = json.loads(Path(a.inherited).read_text())
+    # The inherited namespace is a plan, never the current executor identity.
+    inherited = json.loads(json.dumps(source_manifest))
+    execution = json.loads(Path(a.execution_identity).read_text())
+    for key in ('lane', 'role', 'run', 'session', 'candidate', 'started_utc', 'deadline_utc'):
+        if key not in execution:
+            raise ValueError('execution identity missing: ' + key)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     package = '\n!llvm.module.flags = !{!0}\n!0 = !{i32 1, !"Cangjie_PACKAGE_ID", !"a2_p0"}\n'
@@ -134,7 +142,15 @@ def main():
                                     'MachO': 'UNVERIFIED; paired/subtractor relocation decoder missing'}
     inherited['Q62_configuration_gate_satisfied'] = False
     inherited['p0_counts'] = {'unique_new_ir': len(fixtures), 'syntax_executed':0,'object_checks_executed':0}
-    (out/'execution.json').write_text(json.dumps(inherited,indent=2)+'\n')
+    envelope = {'schema': 'a2-p0-execution-v2', 'execution': execution,
+                'scripts': {'materialize_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()},
+                'source_manifest': {'path': str(Path(a.inherited).resolve()),
+                                    'sha256': hashlib.sha256(Path(a.inherited).read_bytes()).hexdigest(),
+                                    'identity': {k: source_manifest.get(k, 'UNKNOWN') for k in ('lane', 'role', 'created_at')},
+                                    'content': source_manifest},
+                'prepared_plan': inherited, 'status': 'PREPARED_NOT_EXECUTED'}
+    with (out/'execution.json').open('x') as f:
+        f.write(json.dumps(envelope, indent=2) + '\n')
 
 if __name__ == '__main__':
     main()
