@@ -119,6 +119,55 @@ def observations(elf, fn, ins):
     return calls, polls, branches, saved, rets
 
 
+
+def helper_coverage(elf, fn, ins, disassembly, witness, report, assertion):
+    """One AArch64 local BL edge; never merge helper PCs into managed Q/G."""
+    binding = witness['call_owner']
+    reader.require(elf.machine == 183, 'UNRESOLVED_HELPER_ISA')
+    edges = []
+    for at, raw, _ in ins:
+        word = int.from_bytes(raw, 'little')
+        if word & 0xfc000000 != 0x94000000:
+            continue
+        if (fn['section'], at) in elf.relocs:
+            continue
+        disp = word & 0x03ffffff
+        if disp & (1 << 25):
+            disp -= 1 << 26
+        target = at + 4 * disp
+        owners = [f for f in elf.functions if f['section'] == fn['section']
+                  and f['value'] <= target < f['value'] + f['size']]
+        reader.require(len(owners) == 1, 'PRECONDITION_LOCAL_BL_OWNER')
+        edges.append((at, target, owners[0]))
+    reader.require(len(edges) == 1, 'PRECONDITION_SINGLE_LOCAL_BL')
+    at, target, owner = edges[0]
+    owner_ins = reader.instructions(elf, disassembly, owner)
+    helper_calls, _, _, _, _ = observations(elf, owner, owner_ins)
+    matches = {}
+    relocation_calls = {}
+    for pc in helper_calls:
+        call_at = owner['value'] + pc - 4
+        relocation = elf.relocs.get((owner['section'], call_at))
+        if relocation and relocation['type'] == 283 and relocation['addend'] == 0:
+            relocation_calls[pc] = relocation['symbol']['name']
+    for required in witness['required_calls']:
+        matches[required['name']] = sorted(pc for pc, symbol in relocation_calls.items()
+            if re.fullmatch(required['symbol_regex'], symbol))
+    report['helper_coverage'] = dict(owner=owner, local_bl=at, target=target,
+        calls=sorted(helper_calls), call26=relocation_calls, branches=matches,
+        attribute_source='CJBarrierLowering.cpp:1272 replaceFastFunc; no original IR definition; no managed qualification claim')
+    assertion('helper_owner_binding', target == owner['value'] and
+        at - fn['value'] == binding['local_bl_offset'] and
+        owner['name'] == binding['name'] and owner['value'] == binding['entry'] and
+        owner['size'] == binding['size'] and
+        elf.names[binding['section']] == owner['section'] and owner != fn,
+        dict(decoded_target=target, actual_owner=owner, expected=binding))
+    assertion('helper_call_coverage', len(helper_calls) >= witness['min_calls'] and
+        all(len(matches[r['name']]) >= r['min_count'] for r in witness['required_calls']),
+        dict(calls=sorted(helper_calls), call26=relocation_calls, branches=matches,
+             min_calls=witness['min_calls']))
+
+
 def check(a, report):
     identity(a.source, a.source_sha256)
     identity(a.object, a.object_sha256)
@@ -157,13 +206,16 @@ def check(a, report):
     calls, polls, branches, saved, rets = observations(elf, fn, ins)
     # Coverage is a prerequisite, separate from the relation assertions below.
     # A missing branch is UNRESOLVED, never an accepted narrow-cut failure.
-    reader.require(len(calls) >= witness['min_calls'], 'PRECONDITION_CALL_COUNT')
+    if 'call_owner' in witness:
+        helper_coverage(elf, fn, ins, d.stdout, witness, report, assertion)
+    else:
+        reader.require(len(calls) >= witness['min_calls'], 'PRECONDITION_CALL_COUNT')
     reader.require(len(polls) >= witness['min_polls'], 'PRECONDITION_POLL_COUNT')
     def matching_calls(pattern):
         return {pc for pc, refs in calls.items()
                 if any(re.fullmatch(pattern, ref) for ref in refs)}
     branch_calls = {}
-    for required in witness['required_calls']:
+    for required in ([] if 'call_owner' in witness else witness['required_calls']):
         pcs = matching_calls(required['symbol_regex'])
         reader.require(len(pcs) >= required['min_count'],
                        'PRECONDITION_BRANCH: ' + required['name'])
