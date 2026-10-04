@@ -1,5 +1,5 @@
 ; RUN: split-file %s %t
-; RUN: llc --cangjie-pipeline -split-machine-functions %t/mixed.ll -o - | FileCheck %s --check-prefix=SPLIT
+; RUN: llc --cangjie-pipeline -split-machine-functions -mfs-psi-cutoff=0 -mfs-count-threshold=1 %t/mixed.ll -o - | FileCheck %s --check-prefix=SPLIT
 ; RUN: llc --cangjie-pipeline -basic-block-sections=labels %t/cj.ll -o /dev/null
 ; RUN: not --crash llc --cangjie-pipeline -basic-block-sections=all %t/cj.ll -o /dev/null 2>&1 | FileCheck %s --check-prefix=ERROR
 ; RUN: llc -basic-block-sections=all -unique-basic-block-section-names %t/native.ll -o - | FileCheck %s --check-prefix=NATIVE
