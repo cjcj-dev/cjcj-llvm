@@ -3465,6 +3465,16 @@ void X86AsmPrinter::emitCJThrowException(const MachineInstr *MI,
   MCInst CallThrowException = MCInstBuilder(Opcode).addOperand(
       MCInstLowering.LowerMachineOperand(MI, MOSym).getValue());
   EmitAndCountInstruction(CallThrowException);
+  // This expansion owns the saved return PC but has no root map. Keep these
+  // two facts independent, as for the existing ordinary throw call.
+  if (MF->getFunction().hasCangjieGC() &&
+      isStatepointOpcode(MI->getOpcode()) &&
+      MI->getOpcode() != TargetOpcode::STATEPOINT_TAIL_CALL) {
+    auto *ReturnPC = createTempSymbol("cj_call_return");
+    OutStreamer->emitLabel(ReturnPC);
+    CJQualification.Sites.push_back(
+        {ReturnPC, 1, uint16_t(CJInstructionLayout.lookup(MI))});
+  }
   StackMaps::CallsiteInfo CSInfo;
   SM.updateOrInsertFnInfo(CurrentFnSym, CSInfo);
 }
