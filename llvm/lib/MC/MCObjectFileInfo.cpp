@@ -358,10 +358,12 @@ void MCObjectFileInfo::initMachOMCObjectFileInfo(const Triple &T) {
   CJReflectGenericTISection = Ctx->getMachOSection(
       "__CJ_METADATA", "__cjref_gi", 0, SectionKind::getReadOnly());
 
-  CJMethodInfoSection = Ctx->getMachOSection("__CJ_METADATA", "__cjmethodinfo",
-                                             0, SectionKind::getReadOnly());
-  CJStackMapSection = Ctx->getMachOSection("__CJ_METADATA", "__cjstackmap", 0,
-                                           SectionKind::getReadOnly());
+  CJMethodInfoSection = Ctx->getMachOSection(
+      "__CJ_METADATA", "__cjmethodinfo", MachO::S_ATTR_LIVE_SUPPORT,
+      SectionKind::getReadOnly());
+  CJStackMapSection = Ctx->getMachOSection(
+      "__CJ_METADATA", "__cjstackmap", MachO::S_ATTR_LIVE_SUPPORT,
+      SectionKind::getReadOnly());
   CJGCTibSection = Ctx->getMachOSection("__CJ_METADATA", "__cjgctib", 0,
                                         SectionKind::getReadOnly());
   CJGCRootSection = Ctx->getMachOSection("__CJ_METADATA", "__cjgcroots",

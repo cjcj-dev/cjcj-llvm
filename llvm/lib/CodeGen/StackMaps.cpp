@@ -7,6 +7,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/StackMaps.h"
+#include "llvm/BinaryFormat/COFF.h"
+#include "llvm/BinaryFormat/ELF.h"
+#include "llvm/BinaryFormat/MachO.h"
 #include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
@@ -28,6 +31,8 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Statepoint.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCSectionCOFF.h"
+#include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
@@ -1272,7 +1277,29 @@ void StackMaps::emitCangjieCompressedStackMaps(MCStreamer &OS) {
   bool IsWindows = TT.isOSWindows();
   OffsetStepSize = TT.isARM() ? 4 : 8;
   FuncPtrSize = TT.isARM() ? 4 : 8;
+  MCSection *DefaultSection = OS.getCurrentSectionOnly();
   for (auto const &FR : FnInfos) {
+    MCSection *FunctionSection = DefaultSection;
+    const Function *F = FR.second.CJFunction;
+    if (F && F->hasComdat()) {
+      StringRef Group = F->getComdat()->getName();
+      if (TT.isOSBinFormatELF()) {
+        FunctionSection = OutContext.getELFSection(
+            ".cjmetadata.stackmap." + Group, ELF::SHT_PROGBITS,
+            ELF::SHF_ALLOC | ELF::SHF_WRITE | ELF::SHF_GROUP, 0, Group, false);
+      } else if (TT.isOSBinFormatCOFF()) {
+        auto *Base = OutContext.getCOFFSection(
+            ".cjsm$" + Group,
+            COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
+                COFF::IMAGE_SCN_MEM_WRITE,
+            SectionKind::getReadOnly());
+        FunctionSection =
+            OutContext.getAssociativeCOFFSection(Base, FR.first);
+      }
+    }
+    OS.switchSection(FunctionSection);
+    if (TT.isOSBinFormatMachO())
+      OS.emitLabel(OutContext.createLinkerPrivateTempSymbol());
     MCSymbol *StackmapFunction =
         OutContext.getOrCreateSymbol(".Lstack_map." + FR.first->getName());
     OS.emitLabel(StackmapFunction);

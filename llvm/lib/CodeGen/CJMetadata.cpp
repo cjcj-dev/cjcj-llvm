@@ -286,6 +286,7 @@ void CJMetadataInfo::recordCurrentFunc() {
   if (CJPipeline) {
     StackMaps::CallsiteInfo CSInfo;
     SM.updateOrInsertFnInfo(AP.CurrentFnSym, CSInfo);
+    SM.getFnInfos()[AP.CurrentFnSym].CJFunction = &F;
   }
 
   // pc + methodinfo. stackmap symbol
@@ -548,6 +549,8 @@ void CJMetadataInfo::emitDatas(const MCSymbol *FuncName,
     DescSymbol =
         Context.getOrCreateSymbol(".Lmethod_desc." + FuncName->getName());
   }
+  if (IsMachO)
+    OS.emitLabel(Context.createLinkerPrivateTempSymbol());
   OS.emitLabel(DescSymbol);
   // Emit StackMap offset
   MCSymbol *SMSymbol =
@@ -634,14 +637,17 @@ void CJMetadataInfo::emitMethodInfoTable() {
           ".cjmetadata.methodinfo." + Group, ELF::SHT_PROGBITS,
           ELF::SHF_ALLOC | ELF::SHF_WRITE | ELF::SHF_GROUP, 0, Group, false);
     } else if (TT.isOSBinFormatCOFF()) {
-      CJComdatMethodInfoSection = Context.getCOFFSection(
-          ".cjmthd.",
+      auto *Base = Context.getCOFFSection(
+          ".cjmthd$" + Group,
           COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
               COFF::IMAGE_SCN_MEM_WRITE,
           SectionKind::getReadOnly());
+      CJComdatMethodInfoSection =
+          Context.getAssociativeCOFFSection(Base, std::get<0>(Method));
     } else if (TT.isOSBinFormatMachO()) {
       CJComdatMethodInfoSection = Context.getMachOSection(
-          "__CJ_METADATA", "__cjmethodinfo_", 0, SectionKind::getReadOnly());
+          "__CJ_METADATA", "__cjmethodinfo", MachO::S_ATTR_LIVE_SUPPORT,
+          SectionKind::getReadOnly());
     } else {
       report_fatal_error("unsupport object format!");
     }
