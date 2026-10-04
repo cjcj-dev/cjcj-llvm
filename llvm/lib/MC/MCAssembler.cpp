@@ -100,6 +100,7 @@ void MCAssembler::reset() {
   Symbols.clear();
   IndirectSymbols.clear();
   DataRegions.clear();
+  CJQualifications.clear();
   LinkerOptions.clear();
   FileNames.clear();
   ThumbFuncs.clear();
@@ -806,6 +807,118 @@ MCAssembler::handleFixup(const MCAsmLayout &Layout, MCFragment &F,
   return std::make_tuple(Target, FixedValue, IsResolved);
 }
 
+bool MCAssembler::updateCangjieQualifications(const MCAsmLayout &Layout,
+                                              bool VerifyOnly) {
+  bool Changed = false;
+  for (auto &Record : CJQualifications) {
+    const auto &Info = Record.second;
+    auto Fail = [&](StringRef Reason) {
+      getContext().reportError(SMLoc(), Twine("Cangjie AOT qualification for ") +
+                                          Info.Entry->getName() + ": " + Reason);
+    };
+    if (!Info.Entry->isInSection() || !Info.End->isInSection() ||
+        &Info.Entry->getSection() != &Info.End->getSection()) {
+      Fail("function does not have one text extent");
+      return false;
+    }
+    uint64_t Entry = Layout.getSymbolOffset(*Info.Entry);
+    uint64_t End = Layout.getSymbolOffset(*Info.End);
+    if (End <= Entry || End - Entry > UINT32_MAX) {
+      Fail("invalid function extent");
+      return false;
+    }
+    auto Offset = [&](const MCSymbol *PC, uint64_t &Value) {
+      if (!PC->isInSection() || &PC->getSection() != &Info.Entry->getSection())
+        return false;
+      Value = Layout.getSymbolOffset(*PC);
+      if (Value < Entry || Value > End)
+        return false;
+      Value -= Entry;
+      return true;
+    };
+    SmallVector<std::pair<uint32_t, uint32_t>, 16> Events;
+    for (const auto &Event : Info.Events) {
+      uint64_t PC;
+      if ((Event.Bits & ~3U) || !Offset(Event.PC, PC) ||
+          (!Events.empty() && PC < Events.back().first)) {
+        Fail("invalid or unordered machine layout event");
+        return false;
+      }
+      if (!Events.empty() && PC == Events.back().first)
+        Events.back().second = Event.Bits;
+      else
+        Events.emplace_back(PC, Event.Bits);
+    }
+    if (Events.empty() || Events.front().first != 0) {
+      Fail("missing entry state");
+      return false;
+    }
+    SmallVector<std::pair<uint32_t, uint32_t>, 16> Transitions;
+    for (const auto &Event : Events) {
+      if (Event.first == End - Entry)
+        continue; // A boundary at the end describes no instruction interval.
+      if (Transitions.empty() || Transitions.back().second != Event.second)
+        Transitions.push_back(Event);
+    }
+    struct SiteRow { uint32_t PC; uint16_t Kind, Bits; };
+    SmallVector<SiteRow, 8> Sites;
+    for (const auto &Site : Info.Sites) {
+      uint64_t PC;
+      if (Site.Kind < 1 || Site.Kind > 3 || (Site.Bits & ~3U) ||
+          !Offset(Site.PC, PC)) {
+        Fail("invalid saved site");
+        return false;
+      }
+      Sites.push_back({uint32_t(PC), Site.Kind, Site.Bits});
+    }
+    std::sort(Sites.begin(), Sites.end(), [](const SiteRow &A, const SiteRow &B) {
+      return std::tie(A.PC, A.Kind) < std::tie(B.PC, B.Kind);
+    });
+    for (unsigned I = 1; I < Sites.size(); ++I) {
+      if (Sites[I - 1].PC == Sites[I].PC &&
+          Sites[I - 1].Kind == Sites[I].Kind) {
+        Fail("duplicate saved site");
+        return false;
+      }
+    }
+    uint64_t Total = 16 + 8ULL * (Transitions.size() + Sites.size());
+    if (Total > UINT32_MAX) {
+      Fail("qualification exceeds its encoding");
+      return false;
+    }
+    SmallVector<char, 128> Bytes;
+    raw_svector_ostream OS(Bytes);
+    auto U32 = [&](uint32_t V) {
+      support::endian::write<uint32_t>(OS, V, getBackend().Endian);
+    };
+    U32(0x31514a43);
+    U32(Total);
+    U32(Transitions.size());
+    U32(Sites.size());
+    for (const auto &Transition : Transitions) {
+      U32(Transition.first);
+      U32(Transition.second);
+    }
+    for (const auto &Site : Sites) {
+      U32(Site.PC);
+      support::endian::write<uint16_t>(OS, Site.Kind, getBackend().Endian);
+      support::endian::write<uint16_t>(OS, Site.Bits, getBackend().Endian);
+    }
+    auto &Contents = Record.first->getContents();
+    if (Contents.size() != Bytes.size() ||
+        !std::equal(Contents.begin(), Contents.end(), Bytes.begin())) {
+      if (VerifyOnly) {
+        Fail("backend changed qualification after final layout");
+        return false;
+      }
+      // Content-only changes need no relaxation; sizes do.
+      Changed |= Contents.size() != Bytes.size();
+      Contents.assign(Bytes.begin(), Bytes.end());
+    }
+  }
+  return Changed;
+}
+
 void MCAssembler::layout(MCAsmLayout &Layout) {
   assert(getBackendPtr() && "Expected assembler backend");
   DEBUG_WITH_TYPE("mc-dump", {
@@ -834,7 +947,13 @@ void MCAssembler::layout(MCAsmLayout &Layout) {
   }
 
   // Layout until everything fits.
-  while (layoutOnce(Layout)) {
+  while (true) {
+    bool Changed = layoutOnce(Layout);
+    Changed |= updateCangjieQualifications(Layout, false);
+    if (getContext().hadError())
+      return;
+    if (!Changed)
+      break;
     if (getContext().hadError())
       return;
     // Size of fragments in one section can depend on the size of fragments in
@@ -850,6 +969,9 @@ void MCAssembler::layout(MCAsmLayout &Layout) {
 
   // Finalize the layout, including fragment lowering.
   finishLayout(Layout);
+  updateCangjieQualifications(Layout, true);
+  if (getContext().hadError())
+    return;
 
   DEBUG_WITH_TYPE("mc-dump", {
       errs() << "assembler backend - final-layout\n--\n";
