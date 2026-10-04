@@ -892,11 +892,11 @@ private:
   emitInlineAsm(StringRef Str, const MCSubtargetInfo &STI,
                 const MCTargetOptions &MCOptions,
                 const MDNode *LocMDNode = nullptr,
-                InlineAsm::AsmDialect AsmDialect = InlineAsm::AD_ATT) const;
+                InlineAsm::AsmDialect AsmDialect = InlineAsm::AD_ATT);
 
   /// This method formats and emits the specified machine instruction that is an
   /// inline asm.
-  void emitInlineAsm(const MachineInstr *MI) const;
+  void emitInlineAsm(const MachineInstr *MI);
 
   /// Add inline assembly info to the diagnostics machinery, so we can
   /// emit file and position info. Returns SrcMgr memory buffer position.

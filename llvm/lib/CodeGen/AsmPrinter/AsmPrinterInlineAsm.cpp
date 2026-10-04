@@ -70,7 +70,7 @@ unsigned AsmPrinter::addInlineAsmDiagBuffer(StringRef AsmStr,
 void AsmPrinter::emitInlineAsm(StringRef Str, const MCSubtargetInfo &STI,
                                const MCTargetOptions &MCOptions,
                                const MDNode *LocMDNode,
-                               InlineAsm::AsmDialect Dialect) const {
+                               InlineAsm::AsmDialect Dialect) {
   assert(!Str.empty() && "Can't emit empty inline asm block");
 
   // Remember if the buffer is nul terminated or not so we can avoid a copy.
@@ -357,7 +357,7 @@ static void EmitInlineAsmStr(const char *AsmStr, const MachineInstr *MI,
 
 /// This method formats and emits the specified machine instruction that is an
 /// inline asm.
-void AsmPrinter::emitInlineAsm(const MachineInstr *MI) const {
+void AsmPrinter::emitInlineAsm(const MachineInstr *MI) {
   assert(MI->isInlineAsm() && "printInlineAsm only works on inline asms");
 
   // Count the number of register definitions to find the asm string.
