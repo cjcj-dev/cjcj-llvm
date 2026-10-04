@@ -52,10 +52,12 @@ def main():
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=False)
     records, state, lock, ledger = [], None, None, None
+    state_bound = False
     envelope = {'started_utc': utc(), 'plan_sha256': a.plan_sha256,
                 'runner_sha256': sha(__file__), 'status': 'STOPPED',
                 'reason': 'preflight incomplete', 'records': records,
-                'subprocesses_started': 0}
+                'subprocesses_started': 0,
+                'budget_counts_semantics': 'conservative charged slots; object reserves checker plus objdump'}
     start = time.monotonic()
     def save():
         envelope['wall'] = time.monotonic() - start
@@ -76,6 +78,9 @@ def main():
         state = json.loads(ledger.read_text())
         require(state['authorization_sha256'] == a.authorization_sha256, 'ledger authorization differs')
         require(state['execution'] == auth['execution'], 'ledger execution differs')
+        state_bound = True
+        require(0 <= auth['limits']['syntax'] <= 36 and 0 <= auth['limits']['object'] <= 8
+                and 0 <= auth['limits']['subprocesses'] <= 52, 'authorization exceeds P0 ceiling')
         require(state['status'] == 'SUCCESS', 'chain stopped')
         require(sha(a.plan) == a.plan_sha256, 'plan hash differs')
         plan = json.loads(Path(a.plan).read_text())
@@ -143,16 +148,20 @@ def main():
             for suffix, value in (('stdout', proc.stdout), ('stderr', proc.stderr), ('rc', str(proc.returncode) + '\n')):
                 (out / (c['id'] + '.' + suffix)).write_text(value)
             r.update(rc=proc.returncode, finished_utc=utc())
+            if c['kind'] == 'object':
+                # Account a nested launch even when its target result fails.
+                r['nested_subprocesses_started'] = 'UNKNOWN'
+                result = json.loads(Path(c['result']).read_text())
+                r['nested_subprocesses_started'] = int('objdump_command' in result)
+                envelope['subprocesses_started'] += r['nested_subprocesses_started']
             require(proc.returncode == c['expected_rc'], 'unexpected rc: ' + c['id'])
             if c['kind'] == 'object':
-                result = json.loads(Path(c['result']).read_text())
                 failed = [x['axis'] for x in result.get('assertions', []) if not x['passed']]
                 require(result.get('status') in ('PASS', 'FAIL') and failed == c['expected_failed_axes'], 'target failure axes differ: ' + c['id'])
                 require(all(x['reached'] for x in result['assertions']), 'target assertion not reached')
                 r['assertions'] = result['assertions']
                 # The checker reports actual nested invocation evidence.
                 require(result['objdump_rc'] == 0, 'objdump failed')
-                envelope['subprocesses_started'] += 1
             r.update(status='EXPECTED', reason='expected result observed')
             save()
         for item in plan['original_objects']:
@@ -171,7 +180,7 @@ def main():
             elif r['status'] == 'NOT_RUN':
                 r['reason'] = 'chain stop: ' + reason
         envelope.update(status='STOPPED', reason=reason)
-        if state is not None and lock is not None:
+        if state_bound and lock is not None:
             state['status'] = 'STOPPED'
             write(ledger, state)
             envelope['cumulative_counts'] = state['counts']
