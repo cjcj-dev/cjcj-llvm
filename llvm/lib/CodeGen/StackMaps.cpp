@@ -1326,11 +1326,13 @@ void StackMaps::emitCangjieCompressedStackMaps(MCStreamer &OS) {
             : isAArch64() ? AArch64CalleeSavedReg : ARMCalleeSavedReg);
     prepareCompressedData(Data, FR.second, CSIdxStart, CSIdxEnd);
     emitCangjieCompressedData(OS, Data);
-    OS.emitValueToAlignment(4);
-    auto *Qualification = OutContext.getOrCreateSymbol(
-        ".Lcj_qualification." + FR.first->getName());
-    OS.emitLabel(Qualification);
-    OS.emitCangjieQualification(FR.second.CJQualification);
+    if (FR.second.CJFunction) {
+      OS.emitValueToAlignment(4);
+      auto *Qualification = OutContext.getOrCreateSymbol(
+          ".Lcj_qualification." + FR.first->getName());
+      OS.emitLabel(Qualification);
+      OS.emitCangjieQualification(FR.second.CJQualification);
+    }
     CSIdxStart = CSIdxEnd;
   }
   OS.addBlankLine();
