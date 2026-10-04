@@ -22,6 +22,6 @@ zero_padding:
 zero_end:
 .byte 0x90
 end:
-.section .cjmetadata.stackmap,"a",@progbits
+.section .cjmetadata.stackmap,"aw",@progbits
 .p2align 2
 .cj_aot_qualification entry, end, 6, 2, entry, 0, slot, 1, padding, 0, ready, 3, zero_padding, 0, zero_end, 3, end, 1, 3, ready, 2, 3

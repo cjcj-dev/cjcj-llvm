@@ -12,14 +12,14 @@ entry:
 later:
 .byte 0x90
 end:
-.section .cjmetadata.stackmap,"a",@progbits
+.section .cjmetadata.stackmap,"aw",@progbits
 .cj_aot_qualification entry, end, 1, 0, later, 3
 #--- duplicate.s
 .text
 entry:
 .byte 0x90
 end:
-.section .cjmetadata.stackmap,"a",@progbits
+.section .cjmetadata.stackmap,"aw",@progbits
 .cj_aot_qualification entry, end, 1, 2, entry, 0, end, 1, 3, end, 1, 3
 #--- extent.s
 .text
@@ -27,5 +27,5 @@ entry:
 .byte 0x90
 .section .text.cold,"ax",@progbits
 end:
-.section .cjmetadata.stackmap,"a",@progbits
+.section .cjmetadata.stackmap,"aw",@progbits
 .cj_aot_qualification entry, end, 1, 0, entry, 0
