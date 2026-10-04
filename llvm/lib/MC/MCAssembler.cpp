@@ -38,6 +38,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <cstdint>
+#include <map>
 #include <tuple>
 #include <utility>
 
@@ -853,8 +854,33 @@ bool MCAssembler::updateCangjieQualifications(const MCAsmLayout &Layout,
       Fail("missing entry state");
       return false;
     }
+    // Target relaxation can insert alignment fragments without an explicit
+    // AsmPrinter event (e.g. x86 branch boundary alignment). Overlay their
+    // actual final intervals, never a predicted alignment size.
+    std::map<uint32_t, uint32_t> LayoutStates(Events.begin(), Events.end());
+    for (const auto &Fragment : Info.Entry->getSection()) {
+      auto Kind = Fragment.getKind();
+      if (Kind != MCFragment::FT_Align &&
+          Kind != MCFragment::FT_BoundaryAlign &&
+          Kind != MCFragment::FT_Org && Kind != MCFragment::FT_Fill &&
+          Kind != MCFragment::FT_Nops)
+        continue;
+      uint64_t Begin = Layout.getFragmentOffset(&Fragment);
+      uint64_t Size = computeFragmentSize(Layout, Fragment);
+      if (!Size || Begin >= End || Begin + Size <= Entry)
+        continue;
+      uint32_t First = std::max(Begin, Entry) - Entry;
+      uint32_t Last = std::min(Begin + Size, End) - Entry;
+      auto AtEnd = LayoutStates.upper_bound(Last);
+      uint32_t Resume = std::prev(AtEnd)->second;
+      auto FirstEvent = LayoutStates.lower_bound(First);
+      auto LastEvent = LayoutStates.lower_bound(Last);
+      LayoutStates.erase(FirstEvent, LastEvent);
+      LayoutStates[First] = 0;
+      LayoutStates[Last] = Resume;
+    }
     SmallVector<std::pair<uint32_t, uint32_t>, 16> Transitions;
-    for (const auto &Event : Events) {
+    for (const auto &Event : LayoutStates) {
       if (Event.first == End - Entry)
         continue; // A boundary at the end describes no instruction interval.
       if (Transitions.empty() || Transitions.back().second != Event.second)

@@ -1489,6 +1489,17 @@ static bool needFuncLabelsForEHOrDebugInfo(const MachineFunction &MF) {
 
 /// EmitFunctionBody - This method emits the body and trailer for a
 /// function.
+uint32_t AsmPrinter::getCangjieLayoutClearBits(const MachineInstr &) const {
+  report_fatal_error("Cangjie AOT layout is unavailable for this target");
+}
+
+void AsmPrinter::emitCangjieLayoutState(uint32_t Bits) {
+  CJLayoutBits = Bits;
+  auto *PC = createTempSymbol("cj_layout");
+  OutStreamer->emitLabel(PC);
+  CJQualification.Events.push_back({PC, Bits});
+}
+
 void AsmPrinter::emitFunctionBody() {
   int NumInstsInFunction = 0;
   emitFunctionHeader();
@@ -1519,13 +1530,68 @@ void AsmPrinter::emitFunctionBody() {
   bool HasAnyRealCode = false;
 
   bool CangjieSrc = MF->getFunction().hasCangjieGC();
+  DenseMap<const MachineBasicBlock *, uint32_t> CJBlockIn, CJBlockOut;
+  SmallPtrSet<const MachineBasicBlock *, 32> CJReachable;
+  auto CJTransfer = [&](const MachineInstr &MI, uint32_t Bits) {
+    Bits &= ~getCangjieLayoutClearBits(MI);
+    if (MI.getExtFlag(MachineInstr::CJAOTSlotReady))
+      Bits |= 1;
+    if (MI.getExtFlag(MachineInstr::CJAOTFrameReady))
+      Bits |= 2;
+    return Bits;
+  };
   if (CangjieSrc) {
+    CJQualification = MCCangjieQualification();
+    CJQualification.Entry = getFunctionBegin();
+    CJInstructionLayout.clear();
+    SmallVector<const MachineBasicBlock *, 16> Work;
+    Work.push_back(&MF->front());
+    for (const auto &BB : *MF)
+      if (BB.isEHFuncletEntry())
+        Work.push_back(&BB);
+    while (!Work.empty()) {
+      const auto *BB = Work.pop_back_val();
+      if (!CJReachable.insert(BB).second)
+        continue;
+      for (const auto *Succ : BB->successors())
+        Work.push_back(Succ);
+    }
+    // Greatest fixed point of the must-state meet. External entry and
+    // independently entered funclets have no established layout.
+    for (const auto &BB : *MF)
+      CJBlockIn[&BB] = CJBlockOut[&BB] = 3;
+    bool Changed;
+    do {
+      Changed = false;
+      for (const auto &BB : *MF) {
+        uint32_t In = 3;
+        if (!CJReachable.count(&BB) || BB.isEntryBlock() ||
+            BB.isEHFuncletEntry() || BB.pred_empty())
+          In = 0;
+        else
+          for (const auto *Pred : BB.predecessors())
+            In &= CJBlockOut[Pred];
+        uint32_t Out = In;
+        for (const auto &MI : BB)
+          Out = CJTransfer(MI, Out);
+        Changed |= CJBlockIn[&BB] != In || CJBlockOut[&BB] != Out;
+        CJBlockIn[&BB] = In;
+        CJBlockOut[&BB] = Out;
+      }
+    } while (Changed);
+    CJQualification.Events.push_back({getFunctionBegin(), 0});
+    emitCangjieLayoutState(0);
     MF->setEpilogueLabel(nullptr);
   }
   bool CanDoExtraAnalysis = ORE->allowExtraAnalysis(DEBUG_TYPE);
   for (auto &MBB : *MF) {
-    // Print a label for the basic block.
+    // Alignment bytes between blocks have no instruction layout. A zero-size
+    // alignment collapses these symbols and MC retains the following state.
+    if (CangjieSrc)
+      emitCangjieLayoutState(0);
     emitBasicBlockStart(MBB);
+    if (CangjieSrc)
+      emitCangjieLayoutState(CJBlockIn[&MBB]);
     DenseMap<StringRef, unsigned> MnemonicCounts;
     for (auto &MI : MBB) {
       // Print the assembly for the instruction.
@@ -1533,6 +1599,13 @@ void AsmPrinter::emitFunctionBody() {
           !MI.isDebugInstr()) {
         HasAnyRealCode = true;
         ++NumInstsInFunction;
+      }
+
+      if (CangjieSrc) {
+        uint32_t Before = CJLayoutBits & ~getCangjieLayoutClearBits(MI);
+        if (Before != CJLayoutBits)
+          emitCangjieLayoutState(Before);
+        CJInstructionLayout[&MI] = Before;
       }
 
       // If there is a pre-instruction symbol, emit a label for it here.
@@ -1634,6 +1707,21 @@ void AsmPrinter::emitFunctionBody() {
         break;
       }
 
+      if (CangjieSrc) {
+        // Ordinary hardware calls without a root map still have a real return
+        // site for EH/trace. Statepoint labels are recorded by StackMaps.
+        if (MI.isCall() && !MI.isPseudo() &&
+            !isStatepointOpcode(MI.getOpcode())) {
+          auto *ReturnPC = createTempSymbol("cj_call_return");
+          OutStreamer->emitLabel(ReturnPC);
+          CJQualification.Sites.push_back(
+              {ReturnPC, 1, uint16_t(CJInstructionLayout.lookup(&MI))});
+        }
+        uint32_t After = CJTransfer(MI, CJLayoutBits);
+        if (After != CJLayoutBits)
+          emitCangjieLayoutState(After);
+      }
+
       // If there is a post-instruction symbol, emit a label for it here.
       if (MCSymbol *S = MI.getPostInstrSymbol())
         OutStreamer->emitLabel(S);
@@ -1702,6 +1790,7 @@ void AsmPrinter::emitFunctionBody() {
   }
 
   if (CangjieSrc) {
+    emitCangjieLayoutState(0);
     // emit stackgrow or stack_overflow_error
     for (auto SC: StackCheckMap) {
       for (const HandlerInfo &HI : Handlers) {
@@ -1783,6 +1872,8 @@ void AsmPrinter::emitFunctionBody() {
     // Create a symbol for the end of function.
     CurrentFnEnd = createTempSymbol("func_end");
     OutStreamer->emitLabel(CurrentFnEnd);
+    if (CangjieSrc)
+      CJQualification.End = CurrentFnEnd;
   }
 
   // If the target wants a .size directive for the size of the function, emit

@@ -1472,6 +1472,30 @@ int X86AsmPrinter::emitStackGrow(const MachineInstr &MI) {
 // load tls data
 //   testq  $1, %rax
 //   jne    Label
+uint32_t X86AsmPrinter::getCangjieLayoutClearBits(
+    const MachineInstr &MI) const {
+  if (MI.isMetaInstruction())
+    return 0;
+  const auto *TRI = MF->getSubtarget().getRegisterInfo();
+  bool FPWrite = MI.modifiesRegister(X86::RBP, TRI);
+  bool SPWrite = MI.modifiesRegister(X86::RSP, TRI);
+  bool Destroy = MI.getFlag(MachineInstr::FrameDestroy) ||
+                 MI.getExtFlag(MachineInstr::EpilogueIns);
+  if (Destroy) {
+    if (FPWrite)
+      return 3;
+    if (SPWrite || MI.mayLoad())
+      return 2;
+  }
+  if (!MI.getFlag(MachineInstr::FrameSetup) && !MI.isCall()) {
+    if (FPWrite)
+      return 3;
+    if (SPWrite)
+      return 2;
+  }
+  return 0;
+}
+
 void X86AsmPrinter::emitCJReturnPoll() {
   // HotSpot x86.ad:1963-1978: the caller frame is exposed before this poll.
   auto *PC = OutContext.createTempSymbol("cj_return_pc");

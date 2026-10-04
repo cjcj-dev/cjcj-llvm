@@ -1041,10 +1041,25 @@ void StackMaps::recordStatepoint(const MCSymbol &L, const MachineInstr &MI,
     OpersInfo.MOE = MI.operands_end();
   }
 
+  if (AP.MF->getFunction().hasCangjieGC() &&
+      isStatepointOpcode(MI.getOpcode()) &&
+      MI.getOpcode() != TargetOpcode::STATEPOINT_TAIL_CALL) {
+    uint16_t Kind =
+        OpersInfo.ID == Cangjie::CJStatepointID::StackCheck ||
+                OpersInfo.ID == Cangjie::CJStatepointID::Safepoint ||
+                OpersInfo.ID == Cangjie::CJStatepointID::SafepointStub
+            ? 2
+            : 1;
+    // This is the original map PC, including out-of-line saved paths. It
+    // describes the suspended CJ frame, not the next emitted instruction.
+    AP.CJQualification.Sites.push_back(
+        {&L, Kind, uint16_t(AP.CJInstructionLayout.lookup(&MI))});
+  }
   recordStackMapOpers(L, MI, OpersInfo, false, RecordAllRefInReg);
 }
 
 void StackMaps::recordCJReturnMap(const MCSymbol &PC) {
+  AP.CJQualification.Sites.push_back({&PC, 3, 0});
   auto &Ctx = AP.OutStreamer->getContext();
   CallsiteInfo Info;
   Info.CSOffsetExpr = MCBinaryExpr::createSub(
@@ -1311,6 +1326,11 @@ void StackMaps::emitCangjieCompressedStackMaps(MCStreamer &OS) {
             : isAArch64() ? AArch64CalleeSavedReg : ARMCalleeSavedReg);
     prepareCompressedData(Data, FR.second, CSIdxStart, CSIdxEnd);
     emitCangjieCompressedData(OS, Data);
+    OS.emitValueToAlignment(4);
+    auto *Qualification = OutContext.getOrCreateSymbol(
+        ".Lcj_qualification." + FR.first->getName());
+    OS.emitLabel(Qualification);
+    OS.emitCangjieQualification(FR.second.CJQualification);
     CSIdxStart = CSIdxEnd;
   }
   OS.addBlankLine();

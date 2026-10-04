@@ -16,12 +16,14 @@
 #define LLVM_CODEGEN_ASMPRINTER_H
 
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/CodeGen/AsmPrinterHandler.h"
 #include "llvm/CodeGen/DwarfStringPoolEntry.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/MC/MCCangjieQualification.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cstdint>
 #include <memory>
@@ -99,6 +101,15 @@ public:
 
   /// The current machine function.
   MachineFunction *MF = nullptr;
+
+  MCCangjieQualification CJQualification;
+  uint32_t CJLayoutBits = 0;
+  DenseMap<const MachineInstr *, uint32_t> CJInstructionLayout;
+
+  // Target physical register effects clear qualification before execution.
+  virtual uint32_t getCangjieLayoutClearBits(const MachineInstr &MI) const;
+  void emitCangjieLayoutState(uint32_t Bits);
+
 
   /// This is a pointer to the current MachineModuleInfo.
   MachineModuleInfo *MMI = nullptr;

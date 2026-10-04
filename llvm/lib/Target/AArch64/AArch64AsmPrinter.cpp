@@ -266,6 +266,7 @@ private:
   int emitStackOverflowCall(const MachineInstr &MI);
   void emitSafepoint(const MachineInstr &MI);
   void emitCJSafepointInlineCheck(const MachineInstr &MI);
+  uint32_t getCangjieLayoutClearBits(const MachineInstr &MI) const override;
   void emitCJReturnPoll();
   void emitCJReturnPollStubs();
   int emitCJSafepointInlineCall(unsigned Index) override;
@@ -2334,6 +2335,29 @@ void AArch64AsmPrinter::emitMetadataAddress() {
 // Label:
 //  ...
 // <<<<<<<<<<<<<<<<<<<
+uint32_t AArch64AsmPrinter::getCangjieLayoutClearBits(
+    const MachineInstr &MI) const {
+  if (MI.isMetaInstruction())
+    return 0;
+  const auto *TRI = MF->getSubtarget().getRegisterInfo();
+  bool FPWrite = MI.modifiesRegister(AArch64::FP, TRI);
+  bool SPWrite = MI.modifiesRegister(AArch64::SP, TRI);
+  if (MI.getFlag(MachineInstr::FrameDestroy)) {
+    // PAC authentication and CFI do not restore FP/SP or saved registers.
+    if (FPWrite)
+      return 3;
+    if (SPWrite || MI.mayLoad())
+      return 2;
+  }
+  if (!MI.getFlag(MachineInstr::FrameSetup) && !MI.isCall()) {
+    if (FPWrite)
+      return 3;
+    if (SPWrite)
+      return 2;
+  }
+  return 0;
+}
+
 void AArch64AsmPrinter::emitCJReturnPoll() {
   // HotSpot aarch64.ad:1869-1884: compare only after removing the frame.
   auto *PC = OutContext.createTempSymbol("cj_return_pc");

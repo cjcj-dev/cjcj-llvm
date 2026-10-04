@@ -19,6 +19,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "llvm/MC/MCCangjieQualification.h"
+
 namespace llvm {
 
 class AsmPrinter;
@@ -362,6 +364,7 @@ public:
     // Bind compressed data to the same winning text/descriptor COMDAT.
     // Recorded while the MachineFunction is available, including leafs.
     const Function *CJFunction = nullptr;
+    MCCangjieQualification CJQualification;
 
     FunctionInfo() = default;
     FunctionInfo(uint64_t StackSize, std::map<unsigned, int> &Info)

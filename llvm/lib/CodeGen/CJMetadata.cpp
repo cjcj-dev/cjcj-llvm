@@ -286,7 +286,9 @@ void CJMetadataInfo::recordCurrentFunc() {
   if (CJPipeline) {
     StackMaps::CallsiteInfo CSInfo;
     SM.updateOrInsertFnInfo(AP.CurrentFnSym, CSInfo);
-    SM.getFnInfos()[AP.CurrentFnSym].CJFunction = &F;
+    auto &Info = SM.getFnInfos()[AP.CurrentFnSym];
+    Info.CJFunction = &F;
+    Info.CJQualification = AP.CJQualification;
   }
 
   // pc + methodinfo. stackmap symbol
@@ -530,21 +532,8 @@ void CJMetadataInfo::emitDatas(const MCSymbol *FuncName,
                                            FuncName->getName());
     OS.emitSymbolAttribute(DescSymbol, MCSA_Global);
 
-    // A return poll has already removed the frame containing the descriptor.
-    // Publish the same startPC used by the poll, without an entry prefix.
-    // The image loader sorts these relocated pairs to build its PC index;
-    // source order is not address order after linking multiple objects.
-    OS.pushSection();
-    OS.switchSection(Context.getMachOSection(
-        "__CJ_METADATA", "__cjfuncmap", MachO::S_ATTR_LIVE_SUPPORT,
-        SectionKind::getReadOnly()));
-    OS.emitValueToAlignment(8);
-    // A linker-visible local label makes each pair its own dead-strip atom.
-    // Live code keeps its pair, which in turn keeps the matching descriptor.
-    OS.emitLabel(Context.createLinkerPrivateTempSymbol());
-    OS.emitSymbolValue(FuncBegin, 8);
-    OS.emitSymbolValue(DescSymbol, 8);
-    OS.popSection();
+    // The descriptor tail supplies the single entry association on all ABIs.
+
   } else {
     DescSymbol =
         Context.getOrCreateSymbol(".Lmethod_desc." + FuncName->getName());
@@ -595,7 +584,22 @@ void CJMetadataInfo::emitDatas(const MCSymbol *FuncName,
                                            : FuncName->getName());
   OS.emitIntValue(F && needsCJReturnPoll(*F, TT) ? 1 : 0, 4);
   if (IsMachO)
-    OS.emitIntValue(0, 4); // Keep the next descriptor's ehTable 8-byte aligned.
+    OS.emitIntValue(0, 4); // Preserve the complete old 40-byte prefix.
+  auto EmitRelative = [&](const MCSymbol *Target, unsigned Bytes) {
+    auto *Base = Context.createTempSymbol("cj_desc_field");
+    OS.emitLabel(Base);
+    OS.emitValue(MCBinaryExpr::createSub(
+                     MCSymbolRefExpr::create(Target, Context),
+                     MCSymbolRefExpr::create(Base, Context), Context),
+                 Bytes);
+  };
+  EmitRelative(FuncBegin, IsMachO ? 8 : 4);
+  auto *Qualification = Context.getOrCreateSymbol(
+      ".Lcj_qualification." + FuncName->getName());
+  EmitRelative(Qualification, 4);
+  OS.emitIntValue(0x31514a43, 4);
+  if (!IsMachO)
+    OS.emitIntValue(0, 4);
 }
 
 void CJMetadataInfo::emitMethodInfoTable() {

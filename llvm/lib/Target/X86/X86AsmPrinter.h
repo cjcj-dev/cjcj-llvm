@@ -141,6 +141,7 @@ public:
   int emitStackGrow(const MachineInstr &MI) override;
 
   void emitCJSafepointInlineCheck(const MachineInstr &MI);
+  uint32_t getCangjieLayoutClearBits(const MachineInstr &MI) const override;
   void emitCJReturnPoll();
   void emitCJReturnPollStubs();
 
