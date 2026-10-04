@@ -585,6 +585,14 @@ void CJMetadataInfo::emitDatas(const MCSymbol *FuncName,
   OS.emitIntValue(F && needsCJReturnPoll(*F, TT) ? 1 : 0, 4);
   if (IsMachO)
     OS.emitIntValue(0, 4); // Preserve the complete old 40-byte prefix.
+  auto PadTo = [&](unsigned Offset) {
+    OS.emitValueToOffset(
+        MCBinaryExpr::createAdd(MCSymbolRefExpr::create(DescSymbol, Context),
+                               MCConstantExpr::create(Offset, Context), Context),
+        0, SMLoc());
+  };
+  PadTo(IsMachO ? CangjieRuntimeLayout::FuncDescEntryOffsetMachO
+                : CangjieRuntimeLayout::FuncDescEntryOffsetELF);
   auto EmitRelative = [&](const MCSymbol *Target, unsigned Bytes) {
     auto *Base = Context.createTempSymbol("cj_desc_field");
     OS.emitLabel(Base);
@@ -597,9 +605,13 @@ void CJMetadataInfo::emitDatas(const MCSymbol *FuncName,
   auto *Qualification = Context.getOrCreateSymbol(
       ".Lcj_qualification." + FuncName->getName());
   EmitRelative(Qualification, 4);
+  PadTo(IsMachO ? CangjieRuntimeLayout::FuncDescQualificationTagOffsetMachO
+                : CangjieRuntimeLayout::FuncDescQualificationTagOffsetELF);
   OS.emitIntValue(0x31514a43, 4);
   if (!IsMachO)
     OS.emitIntValue(0, 4);
+  PadTo(IsMachO ? CangjieRuntimeLayout::FuncDescStrideMachO
+                : CangjieRuntimeLayout::FuncDescStrideELF);
 }
 
 void CJMetadataInfo::emitMethodInfoTable() {
