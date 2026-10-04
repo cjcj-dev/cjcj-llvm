@@ -137,7 +137,8 @@ def decode_graph(data):
     require(count <= len(data), 'invalid map row count')
     widths = [b.var() for _ in range(6)] if count else []
     require(all(w <= 32 for w in widths), 'invalid map column width')
-    b.align()
+    padding = b.var()
+    require(padding < 8 and b.take(padding) == 0 and b.pos % 8 == 0, 'invalid map header padding')
     rows = []
     for _ in range(count):
         pc = b.take(32)
@@ -205,6 +206,8 @@ def hardware_and_return(elf,fn,ins):
     h = set()
     polls = set()
     stub_sites = []
+    slow_targets = set()
+    stubs = set()
     entry = fn['value']
     for i,(at,raw,asm) in enumerate(ins):
         if elf.machine == 62:
@@ -214,6 +217,9 @@ def hardware_and_return(elf,fn,ins):
             if raw == bytes.fromhex('493b6730'):
                 require(i+1 < len(ins) and ins[i+1][1][:2] == b'\x0f\x87', 'return cmp lacks ja')
                 polls.add(at-entry)
+                branch,code,_ = ins[i+1]
+                require(len(code) == 6, 'unsupported return branch width')
+                slow_targets.add(branch+6+struct.unpack_from('<i',code,2)[0])
             if raw[:2] == b'\xff\x25':
                 r = elf.relocs.get((fn['section'],at+2))
                 if r and r['symbol']['name'] == 'CJ_MCC_HandleReturnSafepoint':
@@ -224,6 +230,7 @@ def hardware_and_return(elf,fn,ins):
                     values = [a+7+struct.unpack_from('<i',v,3)[0] for a,v,_ in args]
                     require(values[0] == entry, 'return stub entry does not match owner')
                     stub_sites.append(values[1]-entry)
+                    stubs.add(args[0][0])
         else:
             word = int.from_bytes(raw,'little')
             if word & 0xfc000000 == 0x94000000 or word & 0xfffffc1f == 0xd63f0000:
@@ -231,6 +238,11 @@ def hardware_and_return(elf,fn,ins):
             if word == 0xf9401b90:
                 require(i+2 < len(ins) and int.from_bytes(ins[i+1][1],'little') == 0xeb3063ff and int.from_bytes(ins[i+2][1],'little') & 0xff00001f == 0x54000008, 'return load lacks compare/HI branch')
                 polls.add(at-entry)
+                branch,code,_ = ins[i+2]
+                disp = (int.from_bytes(code,'little')>>5)&0x7ffff
+                if disp & (1<<18):
+                    disp -= 1<<19
+                slow_targets.add(branch+4*disp)
             if word == 0xd61f0120 and i >= 4:
                 seq = ins[i-4:i]
                 r = elf.relocs.get((fn['section'],seq[0][0]))
@@ -249,7 +261,9 @@ def hardware_and_return(elf,fn,ins):
                         values.append(addr+disp)
                     require(values[0] == entry, 'return stub entry does not match owner')
                     stub_sites.append(values[1]-entry)
+                    stubs.add(seq[0][0])
     require(len(stub_sites) == len(set(stub_sites)) and set(stub_sites) == polls, 'poll/stub saved-site correspondence differs')
+    require(slow_targets == stubs, 'poll branches do not target associated return stubs')
     return h,polls
 
 def check(elf,fn,desc_at,disassembly,witness,mutation,report):
@@ -279,10 +293,13 @@ def check(elf,fn,desc_at,disassembly,witness,mutation,report):
         graph = decode_graph(maps_data[graph_at[1]:at])
     flag = struct.unpack_from('<I',desc,desc_at+28)[0]
     require(witness.get('function') == fn['name'] and witness.get('source_sha256'), 'independent input witness missing')
+    source = Path(witness['source_path']).read_bytes()
+    require(hashlib.sha256(source).hexdigest() == witness['source_sha256'], 'input witness identity differs')
+    require(re.search(r'define\s+void\s+@'+re.escape(fn['name'])+r'\(', source.decode()), 'UNRESOLVED_RETURN_ABI: bounded executed witness requires void return')
     require(witness.get('return_poll_required') in (True,False), 'return eligibility witness unresolved')
     expected_flag = int(witness['return_poll_required'])
     rootmask = witness.get('return_root_mask')
-    require(isinstance(rootmask,int) and rootmask >= 0, 'return ABI/root witness unresolved')
+    require(rootmask == 0, 'UNRESOLVED_RETURN_ABI: nonempty roots require actual ABI lowering witness')
     if mutation:
         returns = [row for row in records if row[1] == 3]
         require(returns, 'mutation target return not reached')
