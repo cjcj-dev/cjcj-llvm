@@ -655,7 +655,7 @@ void CJMetadataInfo::emitMethodInfoTable() {
           F->getComdat()->getSelectionKind() == Comdat::Any);
     } else if (TT.isOSBinFormatCOFF()) {
       auto *Base = Context.getCOFFSection(
-          ".cjmthd$" + Group,
+          (".cjmthd$" + Group).str(),
           COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
               COFF::IMAGE_SCN_MEM_WRITE,
           SectionKind::getReadOnly());

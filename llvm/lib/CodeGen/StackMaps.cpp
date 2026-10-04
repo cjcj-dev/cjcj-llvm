@@ -1305,7 +1305,7 @@ void StackMaps::emitCangjieCompressedStackMaps(MCStreamer &OS) {
           F->getComdat()->getSelectionKind() == Comdat::Any);
       } else if (TT.isOSBinFormatCOFF()) {
         auto *Base = OutContext.getCOFFSection(
-            ".cjsm$" + Group,
+            (".cjsm$" + Group).str(),
             COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
                 COFF::IMAGE_SCN_MEM_WRITE,
             SectionKind::getReadOnly());
