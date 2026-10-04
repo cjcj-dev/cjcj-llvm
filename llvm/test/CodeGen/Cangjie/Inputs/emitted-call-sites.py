@@ -13,6 +13,9 @@ p.add_argument('--target', required=True)
 p.add_argument('--out', required=True)
 p.add_argument('--case')
 p.add_argument('--generate-only', action='store_true')
+p.add_argument('--object', help='check an existing object without invoking llc')
+p.add_argument('--inject-pc-error', action='store_true',
+               help='offline checker control: shift a caller PC in memory')
 a = p.parse_args()
 out = Path(a.out)
 out.mkdir(parents=True, exist_ok=True)
@@ -26,26 +29,74 @@ cases = [
     ('ffi_statepoint', '%s = ' + sp % 'native', 1),
     ('throw_statepoint', '%s = ' + sp % 'CJ_MCC_ThrowException', 1),
 ]
-def section(data, name):
-    # Real ELF64 little endian object produced by llc, not a model of lowering.
+def elf_sections(data):
     assert data[:6] == b'\x7fELF\x02\x01', 'not a 64-bit little-endian ELF'
     off = struct.unpack_from('<Q', data, 40)[0]
     size, count, strings = struct.unpack_from('<HHH', data, 58)
     headers = [struct.unpack_from('<IIQQQQIIQQ', data, off + i*size) for i in range(count)]
     sh = headers[strings]
     names = data[sh[4]:sh[4]+sh[5]]
+    named = {names[h[0]:].split(b'\0', 1)[0].decode(): i for i, h in enumerate(headers)}
+    return headers, named
+
+
+def section(data, name):
+    headers, named = elf_sections(data)
+    assert name in named, 'missing section ' + name
+    h = headers[named[name]]
+    return data[h[4]:h[4]+h[5]]
+
+
+def function_origin(data, qualification_offset):
+    # Resolve the funcdesc's entry and qualification fields through ELF RELA.
+    # CJMetadata.cpp and CangjieRuntimeLayout.h specify offsets 32/36/40.
+    headers, named = elf_sections(data)
+    machine = struct.unpack_from('<H', data, 18)[0]
+    assert machine in (62, 183), 'unsupported ELF target'
+    symtabs = {}
+    functions = []
+    for i, h in enumerate(headers):
+        if h[1] != 2:
+            continue
+        strings = headers[h[6]]
+        names = data[strings[4]:strings[4]+strings[5]]
+        symbols = []
+        for pos in range(h[4], h[4]+h[5], h[9]):
+            name, info, other, index, value, size = struct.unpack_from('<IBBHQQ', data, pos)
+            label = names[name:].split(b'\0', 1)[0].decode()
+            symbols.append((index, value))
+            if label == 'test' and info & 15 == 2 and 0 < index < len(headers):
+                functions.append((index, value, size))
+        symtabs[i] = symbols
+    assert len(functions) == 1, 'function symbol association is not unique'
+    index, entry, extent = functions[0]
+    desc = section(data, '.cjmetadata.methodinfo')
+    assert len(desc) == 48, 'fixture must have one ELF funcdesc'
+    assert struct.unpack_from('<I', desc, 40)[0] == 0x31514a43, 'missing funcdesc qualification tag'
+    assert struct.unpack_from('<I', desc, 4)[0] == extent, 'funcdesc/symbol extent differs'
+    fields = {}
     for h in headers:
-        n = names[h[0]:].split(b'\0', 1)[0].decode()
-        if n == name:
-            return data[h[4]:h[4]+h[5]]
-    raise AssertionError('missing section ' + name)
+        if h[1] != 4 or h[7] != named['.cjmetadata.methodinfo']:
+            continue
+        for pos in range(h[4], h[4]+h[5], h[9]):
+            offset, info, addend = struct.unpack_from('<QQq', data, pos)
+            if offset not in (32, 36):
+                continue
+            assert offset not in fields, 'duplicate descriptor relocation'
+            assert info & 0xffffffff == (2 if machine == 62 else 261), 'unexpected relative relocation'
+            symbol_section, symbol_value = symtabs[h[6]][info >> 32]
+            fields[offset] = (symbol_section, symbol_value + addend)
+    assert fields.get(32) == (index, entry), 'funcdesc entry does not name test'
+    assert fields.get(36) == (named['.cjmetadata.stackmap'], qualification_offset), 'qualification is not associated with test'
+    text_name = next(name for name, i in named.items() if i == index)
+    return text_name, entry, extent
 
 results = []
 for name, body, expected in cases:
     if a.case and a.case != name:
         continue
     ir = out / (name + '.ll')
-    obj = out / (name + '.o')
+    obj = Path(a.object) if a.object else out / (name + '.o')
     ir.write_text('''define void @test(void ()* %fp) gc "cangjie" {
 ''' + body + '''
 ret void
@@ -66,7 +117,10 @@ declare token @llvm.experimental.gc.statepoint.p0f_isVoidf(i64, i32, void ()*, i
         print('GENERATED', str(ir), flush=True)
         continue
     cmd = [a.llc, '--cangjie-pipeline', '-mtriple=' + a.target, '-O2', '-filetype=obj', str(ir), '-o', str(obj)]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    if a.object:
+        r = subprocess.CompletedProcess(['existing-object', str(obj)], 0, '', '')
+    else:
+        r = subprocess.run(cmd, capture_output=True, text=True)
     (out/(name+'.stderr')).write_text(r.stderr)
     row = {'case': name, 'command': cmd, 'rc': r.returncode, 'expected_callers': expected}
     try:
@@ -79,7 +133,13 @@ declare token @llvm.experimental.gc.statepoint.p0f_isVoidf(i64, i32, void ()*, i
         _, length, transitions, sites = struct.unpack_from('<IIII', metadata, offset)
         assert length == 16 + 8*(transitions+sites), 'invalid format'
         records = [struct.unpack_from('<IHH', metadata, offset+16+8*transitions+8*i) for i in range(sites)]
+        text_section, entry, extent = function_origin(data, offset)
+        row['function_origin'] = {'section': text_section, 'entry': entry, 'extent': extent}
         row['sites'] = records
+        if a.inject_pc_error:
+            assert a.object, 'derived-record control is offline only'
+            records = [(pc + (1 if kind == 1 else 0), kind, bits) for pc, kind, bits in records]
+            row['derived_sites'] = records
         callers = [pc for pc, kind, bits in records if kind == 1]
         returns = [pc for pc, kind, bits in records if kind == 3]
         d = subprocess.run([a.objdump, '-d', str(obj)], capture_output=True, text=True)
@@ -87,15 +147,22 @@ declare token @llvm.experimental.gc.statepoint.p0f_isVoidf(i64, i32, void ()*, i
         assert d.returncode == 0, 'disassembler failed'
         hardware_returns = set()
         instructions = []
+        active_section = None
         for line in d.stdout.splitlines():
+            if line.startswith('Disassembly of section '):
+                active_section = line[len('Disassembly of section '):].rstrip(':')
+            if active_section != text_section:
+                continue
             m = re.match(r'\s*([0-9a-f]+):\s+((?:[0-9a-f]{2}\s+)+)\s*(.*)', line)
             if m:
                 addr = int(m[1], 16)
+                if not entry <= addr < entry + extent:
+                    continue
                 size = len(m[2].split())
                 asm = m[3]
                 instructions.append((addr, asm))
                 if re.match(r'(callq?|bl|blr)\s', asm):
-                    hardware_returns.add(addr+size)
+                    hardware_returns.add(addr+size-entry)
         row['hardware_return_pcs'] = sorted(hardware_returns)
         # Print the reached target before every causal assertion, including red.
         print('TARGET_REACHED', name, json.dumps(row), flush=True)
