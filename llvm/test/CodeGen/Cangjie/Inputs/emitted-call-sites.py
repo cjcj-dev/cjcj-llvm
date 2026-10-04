@@ -55,6 +55,7 @@ def function_origin(data, qualification_offset):
     assert machine in (62, 183), 'unsupported ELF target'
     symtabs = {}
     functions = []
+    mappings = []
     for i, h in enumerate(headers):
         if h[1] != 2:
             continue
@@ -65,6 +66,8 @@ def function_origin(data, qualification_offset):
             name, info, other, index, value, size = struct.unpack_from('<IBBHQQ', data, pos)
             label = names[name:].split(b'\0', 1)[0].decode()
             symbols.append((index, value))
+            if label.startswith(('$d.', '$x.')) or label in ('$d', '$x'):
+                mappings.append((index, value, label[:2]))
             if label == 'test' and info & 15 == 2 and 0 < index < len(headers):
                 functions.append((index, value, size))
         symtabs[i] = symbols
@@ -89,7 +92,7 @@ def function_origin(data, qualification_offset):
     assert fields.get(32) == (index, entry), 'funcdesc entry does not name test'
     assert fields.get(36) == (named['.cjmetadata.stackmap'], qualification_offset), 'qualification is not associated with test'
     text_name = next(name for name, i in named.items() if i == index)
-    return text_name, entry, extent
+    return text_name, entry, extent, sorted((value, kind) for section, value, kind in mappings if section == index)
 
 results = []
 for name, body, expected in cases:
@@ -122,7 +125,7 @@ declare token @llvm.experimental.gc.statepoint.p0f_isVoidf(i64, i32, void ()*, i
     else:
         r = subprocess.run(cmd, capture_output=True, text=True)
     (out/(name+'.stderr')).write_text(r.stderr)
-    row = {'case': name, 'command': cmd, 'rc': r.returncode, 'expected_callers': expected}
+    row = {'case': name, 'command': r.args, 'execution': 'offline-object' if a.object else 'llc', 'rc': r.returncode, 'expected_callers': expected}
     try:
         assert r.returncode == 0, 'object emission failed: ' + r.stderr
         data = obj.read_bytes()
@@ -133,7 +136,7 @@ declare token @llvm.experimental.gc.statepoint.p0f_isVoidf(i64, i32, void ()*, i
         _, length, transitions, sites = struct.unpack_from('<IIII', metadata, offset)
         assert length == 16 + 8*(transitions+sites), 'invalid format'
         records = [struct.unpack_from('<IHH', metadata, offset+16+8*transitions+8*i) for i in range(sites)]
-        text_section, entry, extent = function_origin(data, offset)
+        text_section, entry, extent, mappings = function_origin(data, offset)
         row['function_origin'] = {'section': text_section, 'entry': entry, 'extent': extent}
         row['sites'] = records
         if a.inject_pc_error:
@@ -153,16 +156,29 @@ declare token @llvm.experimental.gc.statepoint.p0f_isVoidf(i64, i32, void ()*, i
                 active_section = line[len('Disassembly of section '):].rstrip(':')
             if active_section != text_section:
                 continue
-            m = re.match(r'\s*([0-9a-f]+):\s+((?:[0-9a-f]{2}\s+)+)\s*(.*)', line)
-            if m:
-                addr = int(m[1], 16)
-                if not entry <= addr < entry + extent:
-                    continue
-                size = len(m[2].split())
-                asm = m[3]
-                instructions.append((addr, asm))
-                if re.match(r'(callq?|bl|blr)\s', asm):
-                    hardware_returns.add(addr+size-entry)
+            m = re.match(r'\s*([0-9a-f]+):\s*(.*)', line)
+            if not m:
+                continue  # A symbol heading or section header, not an address row.
+            addr = int(m[1], 16)
+            if not entry <= addr < entry + extent:
+                continue
+            # AArch64 ELF mapping symbols distinguish inline data from code.
+            preceding = [kind for value, kind in mappings if value <= addr]
+            if preceding and preceding[-1] == '$d':
+                continue
+            machine = struct.unpack_from('<H', data, 18)[0]
+            pattern = (r'((?:[0-9a-f]{2}\s+)+)\s*(\S.*)$' if machine == 62
+                       else r'([0-9a-f]{8})\s+(\S.*)$')
+            instruction = re.fullmatch(pattern, m[2])
+            assert instruction, 'unparsed function instruction: ' + line
+            size = len(instruction[1].split()) if machine == 62 else 4
+            assert 0 < size <= (15 if machine == 62 else 4), 'invalid instruction width'
+            assert addr + size <= entry + extent, 'instruction crosses function extent'
+            asm = instruction[2]
+            assert re.match(r'[a-z][a-z0-9.]*\b', asm), 'unknown function instruction: ' + line
+            instructions.append((addr, asm))
+            if re.match(r'(callq?|bl|blr)\s', asm):
+                hardware_returns.add(addr+size-entry)
         row['hardware_return_pcs'] = sorted(hardware_returns)
         # Print the reached target before every causal assertion, including red.
         print('TARGET_REACHED', name, json.dumps(row), flush=True)
