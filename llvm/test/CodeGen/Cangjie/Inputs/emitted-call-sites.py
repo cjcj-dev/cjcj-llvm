@@ -11,6 +11,8 @@ p.add_argument('--llc', required=True)
 p.add_argument('--objdump', required=True)
 p.add_argument('--target', required=True)
 p.add_argument('--out', required=True)
+p.add_argument('--case')
+p.add_argument('--generate-only', action='store_true')
 a = p.parse_args()
 out = Path(a.out)
 out.mkdir(parents=True, exist_ok=True)
@@ -40,6 +42,8 @@ def section(data, name):
 
 results = []
 for name, body, expected in cases:
+    if a.case and a.case != name:
+        continue
     ir = out / (name + '.ll')
     obj = out / (name + '.o')
     ir.write_text('''define void @test(void ()* %fp) gc "cangjie" {
@@ -50,7 +54,7 @@ declare void @callee()
 declare void @CJ_MCC_GetMethodOuterTI()
 declare void @SetDebugLocation()
 declare void @CJ_MCC_ThrowException()
-declare void @native() "cj2c" !CallFrameSizeForCJFFI !1
+declare !CallFrameSizeForCJFFI !1 void @native() "cj2c"
 declare void @CJ_MCC_C2NStub()
 @native.CJStubGV = external global i8*
 declare token @llvm.experimental.gc.statepoint.p0f_isVoidf(i64, i32, void ()*, i32, i32, ...)
@@ -58,6 +62,9 @@ declare token @llvm.experimental.gc.statepoint.p0f_isVoidf(i64, i32, void ()*, i
 !0 = !{i32 1, !"Cangjie_PACKAGE_ID", !"emitted_call_sites"}
 !1 = !{i64 0}
 ''')
+    if a.generate_only:
+        print('GENERATED', str(ir), flush=True)
+        continue
     cmd = [a.llc, '--cangjie-pipeline', '-mtriple=' + a.target, '-O2', '-filetype=obj', str(ir), '-o', str(obj)]
     r = subprocess.run(cmd, capture_output=True, text=True)
     (out/(name+'.stderr')).write_text(r.stderr)
@@ -102,5 +109,7 @@ declare token @llvm.experimental.gc.statepoint.p0f_isVoidf(i64, i32, void ()*, i
         row['assertion'] = str(e)
     results.append(row)
     print(row['status'], name, row.get('assertion', ''), flush=True)
+    if row['status'] != 'PASS':
+        break
 (out/'results.json').write_text(json.dumps(results, indent=2)+'\n')
 raise SystemExit(any(r['status'] != 'PASS' for r in results))
