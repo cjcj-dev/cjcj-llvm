@@ -1412,7 +1412,8 @@ int X86AsmPrinter::emitStackGrow(const MachineInstr &MI) {
   if (!IsWindowsAndNoRecoverd) {
     NumBytes = FrameSize - AllocaSize; // will unwind stack size
     if (NumBytes > 0) {
-      emitCangjieLayoutState(CJLayoutBits & ~2U);
+      if (MF->getFunction().hasCangjieGC())
+        emitCangjieLayoutState(CJLayoutBits & ~2U);
       MCInst Add;
       Add.setOpcode(X86::ADD64ri32);
       Add.addOperand(MCOperand::createReg(X86::RSP));
@@ -1423,7 +1424,8 @@ int X86AsmPrinter::emitStackGrow(const MachineInstr &MI) {
     }
   } else {
     if (NeedAlign) {
-      emitCangjieLayoutState(CJLayoutBits & ~2U);
+      if (MF->getFunction().hasCangjieGC())
+        emitCangjieLayoutState(CJLayoutBits & ~2U);
       MCInst PushInst; // Use push to align sp to 16 bytes.
       PushInst.setOpcode(X86::PUSH64i32);
       PushInst.addOperand(MCOperand::createImm(AllocaSize));
@@ -1469,6 +1471,8 @@ int X86AsmPrinter::emitStackGrow(const MachineInstr &MI) {
   MCInst JccInst;
   JccInst.setOpcode(X86::JMP_1);
   JccInst.addOperand(MCOperand::createExpr(StackCheckEndExpr));
+  if (MF->getFunction().hasCangjieGC())
+    emitCangjieLayoutState(CJInstructionLayout.lookup(&MI));
   EmitToStreamer(*OutStreamer, JccInst);
 
   // 5: instruction nums.
