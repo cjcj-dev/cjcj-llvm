@@ -3059,12 +3059,27 @@ void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
     break;
   }
   case X86::PUSHPC64: {
-    // call $nextInst for cangjie
-    MCSymbol *NextIns = OutContext.createTempSymbol("StorePC", true);
-    EmitAndCountInstruction(
-        MCInstBuilder(X86::CALL64pcrel32)
-            .addExpr(MCSymbolRefExpr::create(NextIns, OutContext)));
-    OutStreamer->emitLabel(NextIns);
+    // The slot ABI is entry + FuncStartPCOffsetX86, not the address after
+    // a call in the prologue. IBT, realignment and other entry instructions
+    // can change the distance from entry to this pseudo.
+    // Preserve every register and EFLAGS: push the scratch register, form the
+    // actual entry expression, then exchange it with the slot. This also
+    // avoids introducing an unmatched CALL on a CET shadow stack.
+    auto PushAddress = [&](const MCExpr *Address) {
+      EmitAndCountInstruction(MCInstBuilder(X86::PUSH64r).addReg(X86::R10));
+      EmitAndCountInstruction(MCInstBuilder(X86::LEA64r)
+                                 .addReg(X86::R10).addReg(X86::RIP).addImm(1)
+                                 .addReg(0).addExpr(Address).addReg(0));
+      EmitAndCountInstruction(MCInstBuilder(X86::XCHG64rm)
+                                 .addReg(X86::R10).addReg(X86::R10)
+                                 .addReg(X86::RSP).addImm(1).addReg(0)
+                                 .addImm(0).addReg(0));
+    };
+    const MCExpr *EntryToken = MCBinaryExpr::createAdd(
+        MCSymbolRefExpr::create(getFunctionBegin(), OutContext),
+        MCConstantExpr::create(CangjieRuntimeLayout::FuncStartPCOffsetX86,
+                               OutContext), OutContext);
+    PushAddress(EntryToken);
     if (MF->getTarget().getTargetTriple().isOSBinFormatMachO()) {
       Function &Func = MF->getFunction();
       Metadata *MD = Func.getParent()->getModuleFlag("Cangjie_PACKAGE_ID");
@@ -3073,15 +3088,7 @@ void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
       StringRef PACKAGEID = dyn_cast<MDString>(MD)->getString();
       MCSymbol *DescSymbol = OutContext.getOrCreateSymbol(
           ".Lmethod_desc." + PACKAGEID + "._" + MF->getName());
-      EmitAndCountInstruction(
-          MCInstBuilder(X86::LEA64r)
-              .addReg(X86::R10)
-              .addReg(X86::RIP)
-              .addImm(0)
-              .addReg(0)
-              .addExpr(MCSymbolRefExpr::create(DescSymbol, OutContext))
-              .addReg(0));
-      EmitAndCountInstruction(MCInstBuilder(X86::PUSH64r).addReg(X86::R10));
+      PushAddress(MCSymbolRefExpr::create(DescSymbol, OutContext));
     }
     return;
   }
