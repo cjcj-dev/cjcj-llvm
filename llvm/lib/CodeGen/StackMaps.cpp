@@ -1286,7 +1286,8 @@ void StackMaps::emitCangjieCompressedStackMaps(MCStreamer &OS) {
       if (TT.isOSBinFormatELF()) {
         FunctionSection = OutContext.getELFSection(
             ".cjmetadata.stackmap." + Group, ELF::SHT_PROGBITS,
-            ELF::SHF_ALLOC | ELF::SHF_WRITE | ELF::SHF_GROUP, 0, Group, false);
+            ELF::SHF_ALLOC | ELF::SHF_WRITE | ELF::SHF_GROUP, 0, Group,
+          F->getComdat()->getSelectionKind() == Comdat::Any);
       } else if (TT.isOSBinFormatCOFF()) {
         auto *Base = OutContext.getCOFFSection(
             ".cjsm$" + Group,
