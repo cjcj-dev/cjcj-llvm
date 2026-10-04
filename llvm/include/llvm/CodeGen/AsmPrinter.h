@@ -120,6 +120,7 @@ public:
 
   // Target physical register effects clear qualification before execution.
   virtual uint32_t getCangjieLayoutClearBits(const MachineInstr &MI) const;
+  virtual uint32_t getCangjieInlineAsmClearBits(const MCInst &Inst) const;
   void emitCangjieLayoutState(uint32_t Bits);
 
 

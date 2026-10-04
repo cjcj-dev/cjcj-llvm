@@ -267,6 +267,7 @@ private:
   void emitSafepoint(const MachineInstr &MI);
   void emitCJSafepointInlineCheck(const MachineInstr &MI);
   uint32_t getCangjieLayoutClearBits(const MachineInstr &MI) const override;
+  uint32_t getCangjieInlineAsmClearBits(const MCInst &Inst) const override;
   void emitCJReturnPoll();
   void emitCJReturnPollStubs();
   int emitCJSafepointInlineCall(unsigned Index) override;
@@ -2361,13 +2362,33 @@ uint32_t AArch64AsmPrinter::getCangjieLayoutClearBits(
     if (SPWrite || MI.mayLoad())
       return 2;
   }
-  if (!MI.getFlag(MachineInstr::FrameSetup) && !MI.isCall()) {
+  if (!MI.getFlag(MachineInstr::FrameSetup) &&
+      (!MI.isCall() || MI.isInlineAsm())) {
     if (FPWrite)
       return 3;
     if (SPWrite)
       return 2;
   }
   return 0;
+}
+
+uint32_t AArch64AsmPrinter::getCangjieInlineAsmClearBits(const MCInst &Inst) const {
+  const MCInstrDesc &Desc = TM.getMCInstrInfo()->get(Inst.getOpcode());
+  const MCRegisterInfo *MRI = TM.getMCRegisterInfo();
+  uint32_t Clear = 0;
+  auto Def = [&](unsigned Reg) {
+    if (MRI->regsOverlap(Reg, AArch64::FP))
+      Clear |= 3;
+    if (MRI->regsOverlap(Reg, AArch64::SP))
+      Clear |= 2;
+  };
+  for (unsigned I = 0; I < Desc.getNumDefs(); ++I)
+    if (Inst.getOperand(I).isReg())
+      Def(Inst.getOperand(I).getReg());
+  if (const MCPhysReg *Regs = Desc.getImplicitDefs())
+    for (; *Regs; ++Regs)
+      Def(*Regs);
+  return Clear;
 }
 
 void AArch64AsmPrinter::emitCJReturnPoll() {

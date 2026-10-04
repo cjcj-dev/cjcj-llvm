@@ -1542,6 +1542,10 @@ uint32_t AsmPrinter::getCangjieLayoutClearBits(const MachineInstr &) const {
   report_fatal_error("Cangjie AOT layout is unavailable for this target");
 }
 
+uint32_t AsmPrinter::getCangjieInlineAsmClearBits(const MCInst &) const {
+  report_fatal_error("Cangjie inline assembly layout is unavailable for this target");
+}
+
 void AsmPrinter::emitCangjieLayoutState(uint32_t Bits) {
   CJLayoutBits = Bits;
   auto *PC = createTempSymbol("cj_layout");

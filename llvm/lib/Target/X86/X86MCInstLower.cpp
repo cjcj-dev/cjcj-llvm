@@ -1489,13 +1489,33 @@ uint32_t X86AsmPrinter::getCangjieLayoutClearBits(
     if (SPWrite || MI.mayLoad())
       return 2;
   }
-  if (!MI.getFlag(MachineInstr::FrameSetup) && !MI.isCall()) {
+  if (!MI.getFlag(MachineInstr::FrameSetup) &&
+      (!MI.isCall() || MI.isInlineAsm())) {
     if (FPWrite)
       return 3;
     if (SPWrite)
       return 2;
   }
   return 0;
+}
+
+uint32_t X86AsmPrinter::getCangjieInlineAsmClearBits(const MCInst &Inst) const {
+  const MCInstrDesc &Desc = TM.getMCInstrInfo()->get(Inst.getOpcode());
+  const MCRegisterInfo *MRI = TM.getMCRegisterInfo();
+  uint32_t Clear = 0;
+  auto Def = [&](unsigned Reg) {
+    if (MRI->regsOverlap(Reg, X86::RBP))
+      Clear |= 3;
+    if (!Desc.isCall() && MRI->regsOverlap(Reg, X86::RSP))
+      Clear |= 2;
+  };
+  for (unsigned I = 0; I < Desc.getNumDefs(); ++I)
+    if (Inst.getOperand(I).isReg())
+      Def(Inst.getOperand(I).getReg());
+  if (const MCPhysReg *Regs = Desc.getImplicitDefs())
+    for (; *Regs; ++Regs)
+      Def(*Regs);
+  return Clear;
 }
 
 void X86AsmPrinter::emitCJReturnPoll() {

@@ -117,6 +117,17 @@ void AsmPrinter::emitInlineAsm(StringRef Str, const MCSubtargetInfo &STI,
                        " we don't have an asm parser for this target\n");
   Parser->setAssemblerDialect(Dialect);
   Parser->setTargetParser(*TAP);
+  if (CJEmittingInstruction && MF && MF->getFunction().hasCangjieGC()) {
+    TAP->setInlineAsmInstructionEmitter(
+        [this](const MCInst &Inst, MCStreamer &S, const MCSubtargetInfo &STI) {
+          uint32_t Clear = getCangjieInlineAsmClearBits(Inst);
+          CJEmittedCallBits &= ~Clear;
+          if (CJLayoutBits & Clear)
+            emitCangjieLayoutState(CJLayoutBits & ~Clear);
+          S.emitInstruction(Inst, STI);
+          recordCangjieCall(S, Inst);
+        });
+  }
   // Enable lexing Masm binary and hex integer literals in intel inline
   // assembly.
   if (Dialect == InlineAsm::AD_Intel)
