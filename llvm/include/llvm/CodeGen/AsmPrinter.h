@@ -106,6 +106,17 @@ public:
   uint32_t CJLayoutBits = 0;
   DenseMap<const MachineInstr *, uint32_t> CJInstructionLayout;
   const MachineInstr *CJEmittingInstruction = nullptr;
+  const MCSymbol *CJEmittedCallPC = nullptr;
+  uint16_t CJEmittedCallKind = 1;
+  uint16_t CJEmittedCallBits = 0;
+
+  // Instruction emission owns qualification. Root-map recording only consumes
+  // this PC; it must not register the same saved event a second time.
+  void beginCangjieInstruction(const MachineInstr &MI);
+  void endCangjieInstruction();
+  void recordCangjieCall(MCStreamer &S, const MCInst &Inst);
+  const MCSymbol *getCangjieCallPC(const MachineInstr &MI) const;
+  void recordCangjieReservedCall(const MCSymbol &PC, const MachineInstr &MI);
 
   // Target physical register effects clear qualification before execution.
   virtual uint32_t getCangjieLayoutClearBits(const MachineInstr &MI) const;

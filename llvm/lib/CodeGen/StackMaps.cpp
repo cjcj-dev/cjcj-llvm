@@ -1041,20 +1041,8 @@ void StackMaps::recordStatepoint(const MCSymbol &L, const MachineInstr &MI,
     OpersInfo.MOE = MI.operands_end();
   }
 
-  if (AP.MF->getFunction().hasCangjieGC() &&
-      isStatepointOpcode(MI.getOpcode()) &&
-      MI.getOpcode() != TargetOpcode::STATEPOINT_TAIL_CALL) {
-    uint16_t Kind =
-        OpersInfo.ID == Cangjie::CJStatepointID::StackCheck ||
-                OpersInfo.ID == Cangjie::CJStatepointID::Safepoint ||
-                OpersInfo.ID == Cangjie::CJStatepointID::SafepointStub
-            ? 2
-            : 1;
-    // This is the original map PC, including out-of-line saved paths. It
-    // describes the suspended CJ frame, not the next emitted instruction.
-    AP.CJQualification.Sites.push_back(
-        {&L, Kind, uint16_t(AP.CJInstructionLayout.lookup(&MI))});
-  }
+  // Qualification is owned by the actual saving event, independently of
+  // whether this map has no roots, register roots, or spilled roots.
   recordStackMapOpers(L, MI, OpersInfo, false, RecordAllRefInReg);
 }
 
@@ -1081,8 +1069,14 @@ void StackMaps::recordCJStackMap(const MachineInstr &MI,
                                  bool RecordAllRefInReg) {
   const Triple TT(AP.MMI->getModule()->getTargetTriple());
   OffsetStepSize = TT.isARM() ? 4 : 8;
-  MCSymbol *MILabel = AP.OutStreamer->getContext().createTempSymbol();
-  AP.OutStreamer->emitLabel(MILabel);
+  const MCSymbol *MILabel = AP.getCangjieCallPC(MI);
+  if (!MILabel) {
+    // Preserve existing non-call map semantics (e.g. tail adaptations); a map
+    // alone must not manufacture a caller saving event.
+    auto *Label = AP.OutStreamer->getContext().createTempSymbol();
+    AP.OutStreamer->emitLabel(Label);
+    MILabel = Label;
+  }
   recordStatepoint(*MILabel, MI, RecordAllRefInReg);
 }
 

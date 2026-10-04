@@ -428,16 +428,54 @@ const MCSubtargetInfo &AsmPrinter::getSubtargetInfo() const {
 
 void AsmPrinter::EmitToStreamer(MCStreamer &S, const MCInst &Inst) {
   S.emitInstruction(Inst, getSubtargetInfo());
-  // Qualify the return PC at the hardware-call emission, before any following
-  // adaptation instructions. Marker MIs never reach this branch.
+  recordCangjieCall(S, Inst);
+}
+
+void AsmPrinter::beginCangjieInstruction(const MachineInstr &MI) {
+  CJEmittingInstruction = &MI;
+  CJEmittedCallPC = nullptr;
+  CJEmittedCallKind = 1;
+  CJEmittedCallBits = uint16_t(CJInstructionLayout.lookup(&MI));
+  if (isStatepointOpcode(MI.getOpcode())) {
+    uint64_t ID = StatepointOpers(&MI).getID();
+    if (ID == Cangjie::CJStatepointID::Safepoint ||
+        ID == Cangjie::CJStatepointID::SafepointStub ||
+        (ID == Cangjie::CJStatepointID::StackCheck && EnableStackGrow))
+      CJEmittedCallKind = 2;
+  }
+}
+
+void AsmPrinter::endCangjieInstruction() {
+  CJEmittingInstruction = nullptr;
+  CJEmittedCallPC = nullptr;
+}
+
+void AsmPrinter::recordCangjieCall(MCStreamer &S, const MCInst &Inst) {
+  // Every real call is an event, including calls inside statepoint and
+  // generated-pseudo expansions. Jumps and zero-instruction markers are not.
   if (CJEmittingInstruction && MF->getFunction().hasCangjieGC() &&
-      !isStatepointOpcode(CJEmittingInstruction->getOpcode()) &&
       TM.getMCInstrInfo()->get(Inst.getOpcode()).isCall()) {
     auto *ReturnPC = createTempSymbol("cj_call_return");
     S.emitLabel(ReturnPC);
+    CJEmittedCallPC = ReturnPC;
     CJQualification.Sites.push_back(
-        {ReturnPC, 1, uint16_t(CJInstructionLayout.lookup(CJEmittingInstruction))});
+        {ReturnPC, CJEmittedCallKind, CJEmittedCallBits});
   }
+}
+
+const MCSymbol *AsmPrinter::getCangjieCallPC(const MachineInstr &MI) const {
+  return MF->getFunction().hasCangjieGC() && CJEmittingInstruction == &MI
+             ? CJEmittedCallPC
+             : nullptr;
+}
+
+void AsmPrinter::recordCangjieReservedCall(const MCSymbol &PC,
+                                          const MachineInstr &MI) {
+  // Nonzero statepoint patches retain their original reserved completion PC.
+  // This is encoding support, not proof that an unpatched NOP region can run.
+  if (MF->getFunction().hasCangjieGC())
+    CJQualification.Sites.push_back(
+        {&PC, 1, uint16_t(CJInstructionLayout.lookup(&MI))});
 }
 
 void AsmPrinter::emitInitialRawDwarfLocDirective(const MachineFunction &MF) {
@@ -1669,7 +1707,9 @@ void AsmPrinter::emitFunctionBody() {
         break;
       case TargetOpcode::INLINEASM:
       case TargetOpcode::INLINEASM_BR:
+        beginCangjieInstruction(MI);
         emitInlineAsm(&MI);
+        endCangjieInstruction();
         break;
       case TargetOpcode::DBG_VALUE:
       case TargetOpcode::DBG_VALUE_LIST:
@@ -1707,9 +1747,9 @@ void AsmPrinter::emitFunctionBody() {
           OutStreamer->emitRawComment("ARITH_FENCE");
         break;
       default:
-        CJEmittingInstruction = &MI;
+        beginCangjieInstruction(MI);
         emitInstruction(&MI);
-        CJEmittingInstruction = nullptr;
+        endCangjieInstruction();
         if (CanDoExtraAnalysis) {
           MCInst MCI;
           MCI.setOpcode(MI.getOpcode());
@@ -1797,6 +1837,8 @@ void AsmPrinter::emitFunctionBody() {
     emitCangjieLayoutState(0);
     // emit stackgrow or stack_overflow_error
     for (auto SC: StackCheckMap) {
+      beginCangjieInstruction(*SC.first);
+      emitCangjieLayoutState(CJInstructionLayout.lookup(SC.first));
       for (const HandlerInfo &HI : Handlers) {
         HI.Handler->beginInstruction(SC.first);
       }
@@ -1808,18 +1850,25 @@ void AsmPrinter::emitFunctionBody() {
       for (const HandlerInfo &HI : Handlers) {
         HI.Handler->endInstruction();
       }
+      endCangjieInstruction();
+      emitCangjieLayoutState(0);
     }
     StackCheckMap.clear();
     if (!EnableSafepointOutline) {
       // emit safepoint
       for (unsigned SafeIndex = 0; SafeIndex < SafepointStackMap.size();
            ++SafeIndex) {
+        const MachineInstr &Source = *std::get<0>(SafepointStackMap[SafeIndex]);
+        beginCangjieInstruction(Source);
+        emitCangjieLayoutState(CJInstructionLayout.lookup(&Source));
         for (const HandlerInfo &HI : Handlers)
           HI.Handler->beginInstruction(
               std::get<0>(SafepointStackMap[SafeIndex]));
         NumInstsInFunction += emitCJSafepointInlineCall(SafeIndex);
         for (const HandlerInfo &HI : Handlers)
           HI.Handler->endInstruction();
+        endCangjieInstruction();
+        emitCangjieLayoutState(0);
       }
       SafepointStackMap.clear();
     }

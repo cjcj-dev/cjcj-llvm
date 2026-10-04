@@ -1326,6 +1326,8 @@ int X86AsmPrinter::emitSOFECall(const MachineInstr &MI) {
   }
 
   if (AddSize > 0) {
+    CJEmittedCallBits &= ~2U;
+    emitCangjieLayoutState(CJLayoutBits & ~2U);
     MCInst Add;
     Add.setOpcode(X86::ADD64ri32);
     Add.addOperand(MCOperand::createReg(X86::RSP));
@@ -1732,8 +1734,14 @@ void X86AsmPrinter::LowerSTATEPOINT(const MachineInstr &MI,
   // Record our statepoint node in the same section used by STACKMAP
   // and PATCHPOINT
   auto &Ctx = OutStreamer->getContext();
-  MCSymbol *MILabel = Ctx.createTempSymbol();
-  OutStreamer->emitLabel(MILabel);
+  const MCSymbol *MILabel = getCangjieCallPC(MI);
+  if (!MILabel) {
+    auto *Label = Ctx.createTempSymbol();
+    OutStreamer->emitLabel(Label);
+    MILabel = Label;
+    if (SOpers.getNumPatchBytes())
+      recordCangjieReservedCall(*MILabel, MI);
+  }
   SM.recordStatepoint(*MILabel, MI);
 }
 
@@ -3465,16 +3473,7 @@ void X86AsmPrinter::emitCJThrowException(const MachineInstr *MI,
   MCInst CallThrowException = MCInstBuilder(Opcode).addOperand(
       MCInstLowering.LowerMachineOperand(MI, MOSym).getValue());
   EmitAndCountInstruction(CallThrowException);
-  // This expansion owns the saved return PC but has no root map. Keep these
-  // two facts independent, as for the existing ordinary throw call.
-  if (MF->getFunction().hasCangjieGC() &&
-      isStatepointOpcode(MI->getOpcode()) &&
-      MI->getOpcode() != TargetOpcode::STATEPOINT_TAIL_CALL) {
-    auto *ReturnPC = createTempSymbol("cj_call_return");
-    OutStreamer->emitLabel(ReturnPC);
-    CJQualification.Sites.push_back(
-        {ReturnPC, 1, uint16_t(CJInstructionLayout.lookup(MI))});
-  }
+  // EmitAndCountInstruction registered the actual call, even with no map.
   StackMaps::CallsiteInfo CSInfo;
   SM.updateOrInsertFnInfo(CurrentFnSym, CSInfo);
 }
