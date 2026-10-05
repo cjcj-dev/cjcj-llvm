@@ -43,9 +43,13 @@ int main(int argc, char** argv)
     MachineFrame machine;
     machine.SetFA(reinterpret_cast<FrameAddress*>(fp));
     machine.SetSP(reinterpret_cast<Uptr>(storage));
-    machine.SetIP(reinterpret_cast<const uint32_t*>(site));
+    // Qualify the actual saving event. The neighbor is only a map lookup,
+    // not a live frame at an epilogue whose layout has already been cleared.
+    machine.SetIP(reinterpret_cast<const uint32_t*>(site - neighbor));
     FrameInfo frame(machine, ret ? FrameType::RETURN_SAFEPOINT : FrameType::MANAGED);
-    if (!frame.ResolveProcInfo(neighbor ? 0 : kind)) { return 2; }
+    // Return frames are consumed by their own saved-stub path, which resolves
+    // the descriptor in CollectReturnRegisterRoots without a managed layout.
+    if (!ret && !frame.ResolveProcInfo(kind)) { return 2; }
     Dl_info loaded {};
     dladdr(reinterpret_cast<void*>(&StackFrameCursor::ProcessManagedFrame), &loaded);
     std::fprintf(stderr, "PRODUCT_LOADED=%s TARGET_ENTER=%s savedPC=%lu testedPC=%lu\n",
