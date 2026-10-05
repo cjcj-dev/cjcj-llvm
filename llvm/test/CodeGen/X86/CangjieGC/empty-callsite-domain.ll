@@ -5,7 +5,7 @@
 ; RUN: llvm-mc -triple=aarch64-unknown-linux-gnu -filetype=obj --save-temp-labels %t.a64.s -o %t.a64.o
 ; RUN: %python %S/Inputs/check-empty-callsite-domain.py %t.a64.o
 ;
-; Ordinary records follow upstream StackMaps.cpp:774-778 (5d095aed).
+; Real ordinary STATEPOINTs retain their precise PC even without roots.
 ; Return polls own their PC, including empty maps, as OopMapSet::add_gc_map
 ; (compiler/oopMap.cpp:367-386). Decode the emitted object, not a model.
 
@@ -59,3 +59,18 @@ define void @ordinary_line() #0 gc "cangjie" !dbg !4 {
 !5 = !DISubroutineType(types: !6)
 !6 = !{null}
 !7 = !DILocation(line: 7, column: 1, scope: !4)
+
+; These paths have no GC statepoint identity. Empty records stay filtered.
+declare void @llvm.experimental.stackmap(i64, i32, ...)
+define void @nonstatepoint_stackmap() #0 gc "cangjie" {
+  call void (i64, i32, ...) @llvm.experimental.stackmap(i64 0, i32 0)
+  ret void
+}
+define void @plain_call() #0 gc "cangjie" {
+  call void @checkpoint()
+  ret void
+}
+define i64 @nonstatepoint_div(i64 %x, i64 %y) #0 gc "cangjie" {
+  %v = sdiv i64 %x, %y
+  ret i64 %v
+}

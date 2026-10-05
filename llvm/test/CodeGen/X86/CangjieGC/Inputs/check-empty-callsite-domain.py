@@ -115,6 +115,19 @@ def exact_return(name):
     rows = maps.get(name, {}).get("rows", [])
     return len(sites) == 1 and len(rows) == 1 and rows[0][0] == sites[0]
 
+# A call relocation identifies the machine return PC independently of the map.
+# x86 PLT32 relocations address the four-byte displacement; AArch64 CALL26
+# relocations address the four-byte instruction itself.
+def ordinary_call_pcs(name):
+    owners = [symbol for symbol in functions if symbol[0] == name]
+    if len(owners) != 1:
+        return []
+    _, section, start, size = owners[0]
+    return [pos + 4 - start for (sec, pos), (callee, addend) in relocations.items()
+            if sec == section and start <= pos < start + size and callee[0] == "checkpoint"]
+
+empty_pcs = ordinary_call_pcs("ordinary_empty")
+empty_rows = maps.get("ordinary_empty", {}).get("rows", [])
 checks = {
     "EXACT_RETURN_PC_MATCHES": all(exact_return(name) for name in ("return_empty", "return_root")),
     "NEIGHBOR_PC_EXCLUDED": all(exact_return(name) and not any(row[0] == pc + 1 for row in maps[name]["rows"])
@@ -123,7 +136,11 @@ checks = {
         and bool(maps["ordinary_struct"]["rows"][0][2]),
     "ORDINARY_LINE_RETAINED": "ordinary_line" in maps and len(maps["ordinary_line"]["rows"]) == 1
         and bool(maps["ordinary_line"]["rows"][0][3]),
-    "ORDINARY_EMPTY_REJECTED": "ordinary_empty" in maps and not maps["ordinary_empty"]["rows"],
+    "ORDINARY_EMPTY_PC_RETAINED": len(empty_pcs) == 1 and len(empty_rows) == 1
+        and empty_rows[0][0] == empty_pcs[0] and not any(empty_rows[0][1:]),
+    "ORDINARY_NEIGHBOR_EXCLUDED": len(empty_pcs) == 1 and not any(row[0] == empty_pcs[0] + 1 for row in empty_rows),
+    "NONSTATEPOINT_EMPTY_FILTERED": all(any(fn[0] == name for fn in functions) and not maps.get(name, {}).get("rows", [])
+        for name in ("nonstatepoint_stackmap", "plain_call", "nonstatepoint_div")),
     "ORDINARY_ROOT_RETAINED": "ordinary_root" in maps and len(maps["ordinary_root"]["rows"]) == 1
         and any(maps["ordinary_root"]["rows"][0][1:3]),
     "EMPTY_RETURN_PC_RETAINED": "return_empty" in maps and len(maps["return_empty"]["rows"]) == 1
