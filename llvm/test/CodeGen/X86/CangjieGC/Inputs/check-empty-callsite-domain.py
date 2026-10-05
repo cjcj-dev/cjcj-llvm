@@ -123,7 +123,10 @@ checks = {
         and bool(maps["ordinary_struct"]["rows"][0][2]),
     "ORDINARY_LINE_RETAINED": "ordinary_line" in maps and len(maps["ordinary_line"]["rows"]) == 1
         and bool(maps["ordinary_line"]["rows"][0][3]),
-    "ORDINARY_EMPTY_REJECTED": "ordinary_empty" in maps and not maps["ordinary_empty"]["rows"],
+    "ORDINARY_EMPTY_PC_RETAINED": "ordinary_empty" in maps and len(maps["ordinary_empty"]["rows"]) == 1
+        and not any(maps["ordinary_empty"]["rows"][0][1:]),
+    "NONSTATEPOINT_EMPTY_FILTERED": all(not maps.get(name, {}).get("rows", [])
+        for name in ("nonstatepoint_stackmap", "plain_call", "nonstatepoint_div")),
     "ORDINARY_ROOT_RETAINED": "ordinary_root" in maps and len(maps["ordinary_root"]["rows"]) == 1
         and any(maps["ordinary_root"]["rows"][0][1:3]),
     "EMPTY_RETURN_PC_RETAINED": "return_empty" in maps and len(maps["return_empty"]["rows"]) == 1
