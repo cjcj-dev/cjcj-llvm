@@ -141,7 +141,7 @@ void X86AsmPrinter::StackMapShadowTracker::emitShadowPadding(
 }
 
 void X86AsmPrinter::EmitAndCountInstruction(MCInst &Inst) {
-  OutStreamer->emitInstruction(Inst, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, Inst);
   SMShadowTracker.count(Inst, getSubtargetInfo(), CodeEmitter.get());
 }
 
@@ -1249,7 +1249,7 @@ void X86AsmPrinter::emitGetCJTLSData(int64_t Offset) {
   LoadFieldInst.addOperand(MCOperand::createReg(0));
   LoadFieldInst.addOperand(MCOperand::createImm(Offset));
   LoadFieldInst.addOperand(MCOperand::createReg(0));
-  OutStreamer->emitInstruction(LoadFieldInst, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, LoadFieldInst);
 }
 
 void X86AsmPrinter::emitStackCmp(const MachineInstr &MI) {
@@ -1266,13 +1266,13 @@ void X86AsmPrinter::emitStackCmp(const MachineInstr &MI) {
     AddInst.addOperand(MCOperand::createReg(X86::RAX));
     AddInst.addOperand(MCOperand::createImm(AddSize));
     AddInst.addOperand(MCOperand::createImm(0));
-    OutStreamer->emitInstruction(AddInst, getSubtargetInfo());
+    EmitToStreamer(*OutStreamer, AddInst);
   }
   MCInst CmpInst;
   CmpInst.setOpcode(X86::CMP64rr);
   CmpInst.addOperand(MCOperand::createReg(X86::RSP));
   CmpInst.addOperand(MCOperand::createReg(X86::RAX));
-  OutStreamer->emitInstruction(CmpInst, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, CmpInst);
 }
 
 //   subq   numbytes, %rsp
@@ -1292,7 +1292,7 @@ void X86AsmPrinter::emitCJStackCheck(const MachineInstr &MI) {
   JmpInst.addOperand(MCOperand::createExpr(MCSymbolRefExpr::create(
       StackOverflowSym, MCSymbolRefExpr::VK_None, Ctx)));
   JmpInst.addOperand(MCOperand::createImm(X86::COND_BE));
-  OutStreamer->emitInstruction(JmpInst, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, JmpInst);
   MCSymbol *StackCheckEndSym = Ctx.createTempSymbol("stack.check.end");
   OutStreamer->emitLabel(StackCheckEndSym);
   StackCheckMap[&MI] = std::make_pair(StackOverflowSym, StackCheckEndSym);
@@ -1326,13 +1326,17 @@ int X86AsmPrinter::emitSOFECall(const MachineInstr &MI) {
   }
 
   if (AddSize > 0) {
+    if (MF->getFunction().hasCangjieGC()) {
+      CJEmittedCallBits &= ~2U;
+      emitCangjieLayoutState(CJLayoutBits & ~2U);
+    }
     MCInst Add;
     Add.setOpcode(X86::ADD64ri32);
     Add.addOperand(MCOperand::createReg(X86::RSP));
     Add.addOperand(MCOperand::createReg(X86::RSP));
     Add.addOperand(MCOperand::createImm(AddSize));
     Add.addOperand(MCOperand::createImm(0));
-    OutStreamer->emitInstruction(Add, getSubtargetInfo());
+    EmitToStreamer(*OutStreamer, Add);
 
     bool IsWin64Prologue = MF->getTarget().getMCAsmInfo()->usesWindowsCFI();
     bool NeedsDwarfCFI = !IsWin64Prologue && MF->needsFrameMoves();
@@ -1355,7 +1359,7 @@ int X86AsmPrinter::emitSOFECall(const MachineInstr &MI) {
   }
   CallInst.addOperand(MCOperand::createExpr(
       MCSymbolRefExpr::create(Sym, MCSymbolRefExpr::VK_None, Ctx)));
-  OutStreamer->emitInstruction(CallInst, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, CallInst);
   // 2: instruction nums.
   return 2;
 }
@@ -1408,20 +1412,24 @@ int X86AsmPrinter::emitStackGrow(const MachineInstr &MI) {
   if (!IsWindowsAndNoRecoverd) {
     NumBytes = FrameSize - AllocaSize; // will unwind stack size
     if (NumBytes > 0) {
+      if (MF->getFunction().hasCangjieGC())
+        emitCangjieLayoutState(CJLayoutBits & ~2U);
       MCInst Add;
       Add.setOpcode(X86::ADD64ri32);
       Add.addOperand(MCOperand::createReg(X86::RSP));
       Add.addOperand(MCOperand::createReg(X86::RSP));
       Add.addOperand(MCOperand::createImm(NumBytes));
       Add.addOperand(MCOperand::createImm(0));
-      OutStreamer->emitInstruction(Add, getSubtargetInfo());
+      EmitToStreamer(*OutStreamer, Add);
     }
   } else {
     if (NeedAlign) {
+      if (MF->getFunction().hasCangjieGC())
+        emitCangjieLayoutState(CJLayoutBits & ~2U);
       MCInst PushInst; // Use push to align sp to 16 bytes.
       PushInst.setOpcode(X86::PUSH64i32);
       PushInst.addOperand(MCOperand::createImm(AllocaSize));
-      OutStreamer->emitInstruction(PushInst, getSubtargetInfo());
+      EmitToStreamer(*OutStreamer, PushInst);
     }
   }
 
@@ -1429,14 +1437,14 @@ int X86AsmPrinter::emitStackGrow(const MachineInstr &MI) {
   StoreAllocaSize.setOpcode(X86::MOV64ri);
   StoreAllocaSize.addOperand(MCOperand::createReg(X86::RAX));
   StoreAllocaSize.addOperand(MCOperand::createImm(AllocaSize));
-  OutStreamer->emitInstruction(StoreAllocaSize, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, StoreAllocaSize);
 
   MCInst CallInst;
   CallInst.setOpcode(X86::CALL64pcrel32);
   MCSymbol *Sym = Ctx.getOrCreateSymbol("CJ_MCC_StackGrowStub");
   CallInst.addOperand(MCOperand::createExpr(
       MCSymbolRefExpr::create(Sym, MCSymbolRefExpr::VK_None, Ctx)));
-  OutStreamer->emitInstruction(CallInst, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, CallInst);
   SM.recordCJStackMap(MI, true);
 
   // Restore the SP status after stack expansion.
@@ -1448,14 +1456,14 @@ int X86AsmPrinter::emitStackGrow(const MachineInstr &MI) {
       Sub.addOperand(MCOperand::createReg(X86::RSP));
       Sub.addOperand(MCOperand::createImm(NumBytes));
       Sub.addOperand(MCOperand::createImm(0));
-      OutStreamer->emitInstruction(Sub, getSubtargetInfo());
+      EmitToStreamer(*OutStreamer, Sub);
     }
   } else {
     if (NeedAlign) {
       MCInst PopInst; // Use pop to restore sp.
       PopInst.setOpcode(X86::POP64r);
       PopInst.addOperand(MCOperand::createReg(X86::RAX));
-      OutStreamer->emitInstruction(PopInst, getSubtargetInfo());
+      EmitToStreamer(*OutStreamer, PopInst);
     }
   }
   const MCSymbolRefExpr *StackCheckEndExpr =
@@ -1463,7 +1471,9 @@ int X86AsmPrinter::emitStackGrow(const MachineInstr &MI) {
   MCInst JccInst;
   JccInst.setOpcode(X86::JMP_1);
   JccInst.addOperand(MCOperand::createExpr(StackCheckEndExpr));
-  OutStreamer->emitInstruction(JccInst, getSubtargetInfo());
+  if (MF->getFunction().hasCangjieGC())
+    emitCangjieLayoutState(CJInstructionLayout.lookup(&MI));
+  EmitToStreamer(*OutStreamer, JccInst);
 
   // 5: instruction nums.
   return 5;
@@ -1472,6 +1482,50 @@ int X86AsmPrinter::emitStackGrow(const MachineInstr &MI) {
 // load tls data
 //   testq  $1, %rax
 //   jne    Label
+uint32_t X86AsmPrinter::getCangjieLayoutClearBits(
+    const MachineInstr &MI) const {
+  if (MI.isMetaInstruction())
+    return 0;
+  const auto *TRI = MF->getSubtarget().getRegisterInfo();
+  bool FPWrite = MI.modifiesRegister(X86::RBP, TRI);
+  bool SPWrite = MI.modifiesRegister(X86::RSP, TRI);
+  bool Destroy = MI.getFlag(MachineInstr::FrameDestroy) ||
+                 MI.getExtFlag(MachineInstr::EpilogueIns);
+  if (Destroy) {
+    if (FPWrite)
+      return 3;
+    if (SPWrite || MI.mayLoad())
+      return 2;
+  }
+  if (!MI.getFlag(MachineInstr::FrameSetup) &&
+      (!MI.isCall() || MI.isInlineAsm())) {
+    if (FPWrite)
+      return 3;
+    if (SPWrite)
+      return 2;
+  }
+  return 0;
+}
+
+uint32_t X86AsmPrinter::getCangjieInlineAsmClearBits(const MCInst &Inst) const {
+  const MCInstrDesc &Desc = TM.getMCInstrInfo()->get(Inst.getOpcode());
+  const MCRegisterInfo *MRI = TM.getMCRegisterInfo();
+  uint32_t Clear = 0;
+  auto Def = [&](unsigned Reg) {
+    if (MRI->regsOverlap(Reg, X86::RBP))
+      Clear |= 3;
+    if (!Desc.isCall() && MRI->regsOverlap(Reg, X86::RSP))
+      Clear |= 2;
+  };
+  for (unsigned I = 0; I < Desc.getNumDefs(); ++I)
+    if (Inst.getOperand(I).isReg())
+      Def(Inst.getOperand(I).getReg());
+  if (const MCPhysReg *Regs = Desc.getImplicitDefs())
+    for (; *Regs; ++Regs)
+      Def(*Regs);
+  return Clear;
+}
+
 void X86AsmPrinter::emitCJReturnPoll() {
   // HotSpot x86.ad:1963-1978: the caller frame is exposed before this poll.
   auto *PC = OutContext.createTempSymbol("cj_return_pc");
@@ -1531,12 +1585,12 @@ void X86AsmPrinter::emitCJSafepointInlineCheck(const MachineInstr &MI) {
   CmpInst.setOpcode(X86::TEST64ri32);
   CmpInst.addOperand(MCOperand::createReg(X86::RAX));
   CmpInst.addOperand(MCOperand::createImm(1));
-  OutStreamer->emitInstruction(CmpInst, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, CmpInst);
   MCInst JccInst;
   JccInst.setOpcode(X86::JCC_1);
   JccInst.addOperand(MCOperand::createExpr(MILabelExpr));
   JccInst.addOperand(MCOperand::createImm(X86::COND_NE));
-  OutStreamer->emitInstruction(JccInst, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, JccInst);
 
   OutStreamer->emitLabel(MILabel1);
   SafepointStackMap.push_back(std::make_tuple(&MI, MILabel, MILabel1));
@@ -1564,11 +1618,11 @@ int X86AsmPrinter::emitCJSafepointInlineCall(unsigned Index) {
                           .addReg(0)
                           .addExpr(Sym)
                           .addReg(0);
-  OutStreamer->emitInstruction(MovGVToRAX, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, MovGVToRAX);
   MCInst CallSafepointInst;
   CallSafepointInst.setOpcode(X86::CALL64r);
   CallSafepointInst.addOperand(MCOperand::createReg(X86::RAX));
-  OutStreamer->emitInstruction(CallSafepointInst, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, CallSafepointInst);
   SM.recordCJStackMap(*std::get<0>(SS), true);
 
   const MCSymbolRefExpr *MILabelExpr =
@@ -1576,7 +1630,7 @@ int X86AsmPrinter::emitCJSafepointInlineCall(unsigned Index) {
   MCInst JccInst;
   JccInst.setOpcode(X86::JMP_1);
   JccInst.addOperand(MCOperand::createExpr(MILabelExpr));
-  OutStreamer->emitInstruction(JccInst, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, JccInst);
   // 3: instruction nums.
   return 3;
 }
@@ -1698,19 +1752,28 @@ void X86AsmPrinter::LowerSTATEPOINT(const MachineInstr &MI,
     if (IsTailCallStatepoint) {
       OutStreamer->AddComment("TAILCALL");
     }
-    OutStreamer->emitInstruction(CallInst, getSubtargetInfo());
+    EmitToStreamer(*OutStreamer, CallInst);
   }
 
   if (EnableSafepointOutline &&
-      SOpers.getID() == Cangjie::CJStatepointID::SafepointStub)
+      SOpers.getID() == Cangjie::CJStatepointID::SafepointStub &&
+      !SOpers.getNumPatchBytes())
     return SM.recordCJStackMap(MI, true);
 
   // Record our statepoint node in the same section used by STACKMAP
   // and PATCHPOINT
   auto &Ctx = OutStreamer->getContext();
-  MCSymbol *MILabel = Ctx.createTempSymbol();
-  OutStreamer->emitLabel(MILabel);
-  SM.recordStatepoint(*MILabel, MI);
+  const MCSymbol *MILabel = getCangjieCallPC(MI);
+  if (!MILabel) {
+    auto *Label = Ctx.createTempSymbol();
+    OutStreamer->emitLabel(Label);
+    MILabel = Label;
+    if (SOpers.getNumPatchBytes())
+      recordCangjieReservedCall(*MILabel, MI);
+  }
+  SM.recordStatepoint(*MILabel, MI,
+                     EnableSafepointOutline &&
+                         SOpers.getID() == Cangjie::CJStatepointID::SafepointStub);
 }
 
 void X86AsmPrinter::LowerFAULTING_OP(const MachineInstr &FaultingMI,
@@ -1747,7 +1810,7 @@ void X86AsmPrinter::LowerFAULTING_OP(const MachineInstr &FaultingMI,
       MI.addOperand(*MaybeOperand);
 
   OutStreamer->AddComment("on-fault: " + HandlerLabel->getName());
-  OutStreamer->emitInstruction(MI, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, MI);
 }
 
 void X86AsmPrinter::LowerFENTRY_CALL(const MachineInstr &MI,
@@ -1841,7 +1904,7 @@ void X86AsmPrinter::LowerPATCHABLE_OP(const MachineInstr &MI,
     }
   }
 
-  OutStreamer->emitInstruction(MCI, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, MCI);
 }
 
 // Lower a stackmap of the form:
@@ -1976,6 +2039,10 @@ void X86AsmPrinter::LowerPATCHABLE_EVENT_CALL(const MachineInstr &MI,
       SrcRegs[I] = getX86SubSuperRegister(Op->getReg(), 64);
       if (SrcRegs[I] != DestRegs[I]) {
         UsedMask[I] = true;
+        if (MF->getFunction().hasCangjieGC()) {
+          CJEmittedCallBits &= ~2U;
+          emitCangjieLayoutState(CJLayoutBits & ~2U);
+        }
         EmitAndCountInstruction(
             MCInstBuilder(X86::PUSH64r).addReg(DestRegs[I]));
       } else {
@@ -2011,6 +2078,8 @@ void X86AsmPrinter::LowerPATCHABLE_EVENT_CALL(const MachineInstr &MI,
       emitX86Nops(*OutStreamer, 1, Subtarget);
 
   OutStreamer->AddComment("xray custom event end.");
+  if (MF->getFunction().hasCangjieGC())
+    emitCangjieLayoutState(CJInstructionLayout.lookup(&MI));
 
   // Record the sled version. Version 0 of this sled was spelled differently, so
   // we let the runtime handle the different offsets we're using. Version 2
@@ -2074,6 +2143,10 @@ void X86AsmPrinter::LowerPATCHABLE_TYPED_EVENT_CALL(const MachineInstr &MI,
       SrcRegs[I] = getX86SubSuperRegister(Op->getReg(), 64);
       if (SrcRegs[I] != DestRegs[I]) {
         UsedMask[I] = true;
+        if (MF->getFunction().hasCangjieGC()) {
+          CJEmittedCallBits &= ~2U;
+          emitCangjieLayoutState(CJLayoutBits & ~2U);
+        }
         EmitAndCountInstruction(
             MCInstBuilder(X86::PUSH64r).addReg(DestRegs[I]));
       } else {
@@ -2114,6 +2187,8 @@ void X86AsmPrinter::LowerPATCHABLE_TYPED_EVENT_CALL(const MachineInstr &MI,
       emitX86Nops(*OutStreamer, 1, Subtarget);
 
   OutStreamer->AddComment("xray typed event end.");
+  if (MF->getFunction().hasCangjieGC())
+    emitCangjieLayoutState(CJInstructionLayout.lookup(&MI));
 
   // Record the sled version.
   recordSled(CurSled, MI, SledKind::TYPED_EVENT, 2);
@@ -2186,7 +2261,7 @@ void X86AsmPrinter::LowerPATCHABLE_RET(const MachineInstr &MI,
   for (auto &MO : drop_begin(MI.operands()))
     if (auto MaybeOperand = MCIL.LowerMachineOperand(&MI, MO))
       Ret.addOperand(*MaybeOperand);
-  OutStreamer->emitInstruction(Ret, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, Ret);
   emitX86Nops(*OutStreamer, 10, Subtarget);
   recordSled(CurSled, MI, SledKind::FUNCTION_EXIT, 2);
 }
@@ -2225,7 +2300,7 @@ void X86AsmPrinter::LowerPATCHABLE_TAIL_CALL(const MachineInstr &MI,
   for (auto &MO : drop_begin(MI.operands()))
     if (auto MaybeOperand = MCIL.LowerMachineOperand(&MI, MO))
       TC.addOperand(*MaybeOperand);
-  OutStreamer->emitInstruction(TC, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, TC);
 }
 
 // Returns instruction preceding MBBI in MachineFunction.
@@ -3059,12 +3134,27 @@ void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
     break;
   }
   case X86::PUSHPC64: {
-    // call $nextInst for cangjie
-    MCSymbol *NextIns = OutContext.createTempSymbol("StorePC", true);
-    EmitAndCountInstruction(
-        MCInstBuilder(X86::CALL64pcrel32)
-            .addExpr(MCSymbolRefExpr::create(NextIns, OutContext)));
-    OutStreamer->emitLabel(NextIns);
+    // The slot ABI is entry + FuncStartPCOffsetX86, not the address after
+    // a call in the prologue. IBT, realignment and other entry instructions
+    // can change the distance from entry to this pseudo.
+    // Preserve every register and EFLAGS: push the scratch register, form the
+    // actual entry expression, then exchange it with the slot. This also
+    // avoids introducing an unmatched CALL on a CET shadow stack.
+    auto PushAddress = [&](const MCExpr *Address) {
+      EmitAndCountInstruction(MCInstBuilder(X86::PUSH64r).addReg(X86::R10));
+      EmitAndCountInstruction(MCInstBuilder(X86::LEA64r)
+                                 .addReg(X86::R10).addReg(X86::RIP).addImm(1)
+                                 .addReg(0).addExpr(Address).addReg(0));
+      EmitAndCountInstruction(MCInstBuilder(X86::XCHG64rm)
+                                 .addReg(X86::R10).addReg(X86::R10)
+                                 .addReg(X86::RSP).addImm(1).addReg(0)
+                                 .addImm(0).addReg(0));
+    };
+    const MCExpr *EntryToken = MCBinaryExpr::createAdd(
+        MCSymbolRefExpr::create(getFunctionBegin(), OutContext),
+        MCConstantExpr::create(CangjieRuntimeLayout::FuncStartPCOffsetX86,
+                               OutContext), OutContext);
+    PushAddress(EntryToken);
     if (MF->getTarget().getTargetTriple().isOSBinFormatMachO()) {
       Function &Func = MF->getFunction();
       Metadata *MD = Func.getParent()->getModuleFlag("Cangjie_PACKAGE_ID");
@@ -3073,15 +3163,7 @@ void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
       StringRef PACKAGEID = dyn_cast<MDString>(MD)->getString();
       MCSymbol *DescSymbol = OutContext.getOrCreateSymbol(
           ".Lmethod_desc." + PACKAGEID + "._" + MF->getName());
-      EmitAndCountInstruction(
-          MCInstBuilder(X86::LEA64r)
-              .addReg(X86::R10)
-              .addReg(X86::RIP)
-              .addImm(0)
-              .addReg(0)
-              .addExpr(MCSymbolRefExpr::create(DescSymbol, OutContext))
-              .addReg(0));
-      EmitAndCountInstruction(MCInstBuilder(X86::PUSH64r).addReg(X86::R10));
+      PushAddress(MCSymbolRefExpr::create(DescSymbol, OutContext));
     }
     return;
   }
@@ -3219,7 +3301,7 @@ void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
     // after it.
     SMShadowTracker.emitShadowPadding(*OutStreamer, getSubtargetInfo());
     // Then emit the call
-    OutStreamer->emitInstruction(TmpInst, getSubtargetInfo());
+    EmitToStreamer(*OutStreamer, TmpInst);
 
     // move rslt from xmm0 to eax to do the fp16 calling-convetion adaption
     if (IsTruncToFP16 && !TT.isOSWindows()) {
@@ -3434,6 +3516,7 @@ void X86AsmPrinter::emitCJThrowException(const MachineInstr *MI,
   MCInst CallThrowException = MCInstBuilder(Opcode).addOperand(
       MCInstLowering.LowerMachineOperand(MI, MOSym).getValue());
   EmitAndCountInstruction(CallThrowException);
+  // EmitAndCountInstruction registered the actual call, even with no map.
   StackMaps::CallsiteInfo CSInfo;
   SM.updateOrInsertFnInfo(CurrentFnSym, CSInfo);
 }
@@ -3666,6 +3749,8 @@ void X86AsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
     // movq xxx.CJStubGV(%rip), %r11
     // movq r11 16(rsp)
     // movq $OnStackParamSize 8(rsp)
+    if (MF->getFunction().hasCangjieGC())
+      emitCangjieLayoutState(CJLayoutBits & ~2U);
     extendStackAndInsertFFIInfoForJmp(MovGVToR11, CallFrameSize);
   } else {
     assert(
@@ -3675,6 +3760,8 @@ void X86AsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
     // pushq r11
     // pushq $OnStackParamSize
     EmitAndCountInstruction(MovGVToR11);
+    if (MF->getFunction().hasCangjieGC())
+      emitCangjieLayoutState(CJLayoutBits & ~2U);
     EmitAndCountInstruction(MCInstBuilder(X86::PUSH64r).addReg(X86::R11));
     EmitAndCountInstruction(
         MCInstBuilder(X86::PUSH64i32).addImm(CallFrameSize));
@@ -3692,8 +3779,10 @@ void X86AsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
   // after it.
   SMShadowTracker.emitShadowPadding(*OutStreamer, getSubtargetInfo());
   // Then emit the call
-  OutStreamer->emitInstruction(TemInst, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, TemInst);
   SM.recordCJStackMap(*MI);
+  if (MF->getFunction().hasCangjieGC() && Opcode == X86::CALL64pcrel32)
+    emitCangjieLayoutState(CJInstructionLayout.lookup(MI));
   return;
 }
 
@@ -3713,13 +3802,13 @@ void X86AsmPrinter::emitGetCJThreadId() {
   TestInst.setOpcode(X86::TEST64rr);
   TestInst.addOperand(MCOperand::createReg(X86::RAX));
   TestInst.addOperand(MCOperand::createReg(X86::RAX));
-  OutStreamer->emitInstruction(TestInst, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, TestInst);
   // je .L_cjthread_id_end
   MCInst JmpInst;
   JmpInst.setOpcode(X86::JCC_1);
   JmpInst.addOperand(MCOperand::createExpr(MILabelExpr));
   JmpInst.addOperand(MCOperand::createImm(X86::COND_E));
-  OutStreamer->emitInstruction(JmpInst, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, JmpInst);
   // movq 336(%rax), %rax
   MCInst LoadCJThreadInst;
   LoadCJThreadInst.setOpcode(X86::MOV64rm);
@@ -3729,7 +3818,7 @@ void X86AsmPrinter::emitGetCJThreadId() {
   LoadCJThreadInst.addOperand(MCOperand::createReg(0));
   LoadCJThreadInst.addOperand(MCOperand::createImm(cjthreadIdOffset));
   LoadCJThreadInst.addOperand(MCOperand::createReg(0));
-  OutStreamer->emitInstruction(LoadCJThreadInst, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, LoadCJThreadInst);
   // .L_cjthread_id_end
   OutStreamer->emitLabel(MILabel);
   return;

@@ -36,6 +36,7 @@
 #include <vector>
 
 namespace llvm {
+struct MCCangjieQualification;
 
 class APInt;
 class AssemblerConstantPools;
@@ -701,6 +702,8 @@ public:
   /// This is used to implement assembler directives such as .byte, .ascii,
   /// etc.
   virtual void emitBytes(StringRef Data);
+
+  virtual void emitCangjieQualification(const MCCangjieQualification &Info);
 
   /// Functionally identical to EmitBytes. When emitting textual assembly, this
   /// method uses .byte directives instead of .ascii or .asciz for readability.

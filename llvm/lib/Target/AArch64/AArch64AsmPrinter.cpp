@@ -266,6 +266,8 @@ private:
   int emitStackOverflowCall(const MachineInstr &MI);
   void emitSafepoint(const MachineInstr &MI);
   void emitCJSafepointInlineCheck(const MachineInstr &MI);
+  uint32_t getCangjieLayoutClearBits(const MachineInstr &MI) const override;
+  uint32_t getCangjieInlineAsmClearBits(const MCInst &Inst) const override;
   void emitCJReturnPoll();
   void emitCJReturnPollStubs();
   int emitCJSafepointInlineCall(unsigned Index) override;
@@ -1295,6 +1297,11 @@ int AArch64AsmPrinter::emitStackOverflowCall(const MachineInstr &MI) {
   using namespace AArch64;
   unsigned FrameSize = calculateFrameSize(MF, MI);
   unsigned AddSize = MI.peekCJStackSize();
+  if (AddSize && MF->getFunction().hasCangjieGC()) {
+    emitCangjieLayoutState(CJLayoutBits & ~2U);
+    if (!EnableStackGrow)
+      CJEmittedCallBits &= ~2U;
+  }
   emitAddSP(AddSize);
 
   MCContext &Ctx = MF->getContext();
@@ -1324,6 +1331,8 @@ int AArch64AsmPrinter::emitStackOverflowCall(const MachineInstr &MI) {
 
     // revert sp
     emitSubSP(AddSize);
+    if (MF->getFunction().hasCangjieGC())
+      emitCangjieLayoutState(CJInstructionLayout.lookup(&MI));
     return 6; // 6: instruction nums.
   }
 }
@@ -1382,7 +1391,6 @@ void AArch64AsmPrinter::LowerSTATEPOINT(MCStreamer &OutStreamer, StackMaps &SM,
           IsTailCallStatepoint ? AArch64::TCRETURNdi : CallOpcode;
       if (tryEmitCangjieSpecificCallByMOSym(&MI, CallTarget,
                                             CangjieCallOpcode)) {
-        SM.recordCJStackMap(MI);
         return;
       }
       MCInstLowering.lowerOperand(CallTarget, CallTargetMCOp);
@@ -1407,13 +1415,22 @@ void AArch64AsmPrinter::LowerSTATEPOINT(MCStreamer &OutStreamer, StackMaps &SM,
 
   // `call CJ_Safepoint_Stub` in cangjie function.
   if (EnableSafepointOutline &&
-      SOpers.getID() == Cangjie::CJStatepointID::SafepointStub)
+      SOpers.getID() == Cangjie::CJStatepointID::SafepointStub &&
+      !SOpers.getNumPatchBytes())
     return SM.recordCJStackMap(MI, true);
 
   auto &Ctx = OutStreamer.getContext();
-  MCSymbol *MILabel = Ctx.createTempSymbol();
-  OutStreamer.emitLabel(MILabel);
-  SM.recordStatepoint(*MILabel, MI);
+  const MCSymbol *MILabel = getCangjieCallPC(MI);
+  if (!MILabel) {
+    auto *Label = Ctx.createTempSymbol();
+    OutStreamer.emitLabel(Label);
+    MILabel = Label;
+    if (SOpers.getNumPatchBytes())
+      recordCangjieReservedCall(*MILabel, MI);
+  }
+  SM.recordStatepoint(*MILabel, MI,
+                     EnableSafepointOutline &&
+                         SOpers.getID() == Cangjie::CJStatepointID::SafepointStub);
 }
 
 void AArch64AsmPrinter::LowerFAULTING_OP(const MachineInstr &FaultingMI) {
@@ -1449,7 +1466,7 @@ void AArch64AsmPrinter::LowerFAULTING_OP(const MachineInstr &FaultingMI) {
   }
 
   OutStreamer->AddComment("on-fault: " + HandlerLabel->getName());
-  OutStreamer->emitInstruction(MI, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, MI);
 }
 
 void AArch64AsmPrinter::emitFMov0(const MachineInstr &MI) {
@@ -2025,11 +2042,15 @@ void AArch64AsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
   // MCC_XXXStub expect the end of caller stack is like:
   // |  callee-addr                        |
   // |  param-stack-size (16 bytes align)  |
+  if (MF->getFunction().hasCangjieGC())
+    emitCangjieLayoutState(CJLayoutBits & ~2U);
   extendStackAndInsertFFIInfoForJmp(SymOriAddr, SymOriAddrLo12, CallFrameSize);
   assert((Opcode == AArch64::TCRETURNdi || Opcode == AArch64::BL) &&
          "Opcode should be BL or TCRETURNdi for Cangjie Call Stub");
   emitCangjieRuntimeCall(getSymbol(F), Opcode == AArch64::TCRETURNdi);
   SM.recordCJStackMap(*MI);
+  if (MF->getFunction().hasCangjieGC() && Opcode == AArch64::BL)
+    emitCangjieLayoutState(CJInstructionLayout.lookup(MI));
   return;
 }
 
@@ -2138,6 +2159,8 @@ void AArch64AsmPrinter::emitCJThrowException(const MachineInstr *MI,
                                              const MachineOperand &MOSym,
                                              unsigned Opcode) {
   emitCangjieRuntimeCall(getSymbol(MOSym.getGlobal()));
+  if (isStatepointOpcode(MI->getOpcode()))
+    SM.recordCJStackMap(*MI);
   StackMaps::CallsiteInfo CSInfo;
   SM.updateOrInsertFnInfo(CurrentFnSym, CSInfo);
 }
@@ -2234,7 +2257,7 @@ void AArch64AsmPrinter::emitGetCJThreadId() {
   CbzInst.setOpcode(AArch64::CBZX);
   CbzInst.addOperand(MCOperand::createReg(AArch64::X9));
   CbzInst.addOperand(MCOperand::createExpr(MILabelExpr));
-  OutStreamer->emitInstruction(CbzInst, getSubtargetInfo());
+  EmitToStreamer(*OutStreamer, CbzInst);
   // ldr x9, [x9, #456]
   MCInst LoadCJThreadInst;
   LoadCJThreadInst.setOpcode(AArch64::LDRXui);
@@ -2334,6 +2357,49 @@ void AArch64AsmPrinter::emitMetadataAddress() {
 // Label:
 //  ...
 // <<<<<<<<<<<<<<<<<<<
+uint32_t AArch64AsmPrinter::getCangjieLayoutClearBits(
+    const MachineInstr &MI) const {
+  if (MI.isMetaInstruction())
+    return 0;
+  const auto *TRI = MF->getSubtarget().getRegisterInfo();
+  bool FPWrite = MI.modifiesRegister(AArch64::FP, TRI);
+  bool SPWrite = MI.modifiesRegister(AArch64::SP, TRI);
+  if (MI.getFlag(MachineInstr::FrameDestroy)) {
+    // PAC authentication and CFI do not restore FP/SP or saved registers.
+    if (FPWrite)
+      return 3;
+    if (SPWrite || MI.mayLoad())
+      return 2;
+  }
+  if (!MI.getFlag(MachineInstr::FrameSetup) &&
+      (!MI.isCall() || MI.isInlineAsm())) {
+    if (FPWrite)
+      return 3;
+    if (SPWrite)
+      return 2;
+  }
+  return 0;
+}
+
+uint32_t AArch64AsmPrinter::getCangjieInlineAsmClearBits(const MCInst &Inst) const {
+  const MCInstrDesc &Desc = TM.getMCInstrInfo()->get(Inst.getOpcode());
+  const MCRegisterInfo *MRI = TM.getMCRegisterInfo();
+  uint32_t Clear = 0;
+  auto Def = [&](unsigned Reg) {
+    if (MRI->regsOverlap(Reg, AArch64::FP))
+      Clear |= 3;
+    if (MRI->regsOverlap(Reg, AArch64::SP))
+      Clear |= 2;
+  };
+  for (unsigned I = 0; I < Desc.getNumDefs(); ++I)
+    if (Inst.getOperand(I).isReg())
+      Def(Inst.getOperand(I).getReg());
+  if (const MCPhysReg *Regs = Desc.getImplicitDefs())
+    for (; *Regs; ++Regs)
+      Def(*Regs);
+  return Clear;
+}
+
 void AArch64AsmPrinter::emitCJReturnPoll() {
   // HotSpot aarch64.ad:1869-1884: compare only after removing the frame.
   auto *PC = OutContext.createTempSymbol("cj_return_pc");

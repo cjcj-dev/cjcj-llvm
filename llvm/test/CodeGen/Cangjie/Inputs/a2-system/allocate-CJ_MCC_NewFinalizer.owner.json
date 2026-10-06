@@ -1,0 +1,26 @@
+{
+  "min_calls": 2,
+  "min_polls": 0,
+  "required_calls": [
+    {
+      "name": "finalizer callback",
+      "symbol_regex": "CJ_MCC_OnFinalizerCreated",
+      "min_count": 1
+    },
+    {
+      "name": "finalizer slow allocation",
+      "symbol_regex": "CJ_MCC_NewFinalizer",
+      "min_count": 1
+    }
+  ],
+  "graph_calls": [],
+  "require_nonempty_return": false,
+  "status": "FINITE_FIXED_OBJECT_OWNER_WITNESS",
+  "call_owner": {
+    "section": ".text",
+    "name": "CJ_MCC_NewFinalizerFast",
+    "entry": 76,
+    "size": 60,
+    "local_bl_offset": 24
+  }
+}

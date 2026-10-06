@@ -19,9 +19,12 @@
 #include <cstdint>
 #include <vector>
 
+#include "llvm/MC/MCCangjieQualification.h"
+
 namespace llvm {
 
 class AsmPrinter;
+class Function;
 class GCStrategy;
 class MCSymbol;
 class MCExpr;
@@ -358,6 +361,10 @@ public:
     uint64_t StackSize = 0;
     uint64_t RecordCount = 0;
     std::map<unsigned, int> CSReg2Stack; // <reg, stackOffset>
+    // Bind compressed data to the same winning text/descriptor COMDAT.
+    // Recorded while the MachineFunction is available, including leafs.
+    const Function *CJFunction = nullptr;
+    MCCangjieQualification CJQualification;
 
     FunctionInfo() = default;
     FunctionInfo(uint64_t StackSize, std::map<unsigned, int> &Info)

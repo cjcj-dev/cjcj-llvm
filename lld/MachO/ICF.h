@@ -18,6 +18,7 @@ namespace macho {
 class Symbol;
 
 void markAddrSigSymbols();
+void markCangjieDescriptorEntries();
 void markSymAsAddrSig(Symbol *s);
 void foldIdenticalSections(bool onlyCfStrings);
 

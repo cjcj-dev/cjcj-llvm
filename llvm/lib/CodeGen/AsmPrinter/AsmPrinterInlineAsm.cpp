@@ -70,7 +70,7 @@ unsigned AsmPrinter::addInlineAsmDiagBuffer(StringRef AsmStr,
 void AsmPrinter::emitInlineAsm(StringRef Str, const MCSubtargetInfo &STI,
                                const MCTargetOptions &MCOptions,
                                const MDNode *LocMDNode,
-                               InlineAsm::AsmDialect Dialect) const {
+                               InlineAsm::AsmDialect Dialect) {
   assert(!Str.empty() && "Can't emit empty inline asm block");
 
   // Remember if the buffer is nul terminated or not so we can avoid a copy.
@@ -117,6 +117,30 @@ void AsmPrinter::emitInlineAsm(StringRef Str, const MCSubtargetInfo &STI,
                        " we don't have an asm parser for this target\n");
   Parser->setAssemblerDialect(Dialect);
   Parser->setTargetParser(*TAP);
+  uint32_t InlineAsmClear = 0;
+  size_t FirstAsmSite = CJQualification.Sites.size();
+  size_t FirstAsmEvent = CJQualification.Events.size();
+  if (CJEmittingInstruction && MF && MF->getFunction().hasCangjieGC()) {
+    // Treat an asm body as one must-state region: local labels/backedges may
+    // revisit a call after a physical frame-register write. Never restore
+    // layout from the textual order of a later pop/mov.
+    emitCangjieLayoutState(CJLayoutBits);
+    TAP->setInlineAsmInstructionEmitter(
+        [this, &InlineAsmClear](const MCInst &Inst, MCStreamer &S,
+                               const MCSubtargetInfo &STI) {
+          if (&CJQualification.Entry->getSection() != S.getCurrentSectionOnly()) {
+            S.emitInstruction(Inst, STI);
+            return;
+          }
+          uint32_t Clear = getCangjieInlineAsmClearBits(Inst);
+          InlineAsmClear |= Clear;
+          CJEmittedCallBits &= ~Clear;
+          if (CJLayoutBits & Clear)
+            emitCangjieLayoutState(CJLayoutBits & ~Clear);
+          S.emitInstruction(Inst, STI);
+          recordCangjieCall(S, Inst);
+        });
+  }
   // Enable lexing Masm binary and hex integer literals in intel inline
   // assembly.
   if (Dialect == InlineAsm::AD_Intel)
@@ -126,6 +150,12 @@ void AsmPrinter::emitInlineAsm(StringRef Str, const MCSubtargetInfo &STI,
   // Don't implicitly switch to the text section before the asm.
   (void)Parser->Run(/*NoInitialTextSection*/ true,
                     /*NoFinalize*/ true);
+  if (InlineAsmClear) {
+    for (size_t I = FirstAsmSite; I < CJQualification.Sites.size(); ++I)
+      CJQualification.Sites[I].Bits &= ~InlineAsmClear;
+    for (size_t I = FirstAsmEvent; I < CJQualification.Events.size(); ++I)
+      CJQualification.Events[I].Bits &= ~InlineAsmClear;
+  }
   emitInlineAsmEnd(STI, &TAP->getSTI());
 }
 
@@ -327,7 +357,7 @@ static void EmitInlineAsmStr(const char *AsmStr, const MachineInstr *MI,
 
 /// This method formats and emits the specified machine instruction that is an
 /// inline asm.
-void AsmPrinter::emitInlineAsm(const MachineInstr *MI) const {
+void AsmPrinter::emitInlineAsm(const MachineInstr *MI) {
   assert(MI->isInlineAsm() && "printInlineAsm only works on inline asms");
 
   // Count the number of register definitions to find the asm string.
