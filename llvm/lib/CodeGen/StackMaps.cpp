@@ -988,7 +988,13 @@ void StackMaps::recordStackMapOpers(const MCSymbol &MILabel,
     }
     CSInfo.LineNumber = DIL->getLine();
   }
-  updateOrInsertFnInfo(AP.CurrentFnSym, CSInfo);
+  // A real GC statepoint owns its precise PC even when its map is empty.
+  // Keep the operand-free div/stackmap paths under the ordinary filter.
+  // OopMapSet::add_gc_map (compiler/oopMap.cpp:367-386) retains empty maps.
+  if (isStatepointOpcode(MI.getOpcode()))
+    insertCallsiteInfo(AP.CurrentFnSym, CSInfo);
+  else
+    updateOrInsertFnInfo(AP.CurrentFnSym, CSInfo);
 }
 
 void StackMaps::recordStackMap(const MCSymbol &L, const MachineInstr &MI) {
