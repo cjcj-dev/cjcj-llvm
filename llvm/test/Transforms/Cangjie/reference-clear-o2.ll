@@ -22,10 +22,22 @@ declare void @llvm.cj.gcwrite.struct.p0i8.i64(i8 addrspace(1)*, i8 addrspace(1)*
 ; CHECK-NOT: @llvm.cj.gcwrite.ref
 ; CHECK: ret void
 ; ASM-LABEL: clear_entry40:
-; ASM-DAG: CJ_MCC_WriteRefField_Strong
-; ASM-DAG: CJ_MCC_StoreBarrierOnHeapField@PLT
-; ASM-DAG: movq 24(
-; ASM-DAG: test{{[lq]}} {{.*}}32(
+; ASM: CJ_MCC_WriteRefField_Strong
+; ASM: movq 96(%r15), [[OLD_DATA40_0:%[a-z0-9]+]]
+; ASM: movzwl ([[SLOT40_0:%[a-z0-9]+]]), [[OLD40_0:%[a-z0-9]+]]
+; ASM-NEXT: testl [[OLD40_0]], 32([[OLD_DATA40_0]])
+; ASM: CJ_MCC_StoreBarrierOnHeapField@PLT
+; ASM: movq 96(%r15), [[GOOD_DATA40_0:%[a-z0-9]+]]
+; ASM: orq 24([[GOOD_DATA40_0]]), [[COLORED40_0:%[a-z0-9]+]]
+; ASM-NEXT: movq [[COLORED40_0]], ([[SLOT40_0]])
+; ASM: CJ_MCC_WriteRefField_Strong
+; ASM: movq 96(%r15), [[OLD_DATA40_1:%[a-z0-9]+]]
+; ASM: movzwl ([[SLOT40_1:%[a-z0-9]+]]), [[OLD40_1:%[a-z0-9]+]]
+; ASM-NEXT: testl [[OLD40_1]], 32([[OLD_DATA40_1]])
+; ASM: CJ_MCC_StoreBarrierOnHeapField@PLT
+; ASM: movq 96(%r15), [[GOOD_DATA40_1:%[a-z0-9]+]]
+; ASM: orq 24([[GOOD_DATA40_1]]), [[COLORED40_1:%[a-z0-9]+]]
+; ASM-NEXT: movq [[COLORED40_1]], ([[SLOT40_1]])
 define void @clear_entry40(i8 addrspace(1)* %base) gc "cangjie" {
   %source = alloca %Entry40, align 8
   %src = bitcast %Entry40* %source to i8*
@@ -41,10 +53,22 @@ define void @clear_entry40(i8 addrspace(1)* %base) gc "cangjie" {
 ; CHECK-NOT: @llvm.cj.gcwrite.ref
 ; CHECK: ret void
 ; ASM-LABEL: clear_entry48:
-; ASM-DAG: CJ_MCC_WriteRefField_Strong
-; ASM-DAG: CJ_MCC_StoreBarrierOnHeapField@PLT
-; ASM-DAG: movq 24(
-; ASM-DAG: test{{[lq]}} {{.*}}32(
+; ASM: CJ_MCC_WriteRefField_Strong
+; ASM: movq 96(%r15), [[OLD_DATA48_0:%[a-z0-9]+]]
+; ASM: movzwl ([[SLOT48_0:%[a-z0-9]+]]), [[OLD48_0:%[a-z0-9]+]]
+; ASM-NEXT: testl [[OLD48_0]], 32([[OLD_DATA48_0]])
+; ASM: CJ_MCC_StoreBarrierOnHeapField@PLT
+; ASM: movq 96(%r15), [[GOOD_DATA48_0:%[a-z0-9]+]]
+; ASM: orq 24([[GOOD_DATA48_0]]), [[COLORED48_0:%[a-z0-9]+]]
+; ASM-NEXT: movq [[COLORED48_0]], ([[SLOT48_0]])
+; ASM: CJ_MCC_WriteRefField_Strong
+; ASM: movq 96(%r15), [[OLD_DATA48_1:%[a-z0-9]+]]
+; ASM: movzwl ([[SLOT48_1:%[a-z0-9]+]]), [[OLD48_1:%[a-z0-9]+]]
+; ASM-NEXT: testl [[OLD48_1]], 32([[OLD_DATA48_1]])
+; ASM: CJ_MCC_StoreBarrierOnHeapField@PLT
+; ASM: movq 96(%r15), [[GOOD_DATA48_1:%[a-z0-9]+]]
+; ASM: orq 24([[GOOD_DATA48_1]]), [[COLORED48_1:%[a-z0-9]+]]
+; ASM-NEXT: movq [[COLORED48_1]], ([[SLOT48_1]])
 define void @clear_entry48(i8 addrspace(1)* %base) gc "cangjie" {
   %source = alloca %Entry48, align 8
   %src = bitcast %Entry48* %source to i8*
