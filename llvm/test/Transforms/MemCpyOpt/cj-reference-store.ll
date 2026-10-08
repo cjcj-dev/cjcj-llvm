@@ -1,5 +1,6 @@
 ; RUN: opt -S -passes='cj-gcinstr-replace,memcpyopt,cj-gcinstr-restore,verify' %s -o %t
 ; RUN: FileCheck %s < %t
+; RUN: FileCheck %s --check-prefix=DATA < %t
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64 %t -o - | FileCheck %s --check-prefix=ASM
 ;
 ; Extracted from HashMap<String,ASTContext>.clear: existing AS1 heap slots,
@@ -37,6 +38,9 @@ define void @two_refs(i8 addrspace(1)* %base) gc "cangjie" {
   ret void
 }
 
+; DATA-LABEL: define void @primitive_then_ref(
+; DATA: call void @llvm.memset.p1i8.i64({{.*}}i64 24, i1 false)
+; DATA: @llvm.cj.gcwrite.ref({{.*}}i32 1)
 ; CHECK-LABEL: define void @primitive_then_ref(
 ; CHECK: call void {{.*}}@llvm.cj.gcwrite.ref(i8 addrspace(1)* null, {{.*}}i32 1)
 ; CHECK-NOT: @llvm.cj.gcwrite.ref
@@ -60,6 +64,9 @@ define void @primitive_then_ref(i8 addrspace(1)* %base) gc "cangjie" {
   ret void
 }
 
+; DATA-LABEL: define void @memset_then_ref(
+; DATA: call void @llvm.memset.p1i8.i64({{.*}}i64 24, i1 false)
+; DATA: @llvm.cj.gcwrite.ref({{.*}}i32 2)
 ; CHECK-LABEL: define void @memset_then_ref(
 ; CHECK: call void {{.*}}@llvm.cj.gcwrite.ref(i8 addrspace(1)* null, {{.*}}i32 2)
 ; CHECK-NOT: @llvm.cj.gcwrite.ref
