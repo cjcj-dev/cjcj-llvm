@@ -152,3 +152,24 @@ define void @pure_primitive(i8 addrspace(1)* %base) gc "cangjie" {
   store i32 0, i32 addrspace(1)* %i20, align 4
   ret void
 }
+
+; An AS1 destination alone does not make its AS0 pointer payload a GC reference.
+; CHECK-LABEL: define void @plain_pointer_payload(
+; CHECK: call void @llvm.memset.p1i8.i64({{.*}}i64 24, i1 false)
+; CHECK-NOT: @llvm.cj.gcwrite.ref
+; CHECK: ret void
+; ASM-LABEL: plain_pointer_payload:
+; ASM-NOT: CJ_MCC_
+; ASM: retq
+define void @plain_pointer_payload(i8 addrspace(1)* %base) gc "cangjie" {
+  %b0 = getelementptr i8, i8 addrspace(1)* %base, i64 0
+  %p0 = bitcast i8 addrspace(1)* %b0 to i8* addrspace(1)*
+  store i8* null, i8* addrspace(1)* %p0, align 8
+  %b8 = getelementptr i8, i8 addrspace(1)* %base, i64 8
+  %p8 = bitcast i8 addrspace(1)* %b8 to i8* addrspace(1)*
+  store i8* null, i8* addrspace(1)* %p8, align 8
+  %b16 = getelementptr i8, i8 addrspace(1)* %base, i64 16
+  %p16 = bitcast i8 addrspace(1)* %b16 to i8* addrspace(1)*
+  store i8* null, i8* addrspace(1)* %p16, align 8
+  ret void
+}
