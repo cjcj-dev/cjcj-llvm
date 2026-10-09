@@ -34,7 +34,7 @@
 
 ; Each reject reaches the complete typed copy in @target, before any other
 ; Cangjie function is verified. Extra native users exercise the source graph.
-; REJECT: memcpy source or destination contains GC reference
+; REJECT: Bare memcpy/memmove
 ; REJECT: call void @llvm.memcpy.p0i8.p0i8.i64
 ; REJECT: in function target
 
