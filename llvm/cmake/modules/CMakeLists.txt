@@ -35,6 +35,11 @@ endif()
 if(omp_gen IN_LIST LLVM_COMMON_DEPENDS)
   list(REMOVE_ITEM LLVM_COMMON_DEPENDS omp_gen)
 endif()
+# The runtime layout check belongs to this LLVM build, not to projects consuming
+# either package. Keep the parent directory's production dependencies unchanged.
+if(cangjie-runtime-layout-check IN_LIST LLVM_COMMON_DEPENDS)
+  list(REMOVE_ITEM LLVM_COMMON_DEPENDS cangjie-runtime-layout-check)
+endif()
 
 #
 # Generate LLVMConfig.cmake for the build tree.
