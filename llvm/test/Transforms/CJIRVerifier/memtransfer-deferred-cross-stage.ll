@@ -28,6 +28,7 @@ define i32 @target() noinline optnone gc "cangjie" {
 entry:
  %out = alloca %"record.std.core:String", align 8
  %dst = bitcast %"record.std.core:String"* %out to i8*
+ call void @llvm.cj.memset(i8* %dst, i8 0, i64 16, i1 false)
  %src = bitcast %"record.std.core:String"* @literal to i8*
  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
  %len = call i32 @length(%"record.std.core:String"* %out)
@@ -39,6 +40,7 @@ define internal i32 @length(%"record.std.core:String"* %p) noinline optnone {
  ret i32 %len
 }
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+declare void @llvm.cj.memset(i8*, i8, i64, i1)
 !0 = !{!"ArrayLayout.UInt8"}
 attributes #1 = { "cjstring_data" "cjstring_deferred" }
 attributes #2 = { "cjstring_literal" }
@@ -59,6 +61,7 @@ define i32 @target() noinline optnone gc "cangjie" {
 entry:
  %out = alloca %"record.std.core:String", align 8
  %dst = bitcast %"record.std.core:String"* %out to i8*
+ call void @llvm.cj.memset(i8* %dst, i8 0, i64 16, i1 false)
  %src = bitcast %"record.std.core:String"* @literal to i8*
  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
  %len = call i32 @length(%"record.std.core:String"* %out)
@@ -70,6 +73,7 @@ define internal i32 @length(%"record.std.core:String"* %p) noinline optnone {
  ret i32 %len
 }
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+declare void @llvm.cj.memset(i8*, i8, i64, i1)
 !0 = !{!"ArrayLayout.UInt8"}
 attributes #1 = { "cjstring_data" "cjstring_deferred" }
 attributes #2 = { "cjstring_literal" }
@@ -90,6 +94,7 @@ define i32 @target() noinline optnone gc "cangjie" {
 entry:
  %out = alloca %"record.std.core:String", align 8
  %dst = bitcast %"record.std.core:String"* %out to i8*
+ call void @llvm.cj.memset(i8* %dst, i8 0, i64 16, i1 false)
  %src = bitcast %"record.std.core:String"* @literal to i8*
  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
  %len = call i32 @length(%"record.std.core:String"* %out)
@@ -101,6 +106,7 @@ define internal i32 @length(%"record.std.core:String"* %p) noinline optnone {
  ret i32 %len
 }
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+declare void @llvm.cj.memset(i8*, i8, i64, i1)
 !0 = !{!"ArrayLayout.UInt8"}
 attributes #1 = { "cjstring_data" "cjstring_deferred" }
 attributes #2 = { "cjstring_literal" }
@@ -121,6 +127,7 @@ define i32 @target() noinline optnone gc "cangjie" {
 entry:
  %out = alloca %"record.std.core:String", align 8
  %dst = bitcast %"record.std.core:String"* %out to i8*
+ call void @llvm.cj.memset(i8* %dst, i8 0, i64 16, i1 false)
  %src = bitcast %"record.std.core:String"* @literal to i8*
  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
  %bp = getelementptr %"record.std.core:String", %"record.std.core:String"* %out, i32 0, i32 0
@@ -134,6 +141,7 @@ define internal i32 @length(%"record.std.core:String"* %p) noinline optnone {
  ret i32 %len
 }
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+declare void @llvm.cj.memset(i8*, i8, i64, i1)
 !0 = !{!"ArrayLayout.UInt8"}
 attributes #1 = { "cjstring_data" "cjstring_deferred" }
 attributes #2 = { "cjstring_literal" }
@@ -155,12 +163,14 @@ attributes #2 = { "cjstring_literal" }
 define void @target(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out) gc "cangjie" {
 entry:
   %dst = bitcast %"record.std.core:String"* %out to i8*
-  %src = bitcast %"record.std.core:String"* @literal to i8*
+  call void @llvm.cj.memset(i8* %dst, i8 0, i64 16, i1 false)
+ %src = bitcast %"record.std.core:String"* @literal to i8*
   call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
   ret void
 }
 
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+declare void @llvm.cj.memset(i8*, i8, i64, i1)
 !0 = !{!"ArrayLayout.UInt8"}
 attributes #1 = { "cjstring_data" "cjstring_deferred" }
 attributes #2 = { "cjstring_literal" }
@@ -189,12 +199,14 @@ define i8 @direct() {
 define void @target(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out) gc "cangjie" {
 entry:
   %dst = bitcast %"record.std.core:String"* %out to i8*
-  %src = bitcast %"record.std.core:String"* @literal to i8*
+  call void @llvm.cj.memset(i8* %dst, i8 0, i64 16, i1 false)
+ %src = bitcast %"record.std.core:String"* @literal to i8*
   call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
   ret void
 }
 
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+declare void @llvm.cj.memset(i8*, i8, i64, i1)
 !0 = !{!"ArrayLayout.UInt8"}
 attributes #1 = { "cjstring_data" "cjstring_deferred" }
 attributes #2 = { "cjstring_literal" }
@@ -222,6 +234,7 @@ define i32 @target() noinline optnone gc "cangjie" {
 entry:
  %out = alloca %"record.std.core:String", align 8
  %dst = bitcast %"record.std.core:String"* %out to i8*
+ call void @llvm.cj.memset(i8* %dst, i8 0, i64 16, i1 false)
  %src = bitcast %"record.std.core:String"* @literal to i8*
  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
  %len = call i32 @length(%"record.std.core:String"* %out)
@@ -233,6 +246,7 @@ define internal i32 @length(%"record.std.core:String"* %p) noinline optnone {
  ret i32 %len
 }
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+declare void @llvm.cj.memset(i8*, i8, i64, i1)
 !0 = !{!"ArrayLayout.UInt8"}
 attributes #1 = { "cjstring_data" "cjstring_deferred" }
 attributes #2 = { "cjstring_literal" }
@@ -253,12 +267,14 @@ attributes #2 = { "cjstring_literal" }
 define void @target(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out) gc "cangjie" {
 entry:
   %dst = bitcast %"record.std.core:String"* %out to i8*
-  %src = bitcast %"record.std.core:String"* @literal to i8*
+  call void @llvm.cj.memset(i8* %dst, i8 0, i64 16, i1 false)
+ %src = bitcast %"record.std.core:String"* @literal to i8*
   call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
   ret void
 }
 
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+declare void @llvm.cj.memset(i8*, i8, i64, i1)
 !0 = !{!"ArrayLayout.UInt8"}
 attributes #1 = { "cjstring_data" "cjstring_deferred" }
 attributes #2 = { "cjstring_literal" }
@@ -280,12 +296,14 @@ attributes #2 = { "cjstring_literal" }
 define void @target(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out) gc "cangjie" {
 entry:
   %dst = bitcast %"record.std.core:String"* %out to i8*
-  %src = bitcast %"record.std.core:String"* @literal to i8*
+  call void @llvm.cj.memset(i8* %dst, i8 0, i64 16, i1 false)
+ %src = bitcast %"record.std.core:String"* @literal to i8*
   call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
   ret void
 }
 
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+declare void @llvm.cj.memset(i8*, i8, i64, i1)
 !0 = !{!"ArrayLayout.UInt8"}
 attributes #1 = { "cjstring_data" "cjstring_deferred" }
 attributes #2 = { "cjstring_literal" }
@@ -307,12 +325,14 @@ attributes #2 = { "cjstring_literal" }
 define void @target(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out) gc "cangjie" {
 entry:
   %dst = bitcast %"record.std.core:String"* %out to i8*
-  %src = bitcast %"record.std.core:String"* @literal to i8*
+  call void @llvm.cj.memset(i8* %dst, i8 0, i64 16, i1 false)
+ %src = bitcast %"record.std.core:String"* @literal to i8*
   call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
   ret void
 }
 
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+declare void @llvm.cj.memset(i8*, i8, i64, i1)
 !0 = !{!"ArrayLayout.UInt8"}
 attributes #1 = { "cjstring_data" "cjstring_deferred" }
 attributes #2 = { "cjstring_literal" }

@@ -483,8 +483,23 @@ bool hasOnlyLengthObservations(GlobalVariable &View) {
         Work.push_back(Dest);
         continue;
       }
+      if (auto *I = dyn_cast<IntrinsicInst>(User)) {
+        if (I->getIntrinsicID() == Intrinsic::cj_memset &&
+            &U == &I->getArgOperandUse(0) && isa<AllocaInst>(Base) &&
+            Offset.isZero()) {
+          auto *Length = dyn_cast<ConstantInt>(I->getArgOperand(2));
+          auto *Volatile = dyn_cast<ConstantInt>(I->getArgOperand(3));
+          if (Length && Length->getZExtValue() == Size && Volatile &&
+              Volatile->isZero())
+            continue; // Typed stack-root initialization, not a source write.
+        }
+        if (I->isLifetimeStartOrEnd() || isa<DbgInfoIntrinsic>(I))
+          continue;
+        return false;
+      }
       if (auto *Call = dyn_cast<CallBase>(User)) {
-        if (!Call->isArgOperand(&U) || Call->hasOperandBundles())
+        if (!Call->isArgOperand(&U) || Call->hasOperandBundles() ||
+            !Offset.isZero())
           return false;
         Function *F = Call->getCalledFunction();
         unsigned Arg = Call->getArgOperandNo(&U);
@@ -493,10 +508,6 @@ bool hasOnlyLengthObservations(GlobalVariable &View) {
           return false;
         Work.push_back(F->getArg(Arg));
         continue;
-      }
-      if (auto *I = dyn_cast<IntrinsicInst>(User)) {
-        if (I->isLifetimeStartOrEnd() || isa<DbgInfoIntrinsic>(I))
-          continue;
       }
       return false;
     }
