@@ -398,7 +398,3 @@ declare void @llvm.cj.memset(i8*, i8, i64, i1)
 !0 = !{!"ArrayLayout.UInt8"}
 attributes #1 = { "cjstring_data" "cjstring_deferred" }
 attributes #2 = { "cjstring_literal" }
-
-
-
-
