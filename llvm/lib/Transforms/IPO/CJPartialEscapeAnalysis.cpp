@@ -3144,8 +3144,11 @@ bool CJEscapeAnalysis::isEscapedValue(Value *V) {
   if (isa<Argument>(Base)) {
     return true;
   }
-  if (isa<GlobalVariable>(Base) || isa<GlobalAlias>(Base) ||
-      isa<ConstantExpr>(Base) || isa<ConstantExpr>(V))
+  // getBaseValue may peel an inttoptr ConstantExpr down to its integer
+  // operand before GCPtr::create calls us. Such a base still denotes unknown
+  // external storage; losing the pointer type must not make it non-escaping.
+  if ((isa<Constant>(Base) && !isa<ConstantPointerNull>(Base) &&
+       !isa<Function>(Base)) || isa<ConstantExpr>(V))
     return storageMayContainGCPtr(Base);
   return false;
 }
