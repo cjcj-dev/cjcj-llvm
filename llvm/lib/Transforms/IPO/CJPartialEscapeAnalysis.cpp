@@ -30,6 +30,7 @@
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -47,6 +48,37 @@
 using namespace llvm;
 
 constexpr int alignEight = 8;
+
+// Storage types belong to the defining operation, not to an opaque pointer.
+// An alias may have a narrower declared type than its aliasee, so inspect the
+// actual global object. A missing type is unknown, never evidence of no GC refs.
+static Type *getStorageType(Value *V) {
+  if (auto *GA = dyn_cast<GlobalAlias>(V)) {
+    auto *GV = dyn_cast_or_null<GlobalVariable>(GA->getAliaseeObject());
+    return GV ? GV->getValueType() : nullptr;
+  }
+  if (auto *GV = dyn_cast<GlobalVariable>(V))
+    return GV->getValueType();
+  if (auto *AI = dyn_cast<AllocaInst>(V))
+    return AI->getAllocatedType();
+  if (auto *GEP = dyn_cast<GEPOperator>(V))
+    return GEP->getResultElementType();
+  if (auto *PT = dyn_cast<PointerType>(V->getType())) {
+    if (!PT->isOpaque())
+      return PT->getNonOpaquePointerElementType();
+  }
+  return nullptr;
+}
+
+static bool storageMayContainGCPtr(Value *V) {
+  Type *T = getStorageType(V);
+  return !T || !T->isSized() || containsGCPtrType(T);
+}
+
+static bool isMemoryWithPossibleGCPtr(Value *V) {
+  return V->getType()->isPointerTy() && !isGCPointerType(V->getType()) &&
+         storageMayContainGCPtr(V);
+}
 
 // Maximum depth of the cumulative-offset path carried by spreadMemEscape.
 // Deeper propagations are collapsed to the escape-all offset (-1), which
@@ -1062,14 +1094,14 @@ private:
       GEPIndices.push_back(IRB.getInt32(0));
       GEPIndices.push_back(IRB.getInt32(1));
       auto SizeP = IRB.CreateInBoundsGEP(
-          NewInst->getType()->getNonOpaquePointerElementType(), NewInst,
+          cast<AllocaInst>(NewInst)->getAllocatedType(), NewInst,
           GEPIndices);
       SmallVector<Value *, 2> GEPSizeIndices;
       GEPSizeIndices.push_back(IRB.getInt32(0));
       GEPSizeIndices.push_back(IRB.getInt32(0));
       GEPSizeIndices.push_back(IRB.getInt32(0));
       auto SizeP64 = IRB.CreateInBoundsGEP(
-          SizeP->getType()->getNonOpaquePointerElementType(), SizeP,
+          cast<GEPOperator>(SizeP)->getResultElementType(), SizeP,
           GEPSizeIndices);
       IRB.CreateStore(I->getOperand(1), SizeP64); // store array size
       MemSetSize = AllocaSize - ArrayHeadSize;
@@ -1778,14 +1810,9 @@ public:
 
   ObjectLocation *getOrCreateLocation(Value *V) {
     if (!dyn_cast<Argument>(V) && !dyn_cast<Instruction>(V)) {
-      if (isa<GlobalVariable>(V) || isa<ConstantExpr>(V)) {
+      if (isa<GlobalVariable>(V) || isa<GlobalAlias>(V) || isa<ConstantExpr>(V)) {
         Value *Base = findMemoryBasePointer(V);
-        PointerType *PT = dyn_cast<PointerType>(Base->getType());
-        if (PT == nullptr) {
-          return nullptr;
-        }
-        Type *PointeeType = PT->getNonOpaquePointerElementType();
-        if (containsGCPtrType(PointeeType)) {
+        if (storageMayContainGCPtr(Base)) {
           return HeapLoc;
         }
       }
@@ -2169,7 +2196,7 @@ private:
     }
 
     if (isGCPointerType(I->getType()) ||
-        isMemoryContainsGCPtrType(I->getType())) {
+        isMemoryWithPossibleGCPtr(I)) {
       if (auto Loc = getOrCreateLocation(I)) {
         markEscaped(Loc, I);
       }
@@ -2184,7 +2211,7 @@ private:
          i++) {
       auto V = I->getOperand(i);
       if (!(isGCPointerType(V->getType()) ||
-          isMemoryContainsGCPtrType(V->getType())))
+          isMemoryWithPossibleGCPtr(V)))
         continue;
       if (auto Loc = getOrCreateLocation(V)) {
         markEscaped(Loc, I);
@@ -3117,14 +3144,9 @@ bool CJEscapeAnalysis::isEscapedValue(Value *V) {
   if (isa<Argument>(Base)) {
     return true;
   }
-  if (isa<GlobalVariable>(Base) || isa<ConstantExpr>(Base)) {
-    if (auto PT = dyn_cast<PointerType>(Base->getType())) {
-      if (!containsGCPtrType(PT->getNonOpaquePointerElementType())) {
-        return false;
-      }
-    }
-    return true;
-  }
+  if (isa<GlobalVariable>(Base) || isa<GlobalAlias>(Base) ||
+      isa<ConstantExpr>(Base) || isa<ConstantExpr>(V))
+    return storageMayContainGCPtr(Base);
   return false;
 }
 
@@ -3725,11 +3747,11 @@ public:
       CopyType = ST;
       BeginOff = 0;
     } else {
-      if (!isa<PointerType>(BaseV->getType())) {
+      CopyType = getStorageType(BaseV);
+      if (!CopyType || !CopyType->isSized()) {
+        bindInfoEscape(GP, GV, I->getParent());
         return;
       }
-      CopyType =
-          cast<PointerType>(BaseV->getType())->getNonOpaquePointerElementType();
     }
     if (auto *CopyST = dyn_cast<StructType>(CopyType)) {
       if (!containsGCPtrType(CopyST)) {
@@ -3912,7 +3934,7 @@ public:
     for (unsigned Idx = 0; Idx < I->getNumOperands(); Idx++) {
       auto V = I->getOperand(Idx);
       if (!(isGCPointerType(V->getType()) ||
-            isMemoryContainsGCPtrType(V->getType())))
+            isMemoryWithPossibleGCPtr(V)))
         continue;
       GCPtr *Base = GCPtr::create(getBaseValue(V, Offset), *this, LI);
       if (Base != nullptr) {
