@@ -19,6 +19,10 @@
 #include "llvm/IR/PassManager.h"
 
 namespace llvm {
+// Prove all potential initializer views safe across later optimization and
+// linking. Content-preserving nonzero views also require unobserved raw layout.
+bool hasSafeCJStringPoolViews(GlobalVariable &Buffer);
+
 struct CJStringPoolMerge : public PassInfoMixin<CJStringPoolMerge> {
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &) const;
 };

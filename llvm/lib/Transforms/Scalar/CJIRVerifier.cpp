@@ -26,6 +26,7 @@
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/InstVisitor.h"
@@ -43,6 +44,7 @@
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/CJFillMetadata.h"
 #include "llvm/Transforms/Scalar/CJRuntimeLowering.h"
+#include "llvm/Transforms/Scalar/CJStringPoolMerge.h"
 #include "llvm/Transforms/Scalar/CJTypedReadHelper.h"
 #include "llvm/Transforms/Scalar/ReflectionInfo.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -2519,7 +2521,141 @@ private:
            isa<StructType>(AI->getAllocatedType());
   }
 
-  // Prove the one immutable global source form emitted for String literals.
+  // A pointer spilled into a private scalar alloca has not escaped. Prove the
+  // entire slot's address closure and send every reload back to the record
+  // worklist. Do not infer safety merely from nocapture on a slot helper: such
+  // a helper can load and capture the pointer stored inside the slot.
+  bool collectCJStringAddressSpill(StoreInst &Store,
+                                   SmallVectorImpl<Value *> &Addresses) {
+    auto *Slot = dyn_cast<AllocaInst>(Store.getPointerOperand());
+    if (!Slot || !Slot->isStaticAlloca() || Slot->isArrayAllocation() ||
+        !Slot->getAllocatedType()->isPointerTy() || Store.isVolatile())
+      return false;
+    SmallVector<Value *, 8> Work{Slot};
+    SmallPtrSet<Value *, 16> Seen;
+    while (!Work.empty()) {
+      Value *Address = Work.pop_back_val();
+      if (!Seen.insert(Address).second)
+        continue;
+      for (Use &U : Address->uses()) {
+        User *User = U.getUser();
+        if (auto *Load = dyn_cast<LoadInst>(User)) {
+          if (U.getOperandNo() != LoadInst::getPointerOperandIndex() ||
+              Load->isVolatile() || !Load->getType()->isPointerTy())
+            return false;
+          Addresses.push_back(Load);
+          continue;
+        }
+        if (auto *Write = dyn_cast<StoreInst>(User)) {
+          if (U.getOperandNo() != StoreInst::getPointerOperandIndex() ||
+              Write->isVolatile() || !Write->getValueOperand()->getType()->isPointerTy())
+            return false;
+          continue;
+        }
+        if (auto *Cast = dyn_cast<BitCastInst>(User)) {
+          Work.push_back(Cast);
+          continue;
+        }
+        if (auto *GEP = dyn_cast<GetElementPtrInst>(User)) {
+          if (U.getOperandNo() != 0 || !GEP->hasAllZeroIndices())
+            return false;
+          Work.push_back(GEP);
+          continue;
+        }
+        if (auto *Intrinsic = dyn_cast<IntrinsicInst>(User)) {
+          if (Intrinsic->isLifetimeStartOrEnd() || isa<DbgInfoIntrinsic>(Intrinsic))
+            continue;
+        }
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Prove all uses of the record address, not uses of the loaded String value
+  // or its AS1 buffer. Each operand is checked independently: memcpy(p,p,...)
+  // is a write even though p is also its source. Seen only suppresses expansion;
+  // success is returned after every edge of the finite graph has been checked,
+  // so PHI/select cycles cannot hide a store or capture.
+  bool isReadOnlyCJStringRecordAddress(GlobalVariable &Record) {
+    SmallVector<Value *, 16> Work{&Record};
+    SmallPtrSet<Value *, 32> Seen;
+    while (!Work.empty()) {
+      Value *Address = Work.pop_back_val();
+      if (!Seen.insert(Address).second)
+        continue;
+      for (Use &U : Address->uses()) {
+        User *User = U.getUser();
+        if (auto *Alias = dyn_cast<GlobalAlias>(User)) {
+          if (!Alias->hasLocalLinkage())
+            return false;
+          Work.push_back(Alias);
+          continue;
+        }
+        if (auto *Op = dyn_cast<Operator>(User)) {
+          unsigned Opcode = Op->getOpcode();
+          if (((Opcode == Instruction::BitCast ||
+                Opcode == Instruction::AddrSpaceCast ||
+                Opcode == Instruction::GetElementPtr) &&
+               U.getOperandNo() == 0) ||
+              Opcode == Instruction::PHI ||
+              (Opcode == Instruction::Select && U.getOperandNo() != 0)) {
+            Work.push_back(User);
+            continue;
+          }
+        }
+        if (auto *Load = dyn_cast<LoadInst>(User)) {
+          if (U.getOperandNo() != LoadInst::getPointerOperandIndex() ||
+              Load->isVolatile())
+            return false;
+          continue;
+        }
+        if (auto *Copy = dyn_cast<MemTransferInst>(User)) {
+          if (&U != &Copy->getArgOperandUse(1) || Copy->isVolatile())
+            return false;
+          continue;
+        }
+        if (auto *Store = dyn_cast<StoreInst>(User)) {
+          if (U.getOperandNo() == 0 &&
+              collectCJStringAddressSpill(*Store, Work))
+            continue;
+          return false;
+        }
+        if (isa<AtomicRMWInst>(User) || isa<AtomicCmpXchgInst>(User))
+          return false;
+        if (auto *Call = dyn_cast<CallBase>(User)) {
+          if (Call->isInlineAsm() || !Call->isArgOperand(&U))
+            return false;
+          unsigned ArgNo = Call->getArgOperandNo(&U);
+          // byval passes an independent memory copy, not the record address.
+          if (Call->isByValArgument(ArgNo) && !Call->hasOperandBundles())
+            continue;
+          // Capture and writes are separate obligations. Readonly alone may
+          // return/capture the address; nocapture alone may write through it.
+          if (Call->doesNotCapture(ArgNo) &&
+              (Call->onlyReadsMemory() || Call->onlyReadsMemory(ArgNo)))
+            continue;
+          // A local, defined helper can instead be proved by its actual uses.
+          // Returning the address, storing it, or an unknown onward call will
+          // fail in this same worklist; recursive helpers do not bypass checks.
+          Function *Callee = Call->getCalledFunction();
+          if (!Callee || !Callee->hasLocalLinkage() || Callee->isDeclaration() ||
+              ArgNo >= Callee->arg_size() || Call->hasOperandBundles())
+            return false;
+          Work.push_back(Callee->getArg(ArgNo));
+          continue;
+        }
+        if (isa<ICmpInst>(User))
+          continue;
+        // Stores/atomics (including storing the address), aggregate/global
+        // initializer propagation, ptrtoint, returns and unknown users fail.
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Prove the immutable or runtime-readonly deferred source form for literals.
   // This predicate is deliberately source-only: destination admission remains
   // governed by the registered alloca/sret checks above.
   bool isCanonicalCJStringLiteralSource(Value *Ptr, Value *SizeValue) {
@@ -2533,7 +2669,7 @@ private:
     auto *StringGV = dyn_cast<GlobalVariable>(Base);
     if (!StringGV || !Offset.isZero() ||
         !StringGV->hasPrivateLinkage() ||
-        !StringGV->isConstant() ||
+        !StringGV->hasInitializer() ||
         !StringGV->hasAttribute("cjstring_literal"))
       return false;
 
@@ -2615,7 +2751,19 @@ private:
     if (!Related || Related->getNumOperands() != 1)
       return false;
     auto *RelatedName = dyn_cast<MDString>(Related->getOperand(0));
-    return RelatedName && RelatedName->getString() == "ArrayLayout.UInt8";
+    if (!RelatedName || RelatedName->getString() != "ArrayLayout.UInt8")
+      return false;
+    if (StringGV->isConstant())
+      return true; // Preserve the existing immutable/pool/legacy path.
+
+    // Deferred locates the candidate; neither marker implies immutability.
+    // Runtime caches remain native writable roots, even with an initializer.
+    Constant *Bytes = DataInit->getOperand(2);
+    return (isa<ConstantDataArray>(Bytes) || isa<ConstantAggregateZero>(Bytes)) &&
+           DataGV->hasAttribute("cjstring_deferred") &&
+           !StringGV->isCJGlobalValue() &&
+           isReadOnlyCJStringRecordAddress(*StringGV) &&
+           hasSafeCJStringPoolViews(*DataGV);
   }
 
   // Cangjie lowers a known-size aggregate value through an AS0 pointer.  The
