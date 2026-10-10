@@ -2627,6 +2627,9 @@ private:
           if (Call->isInlineAsm() || !Call->isArgOperand(&U))
             return false;
           unsigned ArgNo = Call->getArgOperandNo(&U);
+          // byval passes an independent memory copy, not the record address.
+          if (Call->isByValArgument(ArgNo) && !Call->hasOperandBundles())
+            continue;
           // Capture and writes are separate obligations. Readonly alone may
           // return/capture the address; nocapture alone may write through it.
           if (Call->doesNotCapture(ArgNo) &&
