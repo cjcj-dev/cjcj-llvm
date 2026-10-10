@@ -80,6 +80,20 @@ static bool isMemoryWithPossibleGCPtr(Value *V) {
          storageMayContainGCPtr(V);
 }
 
+// inttoptr constants and other addresses with no GlobalValue or GEP storage
+// type are not proof that the memory is free of GC references. SSA values keep
+// their own locations; this predicate is only for external addresses.
+static bool unknownAddressStorage(Value *V) {
+  Value *Base = findMemoryBasePointer(V);
+  if (isa<Instruction>(Base) || isa<Argument>(Base) || isa<Function>(Base) ||
+      isa<ConstantPointerNull>(Base))
+    return false;
+  if (!isa<Constant>(Base) && !isa<GlobalValue>(Base))
+    return false;
+  Type *ST = getStorageType(Base);
+  return !ST || !ST->isSized();
+}
+
 // Maximum depth of the cumulative-offset path carried by spreadMemEscape.
 // Deeper propagations are collapsed to the escape-all offset (-1), which
 // bounds the number of distinct (node, Offsets) states
@@ -2222,6 +2236,16 @@ private:
   void handleMemcpyOrWriteAgg(Instruction *I, Value *P, Value *V) {
     auto VLoc = getOrCreateLocation(V);
     auto PLoc = getOrCreateLocation(P);
+    // A byte copy from or to storage whose type cannot be proved may install
+    // or publish GC references. Info-edges do not block stack promotion.
+    if (PLoc && PLoc != HeapLoc && unknownAddressStorage(V)) {
+      markEscaped(PLoc, I);
+      return;
+    }
+    if (VLoc && VLoc != HeapLoc && unknownAddressStorage(P)) {
+      markEscaped(VLoc, I);
+      return;
+    }
     if (!VLoc || !PLoc) {
       return;
     }
@@ -3753,6 +3777,10 @@ public:
       CopyType = getStorageType(BaseV);
       if (!CopyType || !CopyType->isSized()) {
         bindInfoEscape(GP, GV, I->getParent());
+        if (unknownAddressStorage(V))
+          setEscaped(GP, I->getParent());
+        if (unknownAddressStorage(P))
+          setEscaped(GV, I->getParent());
         return;
       }
     }
