@@ -76,6 +76,44 @@ protected:
     errs() << "PEA_TARGET copy escape=" << Info << " expected=" << Escapes << '\n';
     EXPECT_EQ(Info != 0, Escapes);
   }
+
+  void checkAllocation(StringRef Use, bool Retained) {
+    std::string IR = R"(
+      target datalayout = "e-p:64:64-p1:64:64-i64:64-n8:16:32:64"
+      %TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i32*, i8*, i8*, i8*, %TypeInfo*, i8*, i8* }
+      %ObjLayout.Test = type { i64 }
+      @ti = external global %TypeInfo, !RelatedType !0
+      @slot = global i8 addrspace(1)* null
+      @alias = alias i8 addrspace(1)*, i8 addrspace(1)** @slot
+      @plain = global [1 x i64] zeroinitializer
+      declare i8 addrspace(1)* @CJ_MCC_NewObject(i8*, i32)
+      declare void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)*, i8*, i64, i1 immarg)
+      define void @allocate() gc "cangjie" {
+        %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @ti to i8*), i32 16)
+    )";
+    IR += Use.str();
+    IR += R"(
+        ret void
+      }
+      !0 = !{!"ObjLayout.Test"}
+    )";
+    auto M = runPEA(IR);
+    ASSERT_TRUE(M) << "valid layout and registered product pass are prerequisites";
+    unsigned Allocations = 0;
+    unsigned Allocas = 0;
+    for (auto &BB : *M->getFunction("allocate"))
+      for (auto &I : BB) {
+        Allocas += isa<AllocaInst>(I);
+        if (auto *CB = dyn_cast<CallBase>(&I))
+          if (CB->getCalledFunction() &&
+              CB->getCalledFunction()->getName() == "CJ_MCC_NewObject")
+            ++Allocations;
+      }
+    errs() << "PEA_TARGET allocation retained=" << Allocations
+           << " allocas=" << Allocas << " expected=" << Retained << '\n';
+    EXPECT_EQ(Allocations, Retained ? 1u : 0u);
+    EXPECT_EQ(Allocas, Retained ? 0u : 1u);
+  }
 };
 
 TEST_P(CJPEAStorageTest, GlobalGC) {
@@ -98,6 +136,19 @@ TEST_P(CJPEAStorageTest, ConstantGEPNoGC) {
 }
 TEST_P(CJPEAStorageTest, UnknownConstantAddress) {
   checkCopy("inttoptr (i64 4096 to i8*)", true);
+}
+
+TEST_P(CJPEAStorageTest, PublishedGlobalRetainsHeap) {
+  checkAllocation("store i8 addrspace(1)* %obj, i8 addrspace(1)** @slot", true);
+}
+TEST_P(CJPEAStorageTest, PublishedAliasRetainsHeap) {
+  checkAllocation("store i8 addrspace(1)* %obj, i8 addrspace(1)** @alias", true);
+}
+TEST_P(CJPEAStorageTest, NoGCSourceAllowsStack) {
+  checkAllocation("call void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)* %obj, i8* bitcast ([1 x i64]* @plain to i8*), i64 8, i1 false)", false);
+}
+TEST_P(CJPEAStorageTest, UnknownSourceRetainsHeap) {
+  checkAllocation("call void @llvm.memcpy.p1i8.p0i8.i64(i8 addrspace(1)* %obj, i8* inttoptr (i64 4096 to i8*), i64 8, i1 false)", true);
 }
 
 INSTANTIATE_TEST_SUITE_P(PointerModes, CJPEAStorageTest,
