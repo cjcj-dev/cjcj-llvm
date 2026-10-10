@@ -2,21 +2,31 @@
 ; RUN: llvm-link %t/producer.ll %t/consumer.ll -o %t/input.bc
 ; RUN: opt -passes='default<O0>' -cangjie-pipeline %t/input.bc -o %t/o0.bc
 ; RUN: opt -passes=globaldce %t/o0.bc -o %t/o0.native.bc
+; RUN: lli %t/o0.native.bc | FileCheck %s --check-prefix=CONTROL
+; RUN: lli %t/o0.native.bc | FileCheck %s --check-prefix=GUARDED
 ; RUN: lli %t/o0.native.bc | FileCheck %s --check-prefix=MERGED
 ; RUN: opt -passes='default<O1>' -cangjie-pipeline %t/input.bc -o %t/o1.bc
 ; RUN: opt -passes=globaldce %t/o1.bc -o %t/o1.native.bc
+; RUN: lli %t/o1.native.bc | FileCheck %s --check-prefix=CONTROL
+; RUN: lli %t/o1.native.bc | FileCheck %s --check-prefix=GUARDED
 ; RUN: lli %t/o1.native.bc | FileCheck %s --check-prefix=MERGED
 ; RUN: opt -passes='default<O2>' -cangjie-pipeline %t/input.bc -o %t/o2.bc
 ; RUN: opt -passes=globaldce %t/o2.bc -o %t/o2.native.bc
+; RUN: lli %t/o2.native.bc | FileCheck %s --check-prefix=CONTROL
+; RUN: lli %t/o2.native.bc | FileCheck %s --check-prefix=GUARDED
 ; RUN: lli %t/o2.native.bc | FileCheck %s --check-prefix=MERGED
 ; RUN: opt -passes='default<O1>' -cangjie-pipeline -cj-string-pool-merge=false %t/input.bc -o %t/off.bc
 ; RUN: opt -passes=globaldce %t/off.bc -o %t/off.native.bc
+; RUN: lli %t/off.native.bc | FileCheck %s --check-prefix=CONTROL
+; RUN: lli %t/off.native.bc | FileCheck %s --check-prefix=GUARDED
 ; RUN: lli %t/off.native.bc | FileCheck %s --check-prefix=UNMERGED
 ; RUN: opt -passes='default<O1>' -cangjie-pipeline -cangjie-lto %t/producer.ll -o %t/producer.pre.bc
 ; RUN: opt -passes='default<O1>' -cangjie-pipeline -cangjie-lto %t/consumer.ll -o %t/consumer.pre.bc
 ; RUN: llvm-link %t/producer.pre.bc %t/consumer.pre.bc -o %t/linked.pre.bc
 ; RUN: opt -passes='lto<O1>' -cangjie-pipeline %t/linked.pre.bc -o %t/full.bc
 ; RUN: opt -passes=globaldce %t/full.bc -o %t/full.native.bc
+; RUN: lli %t/full.native.bc | FileCheck %s --check-prefix=CONTROL
+; RUN: lli %t/full.native.bc | FileCheck %s --check-prefix=GUARDED
 ; RUN: lli %t/full.native.bc | FileCheck %s --check-prefix=MERGED
 ;
 ; These native value consumers exercise the real Cangjie pipelines, pool and
@@ -27,6 +37,8 @@
 ; Observe contained substring cde, suffix/prefix overlap efg, legacy slice rst,
 ; the actual final starts, prefix lengths, and a non-layout length control.
 ; MERGED: values=cde/efg/rst starts=2,4,2 lens=3,3,3 control=6
+; CONTROL: control=6
+; GUARDED: guarded=c
 ; UNMERGED: values=cde/efg/rst starts=0,0,2 lens=3,3,3 control=6
 ;
 ;--- producer.ll
@@ -59,9 +71,24 @@ define void @copy_rst(%"record.std.core:String"* noalias sret(%"record.std.core:
  ret void
 }
 define i32 @retain_long() {
- %v = load i32, i32* getelementptr (%"record.std.core:String", %"record.std.core:String"* @long, i32 0, i32 2)
+ %v = call i32 @opaque_length(%"record.std.core:String"* @long)
  ret i32 %v
 }
+@data_guarded = private constant { i8*, i64, [4 x i8] } { i8* bitcast (%TypeInfo* @ti to i8*), i64 4, [4 x i8] c"cdef" } #1
+@guarded = private global %"record.std.core:String" { i8 addrspace(1)* addrspacecast (i8* bitcast ({ i8*, i64, [4 x i8] }* @data_guarded to i8*) to i8 addrspace(1)*), i32 0, i32 3 } #2
+; Only the start is visible to prelink folding. The other module supplies the
+; readonly buffer accessor; the String address remains live until pooling.
+define i8 @read_guarded() noinline {
+ %start = load i32, i32* getelementptr (%"record.std.core:String", %"record.std.core:String"* @guarded, i32 0, i32 1)
+ %buffer = call i8 addrspace(1)* @opaque_buffer(%"record.std.core:String"* @guarded)
+ %native = addrspacecast i8 addrspace(1)* %buffer to i8*
+ %offset = add i32 %start, 16
+ %ptr = getelementptr i8, i8* %native, i32 %offset
+ %byte = load i8, i8* %ptr
+ ret i8 %byte
+}
+declare i8 addrspace(1)* @opaque_buffer(%"record.std.core:String"* nocapture readonly) readonly
+declare i32 @opaque_length(%"record.std.core:String"* nocapture readonly) readonly
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
 attributes #1 = { "cjstring_data" "cjstring_deferred" }
 attributes #2 = { "cjstring_literal" }
@@ -75,10 +102,21 @@ attributes #3 = { "cjstring_data" }
 target triple = "x86_64-unknown-linux-gnu"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 %"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
-@format = private constant [70 x i8] c"values=%c%c%c/%c%c%c/%c%c%c starts=%d,%d,%d lens=%d,%d,%d control=%d\0A\00"
+@format = private constant [81 x i8] c"values=%c%c%c/%c%c%c/%c%c%c starts=%d,%d,%d lens=%d,%d,%d control=%d guarded=%c\0A\00"
 declare void @copy_cde(%"record.std.core:String"* sret(%"record.std.core:String"))
 declare void @copy_efg(%"record.std.core:String"* sret(%"record.std.core:String"))
 declare void @copy_rst(%"record.std.core:String"* sret(%"record.std.core:String"))
+declare i8 @read_guarded()
+define i8 addrspace(1)* @opaque_buffer(%"record.std.core:String"* nocapture readonly %record) noinline readonly {
+ %slot = getelementptr %"record.std.core:String", %"record.std.core:String"* %record, i32 0, i32 0
+ %buffer = load i8 addrspace(1)*, i8 addrspace(1)** %slot
+ ret i8 addrspace(1)* %buffer
+}
+define i32 @opaque_length(%"record.std.core:String"* nocapture readonly %record) noinline readonly {
+ %slot = getelementptr %"record.std.core:String", %"record.std.core:String"* %record, i32 0, i32 2
+ %length = load i32, i32* %slot
+ ret i32 %length
+}
 declare i32 @retain_long()
 declare i32 @printf(i8*, ...)
 define i32 @main() {
@@ -146,7 +184,9 @@ define i32 @main() {
  %rst.c2 = load i8, i8* %rst.ptr2
  %rst.v2 = zext i8 %rst.c2 to i32
  %control = call i32 @retain_long()
- %printed = call i32 (i8*, ...) @printf(i8* getelementptr ([70 x i8], [70 x i8]* @format, i32 0, i32 0), i32 %cde.v0, i32 %cde.v1, i32 %cde.v2, i32 %efg.v0, i32 %efg.v1, i32 %efg.v2, i32 %rst.v0, i32 %rst.v1, i32 %rst.v2, i32 %cde.start, i32 %efg.start, i32 %rst.start, i32 %cde.len, i32 %efg.len, i32 %rst.len, i32 %control)
+ %guarded.c = call i8 @read_guarded()
+ %guarded.v = zext i8 %guarded.c to i32
+ %printed = call i32 (i8*, ...) @printf(i8* getelementptr ([81 x i8], [81 x i8]* @format, i32 0, i32 0), i32 %cde.v0, i32 %cde.v1, i32 %cde.v2, i32 %efg.v0, i32 %efg.v1, i32 %efg.v2, i32 %rst.v0, i32 %rst.v1, i32 %rst.v2, i32 %cde.start, i32 %efg.start, i32 %rst.start, i32 %cde.len, i32 %efg.len, i32 %rst.len, i32 %control, i32 %guarded.v)
  ret i32 0
 }
 
