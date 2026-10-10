@@ -60,6 +60,7 @@ protected:
       @plain = global [1 x i64] zeroinitializer
       @gc_alias = alias [1 x i8 addrspace(1)*], [1 x i8 addrspace(1)*]* @gc
       @plain_alias = alias [1 x i64], [1 x i64]* @plain
+      @narrow_alias = alias i64, bitcast ([1 x i8 addrspace(1)*]* @gc to i64*)
       declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1 immarg)
       define void @copy(i8* %dst) {
         call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* )";
@@ -127,6 +128,9 @@ TEST_P(CJPEAStorageTest, AliasGC) {
 }
 TEST_P(CJPEAStorageTest, AliasNoGC) {
   checkCopy("bitcast ([1 x i64]* @plain_alias to i8*)", false);
+}
+TEST_P(CJPEAStorageTest, NarrowAliasGC) {
+  checkCopy("bitcast (i64* @narrow_alias to i8*)", true);
 }
 TEST_P(CJPEAStorageTest, ConstantGEPGC) {
   checkCopy("bitcast (i8 addrspace(1)** getelementptr ([1 x i8 addrspace(1)*], [1 x i8 addrspace(1)*]* @gc, i64 0, i64 0) to i8*)", true);
