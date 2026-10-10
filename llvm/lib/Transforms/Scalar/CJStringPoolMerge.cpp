@@ -424,12 +424,14 @@ namespace {
 bool hasOnlyLengthObservations(GlobalVariable &View) {
   const DataLayout &DL = View.getParent()->getDataLayout();
   auto *Ty = dyn_cast<StructType>(View.getValueType());
-  if (!Ty || !Ty->isSized())
+  if (!Ty || !Ty->isSized() || !View.hasLocalLinkage() ||
+      View.isExternallyInitialized())
     return false;
   uint64_t Size = DL.getTypeAllocSize(Ty).getFixedSize();
   uint64_t LengthOffset = DL.getStructLayout(Ty)->getElementOffset(2);
   SmallVector<Value *, 16> Work{&View};
   SmallDenseSet<Value *, 32> Seen;
+  SmallDenseSet<Value *, 16> Copies;
   while (!Work.empty()) {
     Value *Address = Work.pop_back_val();
     if (!Seen.insert(Address).second)
@@ -468,19 +470,47 @@ bool hasOnlyLengthObservations(GlobalVariable &View) {
         // Writes are permitted only as complete initializations of a local
         // copy, never to the source view. Its other uses are checked below.
         if (&U == &Copy->getArgOperandUse(0)) {
-          if (!isa<AllocaInst>(Base))
+          if (!Copies.count(Base))
             return false;
           continue;
         }
         if (&U != &Copy->getArgOperandUse(1))
           return false;
         APInt DestOffset(DL.getIndexSizeInBits(0), 0);
-        auto *Dest = dyn_cast<AllocaInst>(
-            Copy->getDest()->stripAndAccumulateConstantOffsets(DL, DestOffset, true));
-        if (!Dest || !DestOffset.isZero() || Dest->getAllocatedType() != Ty ||
-            !Dest->isStaticAlloca() || Dest->isArrayAllocation())
+        Value *DestBase = Copy->getDest()->stripAndAccumulateConstantOffsets(
+            DL, DestOffset, true);
+        if (!DestOffset.isZero())
           return false;
-        Work.push_back(Dest);
+        auto EnqueueAlloca = [&](Value *P) {
+          APInt O(DL.getIndexSizeInBits(0), 0);
+          auto *A = dyn_cast<AllocaInst>(
+              P->stripAndAccumulateConstantOffsets(DL, O, true));
+          if (!A || !O.isZero() || A->getAllocatedType() != Ty ||
+              !A->isStaticAlloca() || A->isArrayAllocation())
+            return false;
+          Copies.insert(A);
+          Work.push_back(A);
+          return true;
+        };
+        if (auto *Arg = dyn_cast<Argument>(DestBase)) {
+          Function *F = Arg->getParent();
+          if (!F->hasLocalLinkage() || !Arg->hasNoAliasAttr() ||
+              !Arg->hasStructRetAttr() || Arg->getParamStructRetType() != Ty)
+            return false;
+          // The local sret boundary is transparent only if every actual
+          // caller supplies a private stack copy whose observers we can prove.
+          for (User *Caller : F->users()) {
+            auto *Call = dyn_cast<CallBase>(Caller);
+            if (!Call || Call->getCalledFunction() != F ||
+                Call->hasOperandBundles() ||
+                !EnqueueAlloca(Call->getArgOperand(Arg->getArgNo())))
+              return false;
+          }
+          Copies.insert(Arg);
+          Work.push_back(Arg);
+        } else if (!EnqueueAlloca(DestBase)) {
+          return false;
+        }
         continue;
       }
       if (auto *I = dyn_cast<IntrinsicInst>(User)) {
@@ -555,6 +585,8 @@ bool llvm::hasSafeCJStringPoolViews(GlobalVariable &Buffer) {
         auto *Init = dyn_cast_or_null<ConstantStruct>(View->getInitializer());
         if (!isStringRecordGV(*View) || !Init ||
             Init->getNumOperands() != LITERAL_FIELD_COUNT ||
+            Init->getOperand(0)->getType() !=
+                Type::getInt8PtrTy(Buffer.getContext(), 1) ||
             Init->getOperand(0)->stripPointerCasts() != &Buffer)
           return false; // An unresolved potential view is not absent.
         auto *Start = dyn_cast<ConstantInt>(Init->getOperand(1));
