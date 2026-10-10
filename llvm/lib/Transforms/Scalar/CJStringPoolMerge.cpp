@@ -437,24 +437,24 @@ bool hasOnlyLengthObservations(GlobalVariable &View) {
     if (!Seen.insert(Address).second)
       continue;
     for (Use &U : Address->uses()) {
-      User *User = U.getUser();
-      if (auto *Alias = dyn_cast<GlobalAlias>(User)) {
+      User *Observer = U.getUser();
+      if (auto *Alias = dyn_cast<GlobalAlias>(Observer)) {
         if (!Alias->hasLocalLinkage())
           return false;
         Work.push_back(Alias);
         continue;
       }
-      if (auto *Op = dyn_cast<Operator>(User)) {
+      if (auto *Op = dyn_cast<Operator>(Observer)) {
         if ((Op->getOpcode() == Instruction::BitCast ||
              Op->getOpcode() == Instruction::GetElementPtr) &&
             U.getOperandNo() == 0) {
-          Work.push_back(User);
+          Work.push_back(Observer);
           continue;
         }
       }
       APInt Offset(DL.getIndexSizeInBits(0), 0);
       Value *Base = Address->stripAndAccumulateConstantOffsets(DL, Offset, true);
-      if (auto *Load = dyn_cast<LoadInst>(User)) {
+      if (auto *Load = dyn_cast<LoadInst>(Observer)) {
         if (U.getOperandNo() != LoadInst::getPointerOperandIndex() ||
             Load->isVolatile() || Load->isAtomic() ||
             !Load->getType()->isIntegerTy(32) || Offset != LengthOffset ||
@@ -462,7 +462,7 @@ bool hasOnlyLengthObservations(GlobalVariable &View) {
           return false;
         continue;
       }
-      if (auto *Copy = dyn_cast<MemTransferInst>(User)) {
+      if (auto *Copy = dyn_cast<MemTransferInst>(Observer)) {
         auto *Length = dyn_cast<ConstantInt>(Copy->getLength());
         if (Copy->isVolatile() || !Length || Length->getZExtValue() != Size ||
             !Offset.isZero())
@@ -513,7 +513,7 @@ bool hasOnlyLengthObservations(GlobalVariable &View) {
         }
         continue;
       }
-      if (auto *I = dyn_cast<IntrinsicInst>(User)) {
+      if (auto *I = dyn_cast<IntrinsicInst>(Observer)) {
         if (I->getIntrinsicID() == Intrinsic::cj_memset &&
             &U == &I->getArgOperandUse(0) && isa<AllocaInst>(Base) &&
             Offset.isZero()) {
@@ -527,7 +527,7 @@ bool hasOnlyLengthObservations(GlobalVariable &View) {
           continue;
         return false;
       }
-      if (auto *Call = dyn_cast<CallBase>(User)) {
+      if (auto *Call = dyn_cast<CallBase>(Observer)) {
         if (!Call->isArgOperand(&U) || Call->hasOperandBundles() ||
             !Offset.isZero())
           return false;
