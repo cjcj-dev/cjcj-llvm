@@ -134,10 +134,10 @@ static MemoryAccess *findLastDefDominateMA(MemorySSA &MSSA, BasicBlock *BB,
   return nullptr;
 }
 
-bool llvm::hasMemoryDefBetween(MemorySSA &MSSA, DominatorTree &DT,
-                               const DataLayout &DL, Value *UnderObj,
-                               Instruction *FirstI, MemoryAccess *LastMA,
-                               bool LastClosure, bool EnableDiffBB) {
+static bool hasMemoryDefBetweenForLocation(
+    MemorySSA &MSSA, DominatorTree &DT, const MemoryLocation &Loc,
+    Instruction *FirstI, MemoryAccess *LastMA, bool LastClosure = true,
+    bool EnableDiffBB = false) {
   assert(isa<MemoryUseOrDef>(LastMA));
   Instruction *LastI = cast<MemoryUseOrDef>(LastMA)->getMemoryInst();
   if (FirstI->getParent() == LastI->getParent() && !FirstI->comesBefore(LastI))
@@ -151,39 +151,46 @@ bool llvm::hasMemoryDefBetween(MemorySSA &MSSA, DominatorTree &DT,
   assert((LastDef || EnableDiffBB) && "Cannot be false at the same time");
   if (!LastDef) // Now, LastDef is MemoryUse
     LastDef = cast<MemoryUseOrDef>(LastMA)->getDefiningAccess();
+  // MSSA uses SimpleCaptureInfo by default. To make the result more accurate,
+  // consider using BatchAA for more analysis of MA.
+  MemoryAccess *MA =
+      MSSA.getWalker()->getClobberingMemoryAccess(LastDef, Loc);
+  // if FirstDef is equal to LastDef, we known FirstDef does not clobber
+  // source.This is based on the premise that we've aligned it by the offset
+  // of source and dest.
+  if (MA == LastDef && LastDef != FirstDef)
+    return true;
+  if (MA == FirstDef)
+    return false;
+  // If the MA is MemoryPhi, it is impossible for the MA to satisfy
+  // FirstI->MA->LastI because FirstI and LastI are in the same BB.
+  if (isa<MemoryPhi>(MA) || MSSA.isLiveOnEntryDef(MA))
+    return false;
+  assert((!EnableDiffBB || !isa<MemoryPhi>(MA)) && // Optimize it in future
+         "EnableDiffBB support only single predecessor");
+  Instruction *DefI = cast<MemoryDef>(MA)->getMemoryInst();
+  assert(
+      DefI != FirstI &&
+      "FirstI is last clobber inst of memcpy dest, therefore, def of source "
+      "cannot be equal to FirstI");
+  if (DT.dominates(FirstI, DefI) && MSSA.dominates(MA, LastMA))
+    return true;
+  return false;
+}
+
+bool llvm::hasMemoryDefBetween(MemorySSA &MSSA, DominatorTree &DT,
+                               const DataLayout &, Value *UnderObj,
+                               Instruction *FirstI, MemoryAccess *LastMA,
+                               bool LastClosure, bool EnableDiffBB) {
   SmallVector<const Value *, 8> UnderObjs;
   getUnderlyingObjects(UnderObj, UnderObjs);
   for (auto *V : UnderObjs) {
-    auto *ST =
-        dyn_cast<StructType>(V->getType()->getNonOpaquePointerElementType());
-    // Loc may be load inst, and the clobber we find may not accurate.
-    MemoryLocation Loc =
-        ST ? MemoryLocation(V, LocationSize::precise(
-                                   DL.getStructLayout(ST)->getSizeInBytes()))
-           : MemoryLocation::getAfter(V);
-    // MSSA uses SimpleCaptureInfo by default. To make the result more accurate,
-    // consider using BatchAA for more analysis of MA.
-    MemoryAccess *MA =
-        MSSA.getWalker()->getClobberingMemoryAccess(LastDef, Loc);
-    // if FirstDef is equal to LastDef, we known FirstDef does not clobber
-    // source.This is based on the premise that we've aligned it by the offset
-    // of source and dest.
-    if (MA == LastDef && LastDef != FirstDef)
-      return true;
-    if (MA == FirstDef)
-      continue;
-    // If the MA is MemoryPhi, it is impossible for the MA to satisfy
-    // FirstI->MA->LastI because FirstI and LastI are in the same BB.
-    if (isa<MemoryPhi>(MA) || MSSA.isLiveOnEntryDef(MA))
-      continue;
-    assert((!EnableDiffBB || !isa<MemoryPhi>(MA)) && // Optimize it in future
-           "EnableDiffBB support only single predecessor");
-    Instruction *DefI = cast<MemoryDef>(MA)->getMemoryInst();
-    assert(
-        DefI != FirstI &&
-        "FirstI is last clobber inst of memcpy dest, therefore, def of source "
-        "cannot be equal to FirstI");
-    if (DT.dominates(FirstI, DefI) && MSSA.dominates(MA, LastMA))
+    // These callers track whole objects, possibly with several copy ranges or
+    // an unknown allocation count. A pointer's element type does not bound the
+    // object: in particular, an alloca may allocate an array of structs.
+    if (hasMemoryDefBetweenForLocation(MSSA, DT,
+                                      MemoryLocation::getBeforeOrAfter(V),
+                                      FirstI, LastMA, LastClosure, EnableDiffBB))
       return true;
   }
   return false;
@@ -549,8 +556,22 @@ struct SourcePropagationState {
     }
     if (!IntervalsValid && !isIntervalsCovered(UnderObj, ST, Intervals))
       return nullptr;
-    if (hasMemoryDefBetween(MSSA, DT, DL, UnderObj, LastClobberI, OriginMA))
-      return nullptr;
+    for (const auto &IV : Intervals) {
+      // Keep the transfer's actual source address and length, including a
+      // nonzero offset within an array allocation. Writes to disjoint parts of
+      // the same object do not invalidate this copy.
+      if (auto *MCI = dyn_cast<MemCpyInst>(IV.DefI)) {
+        if (hasMemoryDefBetweenForLocation(
+                MSSA, DT, MemoryLocation::getForSource(MCI), LastClobberI,
+                OriginMA))
+          return nullptr;
+      } else if (hasMemoryDefBetween(MSSA, DT, DL, UnderObj, LastClobberI,
+                                    OriginMA)) {
+        // A stored reference may have been obtained through a load or a GC
+        // read. Without a transfer source location, check its whole object.
+        return nullptr;
+      }
+    }
     if (!filterValueCopySrc(UnderObj))
       return nullptr;
     IRBuilder<> IRB(MemI);

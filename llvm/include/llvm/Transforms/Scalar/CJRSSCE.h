@@ -29,6 +29,8 @@ struct CJRSSCEPass : public PassInfoMixin<CJRSSCEPass> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
 };
 
+/// Check all memory in the underlying objects of UnderObj. Callers retaining
+/// several copy ranges or an unknown size must not bound this by a pointee type.
 bool hasMemoryDefBetween(MemorySSA &MSSA, DominatorTree &DT,
                          const DataLayout &DL, Value *UnderObj,
                          Instruction *FirstI, MemoryAccess *LastMA,
