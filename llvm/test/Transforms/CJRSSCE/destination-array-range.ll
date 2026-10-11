@@ -31,6 +31,10 @@ define i64 @source_changed_between_copies() {
   %src = alloca %S, i64 2, align 8
   %early = alloca %S, i64 2, align 8
   %late = alloca %S, i64 2, align 8
+  %first.a = getelementptr inbounds %S, %S* %src, i64 0, i32 0
+  %first.b = getelementptr inbounds %S, %S* %src, i64 0, i32 1
+  store i64 0, i64* %first.a, align 8
+  store i64 0, i64* %first.b, align 8
   %a = getelementptr inbounds %S, %S* %src, i64 1, i32 0
   %b = getelementptr inbounds %S, %S* %src, i64 1, i32 1
   store i64 1, i64* %a, align 8
@@ -38,12 +42,12 @@ define i64 @source_changed_between_copies() {
   %src.second = getelementptr inbounds %S, %S* %src, i64 1
   %early.second = getelementptr inbounds %S, %S* %early, i64 1
   %late.second = getelementptr inbounds %S, %S* %late, i64 1
-  %s = bitcast %S* %src.second to i8*
-  %e = bitcast %S* %early.second to i8*
-  %l = bitcast %S* %late.second to i8*
-  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %e, i8* %s, i64 16, i1 false)
+  %s = bitcast %S* %src to i8*
+  %e = bitcast %S* %early to i8*
+  %l = bitcast %S* %late to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %e, i8* %s, i64 32, i1 false)
   store i64 9, i64* %a, align 8
-  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %l, i8* %s, i64 16, i1 false)
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %l, i8* %s, i64 32, i1 false)
   %r = call i64 @sum(%S* %late.second)
   ret i64 %r
 }
@@ -57,6 +61,10 @@ define i64 @candidate_destination_changed() {
   %src = alloca %S, i64 2, align 8
   %early = alloca %S, i64 2, align 8
   %late = alloca %S, i64 2, align 8
+  %first.a = getelementptr inbounds %S, %S* %src, i64 0, i32 0
+  %first.b = getelementptr inbounds %S, %S* %src, i64 0, i32 1
+  store i64 0, i64* %first.a, align 8
+  store i64 0, i64* %first.b, align 8
   %a = getelementptr inbounds %S, %S* %src, i64 1, i32 0
   %b = getelementptr inbounds %S, %S* %src, i64 1, i32 1
   store i64 1, i64* %a, align 8
@@ -64,13 +72,13 @@ define i64 @candidate_destination_changed() {
   %src.second = getelementptr inbounds %S, %S* %src, i64 1
   %early.second = getelementptr inbounds %S, %S* %early, i64 1
   %late.second = getelementptr inbounds %S, %S* %late, i64 1
-  %s = bitcast %S* %src.second to i8*
-  %e = bitcast %S* %early.second to i8*
-  %l = bitcast %S* %late.second to i8*
-  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %e, i8* %s, i64 16, i1 false)
+  %s = bitcast %S* %src to i8*
+  %e = bitcast %S* %early to i8*
+  %l = bitcast %S* %late to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %e, i8* %s, i64 32, i1 false)
   %early.a = getelementptr inbounds %S, %S* %early, i64 1, i32 0
   store i64 9, i64* %early.a, align 8
-  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %l, i8* %s, i64 16, i1 false)
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %l, i8* %s, i64 32, i1 false)
   %r = call i64 @sum(%S* %late.second)
   ret i64 %r
 }
@@ -84,6 +92,10 @@ define i64 @current_destination_changed() {
   %src = alloca %S, i64 2, align 8
   %early = alloca %S, i64 2, align 8
   %late = alloca %S, i64 2, align 8
+  %first.a = getelementptr inbounds %S, %S* %src, i64 0, i32 0
+  %first.b = getelementptr inbounds %S, %S* %src, i64 0, i32 1
+  store i64 0, i64* %first.a, align 8
+  store i64 0, i64* %first.b, align 8
   %a = getelementptr inbounds %S, %S* %src, i64 1, i32 0
   %b = getelementptr inbounds %S, %S* %src, i64 1, i32 1
   store i64 1, i64* %a, align 8
@@ -91,11 +103,11 @@ define i64 @current_destination_changed() {
   %src.second = getelementptr inbounds %S, %S* %src, i64 1
   %early.second = getelementptr inbounds %S, %S* %early, i64 1
   %late.second = getelementptr inbounds %S, %S* %late, i64 1
-  %s = bitcast %S* %src.second to i8*
-  %e = bitcast %S* %early.second to i8*
-  %l = bitcast %S* %late.second to i8*
-  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %e, i8* %s, i64 16, i1 false)
-  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %l, i8* %s, i64 16, i1 false)
+  %s = bitcast %S* %src to i8*
+  %e = bitcast %S* %early to i8*
+  %l = bitcast %S* %late to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %e, i8* %s, i64 32, i1 false)
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %l, i8* %s, i64 32, i1 false)
   %late.a = getelementptr inbounds %S, %S* %late, i64 1, i32 0
   store i64 9, i64* %late.a, align 8
   %r = call i64 @sum(%S* %late.second)
@@ -104,7 +116,7 @@ define i64 @current_destination_changed() {
 
 ; Positive control: two unchanged copies are still equivalent.
 ; CHECK-LABEL: define i64 @unchanged_array_copies()
-; CHECK: [[BASE:%.*]] = bitcast %S* %early to i8*
+; CHECK: [[BASE:%[0-9]+]] = bitcast %S* %early to i8*
 ; CHECK-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i32 16
 ; CHECK-NEXT: [[ARG:%.*]] = bitcast i8* [[RANGE]] to %S*
 ; CHECK-NEXT: %r = call i64 @sum(%S* [[ARG]])
@@ -114,6 +126,10 @@ define i64 @unchanged_array_copies() {
   %src = alloca %S, i64 2, align 8
   %early = alloca %S, i64 2, align 8
   %late = alloca %S, i64 2, align 8
+  %first.a = getelementptr inbounds %S, %S* %src, i64 0, i32 0
+  %first.b = getelementptr inbounds %S, %S* %src, i64 0, i32 1
+  store i64 0, i64* %first.a, align 8
+  store i64 0, i64* %first.b, align 8
   %a = getelementptr inbounds %S, %S* %src, i64 1, i32 0
   %b = getelementptr inbounds %S, %S* %src, i64 1, i32 1
   store i64 1, i64* %a, align 8
@@ -121,11 +137,11 @@ define i64 @unchanged_array_copies() {
   %src.second = getelementptr inbounds %S, %S* %src, i64 1
   %early.second = getelementptr inbounds %S, %S* %early, i64 1
   %late.second = getelementptr inbounds %S, %S* %late, i64 1
-  %s = bitcast %S* %src.second to i8*
-  %e = bitcast %S* %early.second to i8*
-  %l = bitcast %S* %late.second to i8*
-  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %e, i8* %s, i64 16, i1 false)
-  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %l, i8* %s, i64 16, i1 false)
+  %s = bitcast %S* %src to i8*
+  %e = bitcast %S* %early to i8*
+  %l = bitcast %S* %late to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %e, i8* %s, i64 32, i1 false)
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %l, i8* %s, i64 32, i1 false)
   %r = call i64 @sum(%S* %late.second)
   ret i64 %r
 }

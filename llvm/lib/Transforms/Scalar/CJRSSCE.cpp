@@ -422,7 +422,7 @@ struct SourcePropagationState {
     return Base;
   }
 
-  bool isIntervalsCovered(Value *UnderObj, StructType *ST,
+  bool isIntervalsCovered(uint64_t CopySize,
                           SmallVectorImpl<IVInfo> &Intervals) {
     if (Intervals.empty())
       return false;
@@ -439,9 +439,8 @@ struct SourcePropagationState {
     }
     auto FirstE = Intervals.front();
     auto LastE = Intervals.back();
-    auto Size = DL.getStructLayout(ST)->getSizeInBytes();
-    if (LastE.Src.second - FirstE.Src.first != Size ||
-        LastE.Dst.second - FirstE.Dst.first != Size)
+    if (LastE.Src.second - FirstE.Src.first != CopySize ||
+        FirstE.Dst.first != 0 || LastE.Dst.second != CopySize)
       return false;
     return true;
   }
@@ -478,7 +477,7 @@ struct SourcePropagationState {
   }
 
   Instruction *getCompleteClobbers(MemoryLocation &Loc, MemoryAccess *OriginMA,
-                                   StructType *ST, uint64_t Limits = 5) {
+                                   uint64_t CopySize, uint64_t Limits = 5) {
     assert(isa<MemoryUseOrDef>(OriginMA));
     CaptureInfo *CI = &EI;
     auto *StartDef = dyn_cast<MemoryDef>(
@@ -546,12 +545,12 @@ struct SourcePropagationState {
 
       Intervals.push_back(
           {{SrcOff, SrcOff + Size}, {DstOff, DstOff + Size}, I, GEP});
-      if (isIntervalsCovered(UnderObj, ST, Intervals)) {
+      if (isIntervalsCovered(CopySize, Intervals)) {
         IntervalsValid = true;
         break;
       }
     }
-    if (!IntervalsValid && !isIntervalsCovered(UnderObj, ST, Intervals))
+    if (!IntervalsValid && !isIntervalsCovered(CopySize, Intervals))
       return nullptr;
     for (const auto &IV : Intervals) {
       // Keep the transfer's actual source address and length, including a
@@ -585,10 +584,14 @@ struct SourcePropagationState {
     Instruction *I = cast<Instruction>(CB->getArgOperand(Index));
     auto *AI = dyn_cast<AllocaInst>(I);
     assert(AI != nullptr);
-    auto Loc = MemoryLocation(
-        I, LocationSize::precise(DL.getTypeAllocSize(AI->getAllocatedType())));
-    StructType *ST = cast<StructType>(AI->getAllocatedType());
-    Instruction *NewI = getCompleteClobbers(Loc, OriginMA, ST);
+    // A readonly call may read any element of the destination allocation.
+    // Unknown allocation counts cannot be covered by a fixed copy interval.
+    auto SizeInBits = AI->getAllocationSizeInBits(DL);
+    if (!SizeInBits || SizeInBits->isScalable())
+      return nullptr;
+    uint64_t Size = SizeInBits->getFixedSize() / 8;
+    auto Loc = MemoryLocation(I, LocationSize::precise(Size));
+    Instruction *NewI = getCompleteClobbers(Loc, OriginMA, Size);
     return NewI;
   }
 
@@ -1233,10 +1236,30 @@ struct DestPropagationState {
         continue;
       Type *Ty =
           Arg->stripPointerCasts()->getType()->getNonOpaquePointerElementType();
-      uint64_t Size = Ty->isFunctionTy() ? 8 : DL.getTypeAllocSize(Ty);
-      auto [EV, Offset] = findFullEquivalentValue(Arg, Size, BB, CB);
-      if (EV)
-        Changed |= rewriteCallArg(CB, Arg.getOperandNo(), EV, Offset);
+      if (!Ty->isSized())
+        continue;
+      APInt ArgOff(DL.getIndexSizeInBits(
+                       Arg->getType()->getPointerAddressSpace()),
+                   0);
+      Value *Base = Arg->stripAndAccumulateConstantOffsets(DL, ArgOff, true);
+      auto *AI = dyn_cast<AllocaInst>(Base);
+      if (!AI || ArgOff.isNegative())
+        continue;
+      auto SizeInBits = AI->getAllocationSizeInBits(DL);
+      if (!SizeInBits || SizeInBits->isScalable())
+        continue;
+      uint64_t Size = SizeInBits->getFixedSize() / 8;
+      uint64_t ArgOffset = ArgOff.getZExtValue();
+      if (ArgOffset > Size)
+        continue;
+      // The callee can access memory before a derived argument too. Prove the
+      // whole backing allocation equivalent, then restore the argument offset.
+      auto [EV, Offset] = findFullEquivalentValue(Base, Size, BB, CB);
+      // rewriteCallArg currently uses a signed 32-bit GEP index. Do not narrow
+      // a larger replacement offset to fit that representation.
+      if (EV && Offset >= 0 && ArgOffset <= INT32_MAX &&
+          static_cast<uint64_t>(Offset) <= INT32_MAX - ArgOffset)
+        Changed |= rewriteCallArg(CB, Arg.getOperandNo(), EV, Offset + ArgOffset);
     }
     return Changed;
   }
