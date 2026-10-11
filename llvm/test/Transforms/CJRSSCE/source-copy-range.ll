@@ -11,6 +11,7 @@
 target datalayout = "e-p:64:64-i64:64-n8:16:32:64-S128"
 
 %S = type { i64, i64 }
+%H = type { i64 }
 
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8* noalias nocapture writeonly, i8* noalias nocapture readonly, i64, i1 immarg)
 
@@ -247,6 +248,105 @@ define i64 @split_copy_interleaved_write() {
   store i64 9, i64* %a, align 8
   call void @llvm.memcpy.p0i8.p0i8.i64(i8* %d1, i8* %s1, i64 8, i1 false)
   %r = call i64 @sum(%S* %dst)
+  ret i64 %r
+}
+
+; Unknown allocation count alone does not prevent exact-range propagation.
+; The caller supplies n >= 2.
+; CHECK-LABEL: define i64 @dynamic_count_clean(
+; TYPED: [[BASE:%.*]] = bitcast %S* %src to i8*
+; TYPED-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i32 16
+; TYPED: [[ARG:%.*]] = bitcast i8* [[RANGE]] to %S*
+; TYPED-NEXT: %r = call i64 @sum(%S* [[ARG]])
+; OPAQUE: [[RANGE:%.*]] = getelementptr inbounds i8, ptr %src, i32 16
+; OPAQUE: %r = call i64 @sum(ptr [[RANGE]])
+define i64 @dynamic_count_clean(i64 %n) {
+  %src = alloca %S, i64 %n, align 8
+  %dst = alloca %S, align 8
+  %a = getelementptr inbounds %S, %S* %src, i64 1, i32 0
+  %b = getelementptr inbounds %S, %S* %src, i64 1, i32 1
+  store i64 1, i64* %a, align 8
+  store i64 2, i64* %b, align 8
+  %second = getelementptr inbounds %S, %S* %src, i64 1
+  %s = bitcast %S* %second to i8*
+  %d = bitcast %S* %dst to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %d, i8* %s, i64 16, i1 false)
+  %r = call i64 @sum(%S* %dst)
+  ret i64 %r
+}
+
+; A write whose offset is unknown may overlap the known copy source range.
+; The caller supplies an aligned offset within the allocation, e.g. 16.
+; CHECK-LABEL: define i64 @may_alias_source_write(
+; CHECK: %r = call i64 @sum({{%S\*|ptr}} %dst)
+define i64 @may_alias_source_write(i64 %offset) {
+  %src = alloca %S, i64 2, align 8
+  %dst = alloca %S, align 8
+  %a = getelementptr inbounds %S, %S* %src, i64 1, i32 0
+  %b = getelementptr inbounds %S, %S* %src, i64 1, i32 1
+  store i64 1, i64* %a, align 8
+  store i64 2, i64* %b, align 8
+  %second = getelementptr inbounds %S, %S* %src, i64 1
+  %s = bitcast %S* %second to i8*
+  %d = bitcast %S* %dst to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %d, i8* %s, i64 16, i1 false)
+  %base = bitcast %S* %src to i8*
+  %where = getelementptr inbounds i8, i8* %base, i64 %offset
+  %write = bitcast i8* %where to i64*
+  store i64 9, i64* %write, align 8
+  %r = call i64 @sum(%S* %dst)
+  ret i64 %r
+}
+
+; A partial transfer does not by itself cover the whole destination struct.
+; CHECK-LABEL: define i64 @partial_copy()
+; CHECK: %r = call i64 @sum({{%S\*|ptr}} %dst)
+; RESULT-LABEL: define i64 @partial_copy()
+; RESULT-NEXT: ret i64 3
+define i64 @partial_copy() {
+  %src = alloca %S, i64 2, align 8
+  %dst = alloca %S, align 8
+  %a = getelementptr inbounds %S, %S* %src, i64 1, i32 0
+  store i64 1, i64* %a, align 8
+  %db = getelementptr inbounds %S, %S* %dst, i64 0, i32 1
+  store i64 2, i64* %db, align 8
+  %s = bitcast i64* %a to i8*
+  %d = bitcast %S* %dst to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %d, i8* %s, i64 8, i1 false)
+  store i64 9, i64* %a, align 8
+  %r = call i64 @sum(%S* %dst)
+  ret i64 %r
+}
+
+define internal i64 @read_half(%H* %p) #0 {
+  %a = getelementptr inbounds %H, %H* %p, i64 0, i32 0
+  %r = load i64, i64* %a, align 8
+  ret i64 %r
+}
+
+; The actual copy length is 8, even though the source alloca element is 16.
+; A write to its other field must not invalidate the copied field.
+; CHECK-LABEL: define i64 @short_copy_disjoint_write()
+; TYPED: [[BASE:%.*]] = bitcast %S* %src to i8*
+; TYPED-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i32 8
+; TYPED: [[ARG:%.*]] = bitcast i8* [[RANGE]] to %H*
+; TYPED-NEXT: %r = call i64 @read_half(%H* [[ARG]])
+; OPAQUE: [[RANGE:%.*]] = getelementptr inbounds i8, ptr %src, i32 8
+; OPAQUE: %r = call i64 @read_half(ptr [[RANGE]])
+; RESULT-LABEL: define i64 @short_copy_disjoint_write()
+; RESULT-NEXT: ret i64 2
+define i64 @short_copy_disjoint_write() {
+  %src = alloca %S, align 8
+  %dst = alloca %H, align 8
+  %a = getelementptr inbounds %S, %S* %src, i64 0, i32 0
+  %b = getelementptr inbounds %S, %S* %src, i64 0, i32 1
+  store i64 1, i64* %a, align 8
+  store i64 2, i64* %b, align 8
+  %s = bitcast i64* %b to i8*
+  %d = bitcast %H* %dst to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %d, i8* %s, i64 8, i1 false)
+  store i64 9, i64* %a, align 8
+  %r = call i64 @read_half(%H* %dst)
   ret i64 %r
 }
 
