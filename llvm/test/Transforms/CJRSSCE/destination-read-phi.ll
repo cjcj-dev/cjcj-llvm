@@ -1,6 +1,8 @@
 ; RUN: opt -opaque-pointers=0 -passes=verify -disable-output < %s
 ; RUN: opt -opaque-pointers=0 -passes=cj-rssce -S < %s | FileCheck %s
-; RUN: opt -opaque-pointers=0 -passes=cj-rssce -S < %s -o %t.opt.ll
+; RUN: %python %S/Inputs/host-value-input.py --llc llc --certificate %t.host.json %s > %t.host.ll
+; RUN: opt -opaque-pointers=0 -passes=cj-rssce -S < %t.host.ll -o %t.opt.ll
+; RUN: FileCheck %s < %t.opt.ll
 ; RUN: cat %t.opt.ll %S/Inputs/destination-read-phi-values.ll > %t.values.ll
 ; RUN: lli -opaque-pointers=0 -force-interpreter %t.values.ll
 ;

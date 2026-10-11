@@ -1,7 +1,11 @@
 ; RUN: opt -opaque-pointers=0 -passes=cj-rssce -S < %s | FileCheck %s --check-prefixes=CHECK,TYPED
 ; RUN: opt -opaque-pointers=1 -passes=cj-rssce -S < %s | FileCheck %s --check-prefixes=CHECK,OPAQUE
 ; RUN: opt -opaque-pointers=0 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S < %s | FileCheck %s --check-prefix=RESULT
-; RUN: opt -opaque-pointers=1 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S < %s -o %t.opt.ll
+; RUN: opt -opaque-pointers=1 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S < %s -o %t.p-opt.ll
+; RUN: FileCheck %s --check-prefix=OPAQUE-RESULT < %t.p-opt.ll
+; RUN: %python %S/Inputs/host-value-input.py --llc llc --certificate %t.host.json %s > %t.host.ll
+; RUN: opt -opaque-pointers=1 -passes=cj-rssce -S < %t.host.ll | FileCheck %s --check-prefixes=CHECK,OPAQUE
+; RUN: opt -opaque-pointers=1 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S < %t.host.ll -o %t.opt.ll
 ; RUN: FileCheck %s --check-prefix=OPAQUE-RESULT < %t.opt.ll
 ; RUN: cat %t.opt.ll %S/Inputs/source-copy-range-values.ll > %t.values.ll
 ; RUN: lli -opaque-pointers=1 -force-interpreter %t.values.ll
