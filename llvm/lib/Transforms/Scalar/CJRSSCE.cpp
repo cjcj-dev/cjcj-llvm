@@ -491,7 +491,6 @@ struct SourcePropagationState {
 
     SmallVector<IVInfo, 8> Intervals;
     Value *UnderObj = nullptr;
-    Instruction *LastClobberI = nullptr;
     SmallVector<Value *, 8> ArrayIndices;
     // If 2 steps has covered, and 3th step is repeat.
     bool IntervalsValid = false;
@@ -501,8 +500,6 @@ struct SourcePropagationState {
       if (!I || (I != MemI && !DT.dominates(I, MemI)) || I->mayThrow() ||
           !I->willReturn())
         break;
-      if (!LastClobberI)
-        LastClobberI = Current->getMemoryInst();
       // Get ModRefInfo between I and Loc.Ptr, we only deal with MustMod cases.
       ModRefInfo MR = BatchAA.getModRefInfo(I, Loc);
       if (isNoModRef(MR) || !isModSet(MR))
@@ -520,7 +517,7 @@ struct SourcePropagationState {
       }
       assert((isa<StoreInst>(I) || isa<MemCpyInst>(I)) &&
              "Only support to deal store or memcpy");
-      auto [SrcBPtr, SrcOff] = getBasePtrAndOffset(DL, Src, I, &LastClobberI);
+      auto [SrcBPtr, SrcOff] = getBasePtrAndOffset(DL, Src, I);
       auto [DstBPtr, DstOff] = getBasePtrAndOffset(DL, Dst, I);
       if (!SrcBPtr || !DstBPtr)
         break;
@@ -565,11 +562,15 @@ struct SourcePropagationState {
                 MSSA, DT, MemoryLocation::getForSource(MCI), MCI,
                 OriginMA))
           return nullptr;
-      } else if (hasMemoryDefBetween(MSSA, DT, DL, UnderObj, LastClobberI,
-                                    OriginMA)) {
+      } else {
         // A stored reference may have been obtained through a load or a GC
-        // read. Without a transfer source location, check its whole object.
-        return nullptr;
+        // read. Without a transfer source location, check its whole object
+        // starting at that individual read, not at another copy's read.
+        auto *SI = cast<StoreInst>(IV.DefI);
+        Instruction *FirstReadI = nullptr;
+        getBasePtrAndOffset(DL, SI->getValueOperand(), SI, &FirstReadI);
+        if (hasMemoryDefBetween(MSSA, DT, DL, UnderObj, FirstReadI, OriginMA))
+          return nullptr;
       }
     }
     if (!filterValueCopySrc(UnderObj))

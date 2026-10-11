@@ -350,4 +350,51 @@ define i64 @short_copy_disjoint_write() {
   ret i64 %r
 }
 
+; Store-based copies use the same full underlying-object range contract.
+; CHECK-LABEL: define i64 @loaded_fields_changed()
+; CHECK: %r = call i64 @sum({{%S\*|ptr}} %dst)
+; RESULT-LABEL: define i64 @loaded_fields_changed()
+; RESULT-NEXT: ret i64 3
+define i64 @loaded_fields_changed() {
+  %src = alloca %S, i64 2, align 8
+  %dst = alloca %S, align 8
+  %a = getelementptr inbounds %S, %S* %src, i64 1, i32 0
+  %b = getelementptr inbounds %S, %S* %src, i64 1, i32 1
+  store i64 1, i64* %a, align 8
+  store i64 2, i64* %b, align 8
+  %x = load i64, i64* %a, align 8
+  %y = load i64, i64* %b, align 8
+  %da = getelementptr inbounds %S, %S* %dst, i64 0, i32 0
+  %db = getelementptr inbounds %S, %S* %dst, i64 0, i32 1
+  store i64 %x, i64* %da, align 8
+  store i64 %y, i64* %db, align 8
+  store i64 9, i64* %a, align 8
+  %r = call i64 @sum(%S* %dst)
+  ret i64 %r
+}
+
+; The two copied values can be read in a different order than they are stored.
+; Each source must remain valid from its own read to the final consumer.
+; CHECK-LABEL: define i64 @split_load_copy_interleaved_write()
+; CHECK: %r = call i64 @sum({{%S\*|ptr}} %dst)
+; RESULT-LABEL: define i64 @split_load_copy_interleaved_write()
+; RESULT-NEXT: ret i64 3
+define i64 @split_load_copy_interleaved_write() {
+  %src = alloca %S, i64 2, align 8
+  %dst = alloca %S, align 8
+  %a = getelementptr inbounds %S, %S* %src, i64 1, i32 0
+  %b = getelementptr inbounds %S, %S* %src, i64 1, i32 1
+  store i64 1, i64* %a, align 8
+  store i64 2, i64* %b, align 8
+  %y = load i64, i64* %b, align 8
+  store i64 9, i64* %b, align 8
+  %x = load i64, i64* %a, align 8
+  %da = getelementptr inbounds %S, %S* %dst, i64 0, i32 0
+  %db = getelementptr inbounds %S, %S* %dst, i64 0, i32 1
+  store i64 %x, i64* %da, align 8
+  store i64 %y, i64* %db, align 8
+  %r = call i64 @sum(%S* %dst)
+  ret i64 %r
+}
+
 attributes #0 = { alwaysinline nounwind readonly willreturn }
