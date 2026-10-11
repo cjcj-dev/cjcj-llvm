@@ -1,5 +1,8 @@
 ; RUN: opt -opaque-pointers=0 -passes=cj-rssce -S < %s | FileCheck %s
-; RUN: opt -opaque-pointers=0 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S < %s | FileCheck %s --check-prefix=RESULT
+; RUN: %python %S/Inputs/host-value-input.py --llc llc --certificate %t.host.json %s > %t.host.ll
+; RUN: opt -opaque-pointers=0 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S < %t.host.ll -o %t.opt.ll
+; RUN: cat %t.opt.ll %S/Inputs/destination-array-range-values.ll > %t.values.ll
+; RUN: lli -opaque-pointers=0 -force-interpreter %t.values.ll
 ;
 ; Destination propagation shares the whole-object source/destination query.
 ; @sum has a readonly parameter but no readonly function attribute, selecting
@@ -25,8 +28,7 @@ define internal i64 @sum(%S* nocapture readonly %p) #0 {
 ; A source write between the two copies invalidates their equivalence.
 ; CHECK-LABEL: define i64 @source_changed_between_copies()
 ; CHECK: %r = call i64 @sum(%S* %late.second)
-; RESULT-LABEL: define i64 @source_changed_between_copies()
-; RESULT-NEXT: ret i64 11
+; The complete host value driver checks @source_changed_between_copies returns 11.
 define i64 @source_changed_between_copies() {
   %src = alloca %S, i64 2, align 8
   %early = alloca %S, i64 2, align 8
@@ -55,8 +57,7 @@ define i64 @source_changed_between_copies() {
 ; The earlier candidate destination changed after its copy.
 ; CHECK-LABEL: define i64 @candidate_destination_changed()
 ; CHECK: %r = call i64 @sum(%S* %late.second)
-; RESULT-LABEL: define i64 @candidate_destination_changed()
-; RESULT-NEXT: ret i64 3
+; The complete host value driver checks @candidate_destination_changed returns 3.
 define i64 @candidate_destination_changed() {
   %src = alloca %S, i64 2, align 8
   %early = alloca %S, i64 2, align 8
@@ -86,8 +87,7 @@ define i64 @candidate_destination_changed() {
 ; The current destination changed after its own copy.
 ; CHECK-LABEL: define i64 @current_destination_changed()
 ; CHECK: %r = call i64 @sum(%S* %late.second)
-; RESULT-LABEL: define i64 @current_destination_changed()
-; RESULT-NEXT: ret i64 11
+; The complete host value driver checks @current_destination_changed returns 11.
 define i64 @current_destination_changed() {
   %src = alloca %S, i64 2, align 8
   %early = alloca %S, i64 2, align 8
@@ -120,8 +120,7 @@ define i64 @current_destination_changed() {
 ; CHECK-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i64 16
 ; CHECK-NEXT: [[ARG:%.*]] = bitcast i8* [[RANGE]] to %S*
 ; CHECK-NEXT: %r = call i64 @sum(%S* [[ARG]])
-; RESULT-LABEL: define i64 @unchanged_array_copies()
-; RESULT-NEXT: ret i64 3
+; The complete host value driver checks @unchanged_array_copies returns 3.
 define i64 @unchanged_array_copies() {
   %src = alloca %S, i64 2, align 8
   %early = alloca %S, i64 2, align 8

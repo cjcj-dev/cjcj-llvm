@@ -1,6 +1,9 @@
 ; RUN: opt -opaque-pointers=0 -passes=verify -disable-output < %s
 ; RUN: opt -opaque-pointers=0 -passes=cj-rssce -S < %s | FileCheck %s
-; RUN: opt -opaque-pointers=0 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S < %s | FileCheck %s --check-prefix=RESULT
+; RUN: %python %S/Inputs/host-value-input.py --llc llc --certificate %t.host.json %s > %t.host.ll
+; RUN: opt -opaque-pointers=0 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S < %t.host.ll -o %t.opt.ll
+; RUN: cat %t.opt.ll %S/Inputs/destination-copy-layout-values.ll > %t.values.ll
+; RUN: lli -opaque-pointers=0 -force-interpreter %t.values.ll
 ;
 ; Select destination propagation: only the parameter is readonly, while the
 ; function has no readonly attribute. Check both the rewritten argument and the
@@ -17,8 +20,7 @@ define internal i64 @second(%W* nocapture readonly %p) #0 {
 
 ; CHECK-LABEL: define i64 @candidate_gap()
 ; CHECK: %r = call i64 @second(%W* %late)
-; RESULT-LABEL: define i64 @candidate_gap()
-; RESULT-NEXT: ret i64 2
+; The complete host value driver checks @candidate_gap returns 2.
 define i64 @candidate_gap() {
   %a = alloca %W, align 8
   %b = alloca %W, align 8
@@ -49,8 +51,7 @@ define i64 @candidate_gap() {
 
 ; CHECK-LABEL: define i64 @candidate_shift_changes()
 ; CHECK: %r = call i64 @second(%W* %late)
-; RESULT-LABEL: define i64 @candidate_shift_changes()
-; RESULT-NEXT: ret i64 2
+; The complete host value driver checks @candidate_shift_changes returns 2.
 define i64 @candidate_shift_changes() {
   %a = alloca %W, align 8
   %b = alloca %W, align 8
@@ -81,8 +82,7 @@ define i64 @candidate_shift_changes() {
 
 ; CHECK-LABEL: define i64 @candidate_contiguous()
 ; CHECK: %r = call i64 @second(%W* %early)
-; RESULT-LABEL: define i64 @candidate_contiguous()
-; RESULT-NEXT: ret i64 2
+; The complete host value driver checks @candidate_contiguous returns 2.
 define i64 @candidate_contiguous() {
   %a = alloca %W, align 8
   %b = alloca %W, align 8
@@ -114,8 +114,7 @@ define i64 @candidate_contiguous() {
 ; CHECK: [[WINDOW:%.*]] = getelementptr inbounds i8, i8* [[BYTE]], i64 8
 ; CHECK: [[ARG:%.*]] = bitcast i8* [[WINDOW]] to %W*
 ; CHECK: %r = call i64 @second(%W* [[ARG]])
-; RESULT-LABEL: define i64 @candidate_shifted_window()
-; RESULT-NEXT: ret i64 2
+; The complete host value driver checks @candidate_shifted_window returns 2.
 define i64 @candidate_shifted_window() {
   %a = alloca %W, align 8
   %b = alloca %W, align 8

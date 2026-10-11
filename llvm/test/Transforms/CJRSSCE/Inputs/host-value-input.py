@@ -1,4 +1,4 @@
-"""Qualify the two RSSCE value modules before optimization for the host JIT.
+"""Qualify the fixed RSSCE value modules before optimization for the host JIT.
 
 P keeps its original layout. H changes only layout/triple; the certificate comes
 from llc's TargetMachine, never from the optimized module. This bounded recipe
@@ -25,6 +25,12 @@ def main():
     # target attributes, private-symbol references and altered drivers all need
     # a new equivalence proof before they can cross the P/H boundary.
     identities = {
+        "destination-copy-layout.ll": (
+            "a5fde4cac87beff52d72bdd0e62a034d7ddcf2f872a649fb4d2857ff0530c580",
+            "b1901dc7c2e47a3494264d81b16d6ed2a448be7e4a763c74b10df634666158df"),
+        "destination-array-range.ll": (
+            "aee0ed105153b7ddfe21525316ef038b774d038a9f672563d58fa2c1203954d6",
+            "038268f481629b2faa1d962e5972d436ba88ddbd203f6e8366f58daa5de96b65"),
         "allocation-copy-extent.ll": (
             "89e3a7910dd355a6c80d1660309c07d0ce826bf8fd76b5bee82c2440db08e4a8",
             "92449cb456348e6f4da802d082776d9962963f639a2d26b8d2d3f3aa2161c903"),
