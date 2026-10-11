@@ -2521,6 +2521,57 @@ private:
            isa<StructType>(AI->getAllocatedType());
   }
 
+  // A pointer spilled into a private scalar alloca has not escaped. Prove the
+  // entire slot's address closure and send every reload back to the record
+  // worklist. Do not infer safety merely from nocapture on a slot helper: such
+  // a helper can load and capture the pointer stored inside the slot.
+  bool collectCJStringAddressSpill(StoreInst &Store,
+                                   SmallVectorImpl<Value *> &Addresses) {
+    auto *Slot = dyn_cast<AllocaInst>(Store.getPointerOperand());
+    if (!Slot || !Slot->isStaticAlloca() || Slot->isArrayAllocation() ||
+        !Slot->getAllocatedType()->isPointerTy() || Store.isVolatile())
+      return false;
+    SmallVector<Value *, 8> Work{Slot};
+    SmallPtrSet<Value *, 16> Seen;
+    while (!Work.empty()) {
+      Value *Address = Work.pop_back_val();
+      if (!Seen.insert(Address).second)
+        continue;
+      for (Use &U : Address->uses()) {
+        User *User = U.getUser();
+        if (auto *Load = dyn_cast<LoadInst>(User)) {
+          if (U.getOperandNo() != LoadInst::getPointerOperandIndex() ||
+              Load->isVolatile() || !Load->getType()->isPointerTy())
+            return false;
+          Addresses.push_back(Load);
+          continue;
+        }
+        if (auto *Write = dyn_cast<StoreInst>(User)) {
+          if (U.getOperandNo() != StoreInst::getPointerOperandIndex() ||
+              Write->isVolatile() || !Write->getValueOperand()->getType()->isPointerTy())
+            return false;
+          continue;
+        }
+        if (auto *Cast = dyn_cast<BitCastInst>(User)) {
+          Work.push_back(Cast);
+          continue;
+        }
+        if (auto *GEP = dyn_cast<GetElementPtrInst>(User)) {
+          if (U.getOperandNo() != 0 || !GEP->hasAllZeroIndices())
+            return false;
+          Work.push_back(GEP);
+          continue;
+        }
+        if (auto *Intrinsic = dyn_cast<IntrinsicInst>(User)) {
+          if (Intrinsic->isLifetimeStartOrEnd() || isa<DbgInfoIntrinsic>(Intrinsic))
+            continue;
+        }
+        return false;
+      }
+    }
+    return true;
+  }
+
   // Prove all uses of the record address, not uses of the loaded String value
   // or its AS1 buffer. Each operand is checked independently: memcpy(p,p,...)
   // is a write even though p is also its source. Seen only suppresses expansion;
@@ -2564,6 +2615,14 @@ private:
             return false;
           continue;
         }
+        if (auto *Store = dyn_cast<StoreInst>(User)) {
+          if (U.getOperandNo() == 0 &&
+              collectCJStringAddressSpill(*Store, Work))
+            continue;
+          return false;
+        }
+        if (isa<AtomicRMWInst>(User) || isa<AtomicCmpXchgInst>(User))
+          return false;
         if (auto *Call = dyn_cast<CallBase>(User)) {
           if (Call->isInlineAsm() || !Call->isArgOperand(&U))
             return false;
