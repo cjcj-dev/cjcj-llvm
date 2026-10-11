@@ -24,13 +24,18 @@
 @data = private constant %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 5, [5 x i8] c"ababa" } #1
 @literal = private global %"record.std.core:String" { i8 addrspace(1)* addrspacecast (i8* bitcast (%StringData* @data to i8*) to i8 addrspace(1)*), i32 2, i32 3 } #2
 
-define i32 @target() noinline optnone gc "cangjie" {
+define internal void @target(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out) noinline optnone gc "cangjie" {
 entry:
+ %dst = bitcast %"record.std.core:String"* %out to i8*
+ %src = bitcast %"record.std.core:String"* @literal to i8*
+ call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
+ ret void
+}
+define i32 @observe() noinline optnone {
  %out = alloca %"record.std.core:String", align 8
  %dst = bitcast %"record.std.core:String"* %out to i8*
  call void @llvm.cj.memset(i8* %dst, i8 0, i64 16, i1 false)
- %src = bitcast %"record.std.core:String"* @literal to i8*
- call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
+ call void @target(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out)
  %len = call i32 @length(%"record.std.core:String"* %out)
  ret i32 %len
 }
@@ -57,13 +62,18 @@ attributes #2 = { "cjstring_literal" }
 @data = private constant %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 5, [5 x i8] c"ababa" } #1
 @literal = private global %"record.std.core:String" { i8 addrspace(1)* addrspacecast (i8* bitcast (%StringData* @data to i8*) to i8 addrspace(1)*), i32 5, i32 0 } #2
 
-define i32 @target() noinline optnone gc "cangjie" {
+define internal void @target(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out) noinline optnone gc "cangjie" {
 entry:
+ %dst = bitcast %"record.std.core:String"* %out to i8*
+ %src = bitcast %"record.std.core:String"* @literal to i8*
+ call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
+ ret void
+}
+define i32 @observe() noinline optnone {
  %out = alloca %"record.std.core:String", align 8
  %dst = bitcast %"record.std.core:String"* %out to i8*
  call void @llvm.cj.memset(i8* %dst, i8 0, i64 16, i1 false)
- %src = bitcast %"record.std.core:String"* @literal to i8*
- call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
+ call void @target(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out)
  %len = call i32 @length(%"record.std.core:String"* %out)
  ret i32 %len
 }
@@ -90,15 +100,16 @@ attributes #2 = { "cjstring_literal" }
 @data = private constant %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 5, [5 x i8] c"ababa" } #1
 @literal = private global %"record.std.core:String" { i8 addrspace(1)* addrspacecast (i8* bitcast (%StringData* @data to i8*) to i8 addrspace(1)*), i32 2, i32 3 } #2
 
-define i32 @target() noinline optnone gc "cangjie" {
-entry:
- %out = alloca %"record.std.core:String", align 8
+define void @target(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out) gc "cangjie" {
  %dst = bitcast %"record.std.core:String"* %out to i8*
- call void @llvm.cj.memset(i8* %dst, i8 0, i64 16, i1 false)
  %src = bitcast %"record.std.core:String"* @literal to i8*
  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
- %len = call i32 @length(%"record.std.core:String"* %out)
- ret i32 %len
+ ret void
+}
+define i32 @raw_start() {
+ %p = getelementptr %"record.std.core:String", %"record.std.core:String"* @literal, i32 0, i32 1
+ %v = load i32, i32* %p
+ ret i32 %v
 }
 define internal i32 @length(%"record.std.core:String"* %p) noinline optnone {
  %lp = getelementptr %"record.std.core:String", %"record.std.core:String"* %p, i32 0, i32 1
@@ -123,17 +134,16 @@ attributes #2 = { "cjstring_literal" }
 @data = private constant %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 5, [5 x i8] c"ababa" } #1
 @literal = private global %"record.std.core:String" { i8 addrspace(1)* addrspacecast (i8* bitcast (%StringData* @data to i8*) to i8 addrspace(1)*), i32 2, i32 3 } #2
 
-define i32 @target() noinline optnone gc "cangjie" {
-entry:
- %out = alloca %"record.std.core:String", align 8
+define void @target(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out) gc "cangjie" {
  %dst = bitcast %"record.std.core:String"* %out to i8*
- call void @llvm.cj.memset(i8* %dst, i8 0, i64 16, i1 false)
  %src = bitcast %"record.std.core:String"* @literal to i8*
  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
- %bp = getelementptr %"record.std.core:String", %"record.std.core:String"* %out, i32 0, i32 0
- %buf = load i8 addrspace(1)*, i8 addrspace(1)** %bp
- %len = ptrtoint i8 addrspace(1)* %buf to i32
- ret i32 %len
+ ret void
+}
+define i8 addrspace(1)* @raw_buffer() {
+ %p = getelementptr %"record.std.core:String", %"record.std.core:String"* @literal, i32 0, i32 0
+ %v = load i8 addrspace(1)*, i8 addrspace(1)** %p
+ ret i8 addrspace(1)* %v
 }
 define internal i32 @length(%"record.std.core:String"* %p) noinline optnone {
  %lp = getelementptr %"record.std.core:String", %"record.std.core:String"* %p, i32 0, i32 2
@@ -230,13 +240,18 @@ define i8 @direct() {
 
 @other = private global %"record.std.core:String" { i8 addrspace(1)* addrspacecast (i8* bitcast (%StringData* @data to i8*) to i8 addrspace(1)*), i32 2, i32 3 } #2
 
-define i32 @target() noinline optnone gc "cangjie" {
+define internal void @target(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out) noinline optnone gc "cangjie" {
 entry:
+ %dst = bitcast %"record.std.core:String"* %out to i8*
+ %src = bitcast %"record.std.core:String"* @literal to i8*
+ call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
+ ret void
+}
+define i32 @observe() noinline optnone {
  %out = alloca %"record.std.core:String", align 8
  %dst = bitcast %"record.std.core:String"* %out to i8*
  call void @llvm.cj.memset(i8* %dst, i8 0, i64 16, i1 false)
- %src = bitcast %"record.std.core:String"* @literal to i8*
- call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
+ call void @target(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out)
  %len = call i32 @length(%"record.std.core:String"* %out)
  ret i32 %len
 }
