@@ -537,9 +537,9 @@ struct GenericCopyOpt {
     // MemoryPhi may appear in gcread.ref
     if (isa<MemoryPhi>(End))
       return {nullptr, nullptr, nullptr};
-    // A reference read starts at a preceding definition, which is part of
-    // the interval checked for source writes. Generic copies exclude their
-    // own definition at the end of that interval.
+    // Every copy snapshots its source at the intrinsic, before the following
+    // instruction can write it. A reference read includes its preceding end
+    // definition; a generic copy excludes its own end definition.
     bool IsRef = isa<IntrinsicInst>(Inst) &&
                  cast<IntrinsicInst>(Inst)->getIntrinsicID() ==
                      Intrinsic::cj_gcread_ref;
@@ -608,7 +608,7 @@ struct GenericCopyOpt {
         if (Ptr->stripPointerCasts() != V->stripPointerCasts() ||
             // Obviously, define source connot be changed in between.
             hasMemoryDefBetween(MSSA, DT, DL, getSource(II),
-                                IsRef ? II : II->getNextNode(), InitEnd, IsRef,
+                                II, InitEnd, IsRef,
                                 true))
           Stop = true;
         else {
@@ -636,7 +636,7 @@ struct GenericCopyOpt {
             Ptr->stripPointerCasts() != V->stripPointerCasts();
         if (IsPointerNotMatch ||
             hasMemoryDefBetween(MSSA, DT, DL, getSource(II),
-                                IsRef ? II : II->getNextNode(), InitEnd, IsRef,
+                                II, InitEnd, IsRef,
                                 true))
           Stop = true;
         else {
@@ -692,7 +692,7 @@ struct GenericCopyOpt {
             Derived->stripPointerCasts() != Loc.Ptr->stripPointerCasts();
         if (IsPointerNotMatch ||
             hasMemoryDefBetween(MSSA, DT, DL, getSource(II),
-                                IsRef ? II : II->getNextNode(), InitEnd, IsRef,
+                                II, InitEnd, IsRef,
                                 true))
           Stop = true;
         else {
