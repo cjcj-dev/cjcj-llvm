@@ -8,3 +8,6 @@
 # RUN: echo '; changed complete driver identity' >> %t/Inputs/source-copy-range-values.ll
 # RUN: not %python %S/Inputs/host-value-input.py --llc llc --certificate %t/driver.json %t/source-copy-range.ll 2>&1 | FileCheck %s
 # CHECK: complete module/driver identity outside the P/H proof
+# RUN: cp %S/Inputs/source-copy-range-values.ll %t/Inputs/source-copy-range-values.ll
+# RUN: %python -c "from pathlib import Path; p=Path(r'%t/Inputs/source-copy-range-values.ll'); p.write_text(p.read_text().replace('icmp ne i64 %%value0, 3', 'icmp ne i64 %%value0, 4'))"
+# RUN: not %python %S/Inputs/host-value-input.py --llc llc --certificate %t/value.json %t/source-copy-range.ll 2>&1 | FileCheck %s
