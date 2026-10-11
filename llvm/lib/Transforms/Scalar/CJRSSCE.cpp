@@ -39,6 +39,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/Operator.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Value.h"
@@ -57,6 +58,19 @@ static cl::opt<bool> EnableCJRSSCE("enable-cj-rssce", cl::Hidden,
                                    cl::init(true));
 
 using Interval = std::pair<uint64_t, uint64_t>;
+
+// Opaque pointers do not carry a pointee type. Recover it only from a
+// definition that records one; an unknown type cannot justify propagation.
+static Type *getKnownPointeeType(Value *V) {
+  if (auto *AI = dyn_cast<AllocaInst>(V))
+    return AI->getAllocatedType();
+  if (auto *GV = dyn_cast<GlobalValue>(V))
+    return GV->getValueType();
+  if (auto *GEP = dyn_cast<GEPOperator>(V))
+    return GEP->getResultElementType();
+  auto *PT = dyn_cast<PointerType>(V->getType());
+  return PT && !PT->isOpaque() ? PT->getNonOpaquePointerElementType() : nullptr;
+}
 
 static std::pair<Value *, uint64_t>
 getBasePtrAndOffset(const DataLayout &DL, Value *V, Instruction *I,
@@ -345,12 +359,8 @@ struct SourcePropagationState {
   }
 
   bool isKlassGlobal(GlobalVariable *GV) {
-    return GV->getType()->isPointerTy() &&
-           GV->getType()->getNonOpaquePointerElementType()->isStructTy() &&
-           GV->getType()
-               ->getNonOpaquePointerElementType()
-               ->getStructName()
-               .isCangjieTypeInfo();
+    auto *ST = dyn_cast<StructType>(GV->getValueType());
+    return ST && ST->hasName() && ST->getName().isCangjieTypeInfo();
   }
 
   bool isStackValueSrc(SetVector<Instruction *> &BaseStoreMemcpy) {
@@ -637,8 +647,8 @@ struct SourcePropagationState {
     Value *CastI = NewI;
     if (NewI->getType()->getPointerAddressSpace() != 0) {
       CastI = Builder.CreateAddrSpaceCast(
-          NewI, PointerType::get(
-                    NewI->getType()->getNonOpaquePointerElementType(), 0));
+          NewI, PointerType::getWithSamePointeeType(
+                    cast<PointerType>(NewI->getType()), 0));
     }
     Value *Cast = Builder.CreateBitCast(CastI, Arg->getType());
     CB->setArgOperand(ArgIndex, Cast);
@@ -1314,9 +1324,8 @@ struct DestPropagationState {
       if (!(ArgReadOnly || FnReadOnly) || !ArgNoCaptured ||
           !Arg->getType()->isPointerTy())
         continue;
-      Type *Ty =
-          Arg->stripPointerCasts()->getType()->getNonOpaquePointerElementType();
-      if (!Ty->isSized())
+      Type *Ty = getKnownPointeeType(Arg->stripPointerCasts());
+      if (!Ty || !Ty->isSized())
         continue;
       APInt ArgOff(DL.getIndexSizeInBits(
                        Arg->getType()->getPointerAddressSpace()),
