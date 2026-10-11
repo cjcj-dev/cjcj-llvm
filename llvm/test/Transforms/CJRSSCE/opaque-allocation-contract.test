@@ -1,0 +1,37 @@
+; RUN: opt -opaque-pointers=1 -passes=cj-rssce -S %S/destination-array-range.ll -o %t.range.ll
+; RUN: FileCheck %s --check-prefix=RANGE < %t.range.ll
+; RUN: opt -opaque-pointers=1 -passes=cj-rssce -S %S/allocation-copy-extent.ll -o %t.extent.ll
+; RUN: FileCheck %s --check-prefix=EXTENT < %t.extent.ll
+; RUN: %python %S/Inputs/host-value-input.py --llc llc --certificate %t.range.host.json %S/destination-array-range.ll > %t.range.host.ll
+; RUN: opt -opaque-pointers=1 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' %t.range.host.ll -o %t.range.bc
+; RUN: llvm-link -opaque-pointers=1 %t.range.bc %S/Inputs/destination-array-range-values.ll -o %t.range.values.bc
+; RUN: lli -opaque-pointers=1 %t.range.values.bc
+; RUN: %python %S/Inputs/host-value-input.py --llc llc --certificate %t.extent.host.json %S/allocation-copy-extent.ll > %t.extent.host.ll
+; RUN: opt -opaque-pointers=1 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' %t.extent.host.ll -o %t.extent.bc
+; RUN: llvm-link -opaque-pointers=1 %t.extent.bc %S/Inputs/allocation-copy-extent-values.ll -o %t.extent.values.bc
+; RUN: lli -opaque-pointers=1 %t.extent.values.bc
+;
+; Recovering the GEP type must preserve the entire backing array proof.
+; RANGE-LABEL: define i64 @source_changed_between_copies()
+; RANGE: %r = call i64 @sum(ptr %late.second)
+; RANGE-LABEL: define i64 @candidate_destination_changed()
+; RANGE: %r = call i64 @sum(ptr %late.second)
+; RANGE-LABEL: define i64 @current_destination_changed()
+; RANGE: %r = call i64 @sum(ptr %late.second)
+; RANGE-LABEL: define i64 @unchanged_array_copies()
+; RANGE: %[[ARG:.*]] = getelementptr inbounds i8, ptr %early, i64 16
+; RANGE-NEXT: %r = call i64 @sum(ptr %[[ARG]])
+;
+; EXTENT-LABEL: define i64 @partial_array_source_propagation()
+; EXTENT: %r = call i64 @sum_all(ptr %dst)
+; EXTENT-LABEL: define i64 @full_array_source_propagation()
+; EXTENT: %[[ARG:.*]] = getelementptr inbounds i8, ptr %src, i64 0
+; EXTENT-NEXT: %r = call i64 @sum_all(ptr %[[ARG]])
+; EXTENT-LABEL: define i64 @full_array_source_changed()
+; EXTENT: %r = call i64 @sum_all(ptr %dst)
+; EXTENT-LABEL: define i64 @partial_array_destination_propagation()
+; EXTENT: %r = call i64 @sum_all_dest(ptr %late)
+; EXTENT-LABEL: define i64 @unknown_source_destination_count(
+; EXTENT: %r = call i64 @sum_all(ptr %dst)
+; EXTENT-LABEL: define i64 @unknown_destination_propagation_count(
+; EXTENT: %r = call i64 @sum_all_dest(ptr %dst)

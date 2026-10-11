@@ -1,9 +1,9 @@
 ; RUN: opt -opaque-pointers=0 -passes=cj-rssce -S %s -o %t.typed.ll
 ; RUN: FileCheck %s --check-prefix=TYPED < %t.typed.ll
-; RUN: lli -opaque-pointers=0 %t.typed.ll
+; RUN: lli -opaque-pointers=0 %t.typed.ll | FileCheck %s --check-prefix=VALUE
 ; RUN: opt -opaque-pointers=1 -passes=cj-rssce -S %s -o %t.opaque.ll
 ; RUN: FileCheck %s --check-prefix=OPAQUE < %t.opaque.ll
-; RUN: lli -opaque-pointers=1 %t.opaque.ll
+; RUN: lli -opaque-pointers=1 %t.opaque.ll | FileCheck %s --check-prefix=VALUE
 ;
 ; The source contains a TypeInfo address and lives in AS1. Its actual readonly
 ; consumer observes the copied integer after the product rewrites its argument
@@ -15,7 +15,11 @@ target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16
 @ti = private global %TypeInfo zeroinitializer
 
 declare void @llvm.memcpy.p0i8.p1i8.i64(i8* noalias nocapture writeonly, i8 addrspace(1)* noalias nocapture readonly, i64, i1 immarg)
-declare void @unknown_observer(i8* nocapture readonly)
+@format = private constant [24 x i8] c"actual=%ld expected=13\0A\00"
+declare i32 @printf(i8*, ...)
+define void @unknown_observer(i8* nocapture readonly %p) noinline {
+  ret void
+}
 
 define internal i64 @observe(%S* nocapture readonly %p) readonly noinline {
   %field = getelementptr %S, %S* %p, i64 0, i32 1
@@ -55,7 +59,10 @@ define void @unknown_type(i8* %p) {
 
 define i32 @main() {
   %actual = call i64 @cross_address_space()
+  %format = getelementptr [24 x i8], [24 x i8]* @format, i64 0, i64 0
+  %printed = call i32 (i8*, ...) @printf(i8* %format, i64 %actual)
   %wrong = icmp ne i64 %actual, 13
   %rc = zext i1 %wrong to i32
   ret i32 %rc
 }
+; VALUE: actual=13 expected=13
