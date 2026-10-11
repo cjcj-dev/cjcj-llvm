@@ -24,10 +24,10 @@ target triple = "x86_64-unknown-linux-gnu"
 
 define void @materialize(i8 addrspace(1)* %value) {
   %slot = getelementptr %"record.std.core:String", %"record.std.core:String"* @cache, i32 0, i32 0
-  call void @CJ_MCC_WriteStaticRef(i8 addrspace(1)** %slot, i8 addrspace(1)* %value)
+  call void @CJ_MCC_WriteStaticRef(i8 addrspace(1)* %value, i8 addrspace(1)** %slot)
   ret void
 }
-declare void @CJ_MCC_WriteStaticRef(i8 addrspace(1)**, i8 addrspace(1)*)
+declare void @CJ_MCC_WriteStaticRef(i8 addrspace(1)*, i8 addrspace(1)**)
 
 ; Observe the real static-root barrier lowering after either pool setting.
 ; BARRIER-LABEL: define void @write_initialized_cache(
