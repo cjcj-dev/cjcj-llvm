@@ -1,4 +1,5 @@
 ; RUN: opt -passes=sccp --cangjie-pipeline -S < %s | FileCheck %s
+; RUN: opt -enable-new-pm=0 -sccp --cangjie-pipeline -S < %s | FileCheck %s
 
 ; A loop-header phi [true, preheader], [false, latch] is not the latch
 ; constant on the header exit. The first iteration still carries true.

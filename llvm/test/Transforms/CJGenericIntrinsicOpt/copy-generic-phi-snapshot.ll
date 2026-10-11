@@ -1,4 +1,5 @@
 ; RUN: opt -passes=cj-generic-intrinsic-opt --cangjie-pipeline -S < %s | FileCheck %s
+; RUN: opt -enable-new-pm=0 -O2 --cangjie-pipeline -print-after=cj-generic-intrinsic-opt -disable-output < %s 2>&1 | FileCheck %s
 
 ; CHECK-LABEL: define void @edge_clean(
 ; CHECK: [[SRC:%.*]] = phi i8 addrspace(1)* [ %right.src, %right ], [ %left.src, %left ]
