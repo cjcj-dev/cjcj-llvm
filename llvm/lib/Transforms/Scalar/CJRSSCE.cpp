@@ -1032,8 +1032,10 @@ struct DestPropagationState {
       // SrcBPtr is clobbered, so all Src copy destinations need to be
       // invalidated.
       invalidSource(SrcBPtr, SourceCopys[BB], Clobbers[BB]);
-    if (ClobberB.LastClobberI &&
-        hasMemoryDefBetween(MSSA, DT, DL, DstBPtr, ClobberB.LastClobberI,
+    // Source invalidation may erase this destination too. Rebind before use.
+    auto &DestClobber = Clobbers[BB][DstBPtr];
+    if (DestClobber.LastClobberI &&
+        hasMemoryDefBetween(MSSA, DT, DL, DstBPtr, DestClobber.LastClobberI,
                             MSSA.getMemoryAccess(I), false))
       // DstBPtr is clobbered. Therefore, all clobber states of Dst need to be
       // cleared.
@@ -1057,7 +1059,7 @@ struct DestPropagationState {
 #endif
     }
     ClobberA.Sources[SrcBPtr] = ReadI; // Update the source snapshot.
-    ClobberA.LastClobberI = I;     // Update dest last define.
+    ClobberA.LastClobberI = I;       // Update dest last define.
     return true;
   }
 
@@ -1252,7 +1254,10 @@ struct DestPropagationState {
         //         ^ (P: Ptr offset based on V)
         // The final offset for replacing Ptr with candi is
         // L0 + L2 - L1 + P - L3.
-        return {C->Dst, WindowStart + VOff.getZExtValue() - DI->IV.first};
+        uint64_t RelativeOffset = VOff.getZExtValue() - DI->IV.first;
+        if (WindowStart <= INT64_MAX &&
+            RelativeOffset <= INT64_MAX - WindowStart)
+          return {C->Dst, WindowStart + RelativeOffset};
       }
     }
     return {nullptr, 0};
