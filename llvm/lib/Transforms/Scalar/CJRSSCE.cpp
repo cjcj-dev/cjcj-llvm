@@ -562,7 +562,7 @@ struct SourcePropagationState {
       // the same object do not invalidate this copy.
       if (auto *MCI = dyn_cast<MemCpyInst>(IV.DefI)) {
         if (hasMemoryDefBetweenForLocation(
-                MSSA, DT, MemoryLocation::getForSource(MCI), LastClobberI,
+                MSSA, DT, MemoryLocation::getForSource(MCI), MCI,
                 OriginMA))
           return nullptr;
       } else if (hasMemoryDefBetween(MSSA, DT, DL, UnderObj, LastClobberI,
