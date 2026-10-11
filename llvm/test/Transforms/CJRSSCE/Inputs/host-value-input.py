@@ -5,6 +5,7 @@ from llc's TargetMachine, never from the optimized module. This bounded recipe
 deliberately rejects hosts outside the x86_64 Linux layout equivalence proof.
 """
 import argparse
+import hashlib
 import json
 import pathlib
 import re
@@ -18,6 +19,29 @@ def main():
     parser.add_argument("--certificate", required=True)
     parser.add_argument("input")
     args = parser.parse_args()
+    path = pathlib.Path(args.input)
+    # This is a certificate for two audited complete inputs, not an IR validator.
+    # Bind every byte of both the module and its value consumer: inline assembly,
+    # target attributes, private-symbol references and altered drivers all need
+    # a new equivalence proof before they can cross the P/H boundary.
+    identities = {
+        "source-copy-range.ll": (
+            "2bf64c97d4c14862d58e344b4cba6c7c52a8c2b95a43436f4a348c3813ada3b2",
+            "ef67cd425b0128ccba41541f02378a8f5ccf1d88a4a2fe9a7e6f499085296a9b"),
+        "destination-read-phi.ll": (
+            "2a541d483c2960703f5c985ad118d3dbfb66d46b4bf3a402450a0506b5801fce",
+            "e15c988a2cab79be0594a5f593ac0a23f9dc8369d09431a173c5ec4703a168ba"),
+    }
+    expected_identity = identities.get(path.name)
+    if expected_identity is None:
+        raise RuntimeError("input outside the two proved complete modules")
+    driver = path.with_name("Inputs") / (path.stem + "-values.ll")
+    actual_identity = (hashlib.sha256(path.read_bytes()).hexdigest(),
+                       hashlib.sha256(driver.read_bytes()).hexdigest())
+    if actual_identity != expected_identity:
+        raise RuntimeError("complete module/driver identity outside the P/H proof")
+    original = path.read_text()
+
     records = []
 
     def run(argv, text=None):
@@ -40,23 +64,6 @@ def main():
     expected = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
     if layout != expected:
         raise RuntimeError("actual TargetMachine layout differs from the proof")
-    path = pathlib.Path(args.input)
-    if path.name not in ("destination-read-phi.ll", "source-copy-range.ll"):
-        raise RuntimeError("input outside the two proved complete modules")
-    original = path.read_text()
-    driver = path.with_name("Inputs") / (path.stem + "-values.ll")
-    complete = original + "\n" + driver.read_text()
-    ir = "\n".join(line.split(";", 1)[0] for line in complete.splitlines())
-    # These modules use only AS0 integers, pointers, structs and byte arrays.
-    # Reject layout-sensitive additions rather than extending the proof silently.
-    if re.search(r"addrspace\s*\(|\b(?:half|bfloat|float|double|x86_fp80|fp128|ppc_fp128)\b|<|\bi(?:2|4|16|128)\b", ir):
-        raise RuntimeError("layout-sensitive type outside the equivalence table")
-    declared = re.findall(r"^declare .*?@([^ (]+)", ir, re.M)
-    allowed = {"printf", "llvm.memcpy.p0i8.p0i8.i64"}
-    if set(declared) - allowed:
-        raise RuntimeError("external call outside the proved ABI")
-    if "target triple" in ir:
-        raise RuntimeError("unexpected preexisting triple")
     old = 'target datalayout = "e-p:64:64-i64:64-n8:16:32:64-S128"'
     if original.count(old) != 1:
         raise RuntimeError("P layout differs from the frozen input")

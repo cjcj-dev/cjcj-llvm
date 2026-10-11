@@ -561,8 +561,9 @@ struct SourcePropagationState {
       // the same object do not invalidate this copy.
       if (auto *MCI = dyn_cast<MemCpyInst>(IV.DefI)) {
         if (hasMemoryDefBetweenForLocation(
-                MSSA, DT, MemoryLocation::getForSource(MCI), MCI,
-                OriginMA))
+                MSSA, DT,
+                getProvenSourceLocation(MemoryLocation::getForSource(MCI)),
+                MCI, OriginMA))
           return nullptr;
       } else {
         // A stored reference may have been obtained through a load or a GC
@@ -571,7 +572,10 @@ struct SourcePropagationState {
         auto *SI = cast<StoreInst>(IV.DefI);
         Instruction *FirstReadI = nullptr;
         getBasePtrAndOffset(DL, SI->getValueOperand(), SI, &FirstReadI);
-        if (hasMemoryDefBetween(MSSA, DT, DL, UnderObj, FirstReadI, OriginMA))
+        if (hasMemoryDefBetweenForLocation(
+                MSSA, DT, getProvenSourceLocation(
+                              MemoryLocation::getBeforeOrAfter(UnderObj)),
+                FirstReadI, OriginMA))
           return nullptr;
       }
     }
@@ -579,6 +583,35 @@ struct SourcePropagationState {
       return nullptr;
     IRBuilder<> IRB(MemI);
     return createIntervalBeginGEP(IRB, UnderObj, Intervals.front());
+  }
+
+  MemoryLocation getProvenSourceLocation(const MemoryLocation &Loc) {
+    // Default AA cannot recover a pointer loaded from a stack field. MemorySSA
+    // can prove its value when one non-atomic store supplies the entire load.
+    // Keep the original copy addresses for replacement, and use the proved
+    // object only for the source-clobber query. Widen to the whole object so
+    // that stripping an offset cannot accidentally exclude copied bytes.
+    Value *Ptr = const_cast<Value *>(getUnderlyingObject(Loc.Ptr));
+    SmallPtrSet<Value *, 8> Visited;
+    bool Resolved = false;
+    while (auto *LI = dyn_cast<LoadInst>(Ptr)) {
+      if (!Visited.insert(LI).second || LI->isVolatile() || LI->isAtomic())
+        break;
+      auto *MA = MSSA.getMemoryAccess(LI);
+      if (!MA)
+        break;
+      auto *Def = dyn_cast<MemoryDef>(
+          MSSA.getWalker()->getClobberingMemoryAccess(MA));
+      auto *SI = Def ? dyn_cast_or_null<StoreInst>(Def->getMemoryInst()) : nullptr;
+      if (!SI || SI->isVolatile() || SI->isAtomic() ||
+          SI->getValueOperand()->getType() != LI->getType() ||
+          AA.alias(MemoryLocation::get(LI), MemoryLocation::get(SI)) !=
+              AliasResult::MustAlias)
+        break;
+      Ptr = getUnderlyingObject(SI->getValueOperand());
+      Resolved = true;
+    }
+    return Resolved ? MemoryLocation::getBeforeOrAfter(Ptr) : Loc;
   }
 
   Instruction *getClobberMemoryAccess(CallBase *CB, unsigned Index) {

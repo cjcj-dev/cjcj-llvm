@@ -390,7 +390,8 @@ struct GenericCopyOpt {
   // 0: base ptr, 1: derived ptr, 2: size
   std::tuple<Value *, Value *, Value *>
   processMemoryPhi(MemoryPhi *Phi, MemoryAccess *End, MemoryAccess *InitEnd,
-                   MemoryLocation &Loc, Value *TI, bool &Changed) {
+                   MemoryLocation &Loc, Value *TI, bool IncludeEnd,
+                   bool &Changed) {
     SmallVector<Value *, 4> Bases;
     SmallVector<Value *, 4> Deriveds;
     SmallVector<Value *, 4> Sizes;
@@ -405,8 +406,28 @@ struct GenericCopyOpt {
         return {nullptr, nullptr, nullptr}; // Maybe this is a loop.
       auto [TmpB, TmpD, TmpS] = findPotentialEqualMem(
           IncomingBB->getTerminator(),
-          cast<MemoryAccess>(Phi->getIncomingValue(I)), InitEnd,
+          cast<MemoryAccess>(Phi->getIncomingValue(I)),
+          cast<MemoryAccess>(Phi->getIncomingValue(I)),
           MemoryLocation::getAfter(EQV), nullptr, TI, nullptr, Changed);
+      if (TmpD) {
+        // The incoming snapshot is proved only through its incoming edge.
+        // Separately check the continuation from this Phi to the consumer:
+        // writes on another incoming edge are before this boundary, whereas
+        // any may-alias write after it invalidates the propagated source.
+        auto *MUD = cast<MemoryUseOrDef>(InitEnd);
+        MemoryAccess *TailEnd = IncludeEnd ? InitEnd : MUD->getDefiningAccess();
+        SmallVector<const Value *, 8> Objects;
+        getUnderlyingObjects(TmpB ? TmpB : TmpD, Objects);
+        for (const Value *Object : Objects) {
+          MemoryAccess *Clobber = MSSA.getWalker()->getClobberingMemoryAccess(
+              TailEnd, MemoryLocation::getBeforeOrAfter(Object));
+          if (!MSSA.isLiveOnEntryDef(Clobber) && Clobber != Phi &&
+              !MSSA.dominates(Clobber, Phi)) {
+            TmpD = nullptr;
+            break;
+          }
+        }
+      }
       if (!TmpD) {
         Bases.push_back(nullptr);
         Deriveds.push_back(EQV);
@@ -543,6 +564,9 @@ struct GenericCopyOpt {
     bool IsRef = isa<IntrinsicInst>(Inst) &&
                  cast<IntrinsicInst>(Inst)->getIntrinsicID() ==
                      Intrinsic::cj_gcread_ref;
+    // Recursive Phi queries end at the edge's last definition, which belongs
+    // to the interval. Ordinary copies exclude their own destination write.
+    bool IncludeEnd = IsRef || Inst->isTerminator();
     // Offset of Loc.Ptr relative to Base, true: positive, false: negative
     SmallVector<std::pair<Value *, bool>, 4> Offsets;
     auto *BV = getDerivedOffset(const_cast<Value *>(Loc.Ptr), Offsets);
@@ -562,7 +586,7 @@ struct GenericCopyOpt {
         if (Base || !TI)
           break;
         auto [AB, AV, AS] =
-            processMemoryPhi(Phi, End, InitEnd, Loc, TI, Changed);
+            processMemoryPhi(Phi, End, InitEnd, Loc, TI, IncludeEnd, Changed);
         if (AV && AV->stripPointerCasts() != Loc.Ptr->stripPointerCasts()) {
           Base = AB;
           Loc = MemoryLocation::getAfter(AV);
@@ -608,7 +632,7 @@ struct GenericCopyOpt {
         if (Ptr->stripPointerCasts() != V->stripPointerCasts() ||
             // Obviously, define source connot be changed in between.
             hasMemoryDefBetween(MSSA, DT, DL, getSource(II),
-                                II, InitEnd, IsRef,
+                                II, InitEnd, IncludeEnd,
                                 true))
           Stop = true;
         else {
@@ -636,7 +660,7 @@ struct GenericCopyOpt {
             Ptr->stripPointerCasts() != V->stripPointerCasts();
         if (IsPointerNotMatch ||
             hasMemoryDefBetween(MSSA, DT, DL, getSource(II),
-                                II, InitEnd, IsRef,
+                                II, InitEnd, IncludeEnd,
                                 true))
           Stop = true;
         else {
@@ -692,7 +716,7 @@ struct GenericCopyOpt {
             Derived->stripPointerCasts() != Loc.Ptr->stripPointerCasts();
         if (IsPointerNotMatch ||
             hasMemoryDefBetween(MSSA, DT, DL, getSource(II),
-                                II, InitEnd, IsRef,
+                                II, InitEnd, IncludeEnd,
                                 true))
           Stop = true;
         else {
