@@ -302,6 +302,8 @@ public:
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<TargetLibraryInfoWrapperPass>();
+    if (CJPipeline)
+      AU.addRequired<LoopInfoWrapperPass>();
     AU.addPreserved<GlobalsAAWrapperPass>();
     AU.addPreserved<DominatorTreeWrapperPass>();
   }
@@ -331,6 +333,7 @@ char SCCPLegacyPass::ID = 0;
 INITIALIZE_PASS_BEGIN(SCCPLegacyPass, "sccp",
                       "Sparse Conditional Constant Propagation", false, false)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
 INITIALIZE_PASS_END(SCCPLegacyPass, "sccp",
                     "Sparse Conditional Constant Propagation", false, false)
 
