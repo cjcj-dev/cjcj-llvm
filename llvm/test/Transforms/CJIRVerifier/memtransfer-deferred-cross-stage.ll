@@ -16,8 +16,8 @@
 ; RUN: opt -passes='default<O0>' -cangjie-pipeline -S %t/safe-empty.ll | FileCheck %s --check-prefix=EMPTY
 ; RUN: opt -passes='default<O1>' -cangjie-pipeline -cangjie-lto %t/safe-empty.ll -o %t/safe-empty.pre.bc
 ; RUN: opt -passes='lto<O1>' -cangjie-pipeline -S %t/safe-empty.pre.bc | FileCheck %s --check-prefix=EMPTY
-; NONZERO: @literal = private constant {{.*}}, i32 0, i32 3 }
-; EMPTY: @literal = private constant {{.*}}, i32 0, i32 0 }
+; NONZERO: @literal = private {{(unnamed_addr )?}}constant {{.*}}, i32 0, i32 3 }
+; EMPTY: @literal = private {{(unnamed_addr )?}}constant {{.*}}, i32 0, i32 0 }
 ; REJECT: Bare memcpy/memmove
 ; REJECT: call void @llvm.memcpy.p0i8.p0i8.i64
 ; REJECT: in function target
