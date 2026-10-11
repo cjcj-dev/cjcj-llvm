@@ -1,5 +1,8 @@
 ; RUN: opt -opaque-pointers=0 -passes=cj-rssce -S < %s | FileCheck %s
-; RUN: opt -opaque-pointers=0 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S < %s | FileCheck %s --check-prefix=RESULT
+; RUN: %python %S/Inputs/host-value-input.py --llc llc --certificate %t.host.json %s > %t.host.ll
+; RUN: opt -opaque-pointers=0 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S < %t.host.ll -o %t.opt.ll
+; RUN: cat %t.opt.ll %S/Inputs/allocation-copy-extent-values.ll > %t.values.ll
+; RUN: lli -opaque-pointers=0 -force-interpreter %t.values.ll
 ;
 ; A readonly call can legally read every element of an alloca array. Covering
 ; one struct element does not establish equivalence of the whole allocation.
@@ -33,8 +36,7 @@ define internal i64 @sum_all_dest(%S* nocapture readonly %p) #1 {
 ; Source propagation: copying 16 of 32 destination bytes is insufficient.
 ; CHECK-LABEL: define i64 @partial_array_source_propagation()
 ; CHECK: %r = call i64 @sum_all(%S* %dst)
-; RESULT-LABEL: define i64 @partial_array_source_propagation()
-; RESULT-NEXT: ret i64 15
+; The complete host value driver checks @partial_array_source_propagation returns 15.
 define i64 @partial_array_source_propagation() {
   %src = alloca %S, i64 2, align 8
   %dst = alloca %S, i64 2, align 8
@@ -63,8 +65,7 @@ define i64 @partial_array_source_propagation() {
 ; CHECK-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i64 0
 ; CHECK: [[ARG:%.*]] = bitcast i8* [[RANGE]] to %S*
 ; CHECK-NEXT: %r = call i64 @sum_all(%S* [[ARG]])
-; RESULT-LABEL: define i64 @full_array_source_propagation()
-; RESULT-NEXT: ret i64 15
+; The complete host value driver checks @full_array_source_propagation returns 15.
 define i64 @full_array_source_propagation() {
   %src = alloca %S, i64 2, align 8
   %dst = alloca %S, i64 2, align 8
@@ -86,8 +87,7 @@ define i64 @full_array_source_propagation() {
 ; The 32-byte transfer must protect writes to its second source element too.
 ; CHECK-LABEL: define i64 @full_array_source_changed()
 ; CHECK: %r = call i64 @sum_all(%S* %dst)
-; RESULT-LABEL: define i64 @full_array_source_changed()
-; RESULT-NEXT: ret i64 15
+; The complete host value driver checks @full_array_source_changed returns 15.
 define i64 @full_array_source_changed() {
   %src = alloca %S, i64 2, align 8
   %dst = alloca %S, i64 2, align 8
@@ -111,8 +111,7 @@ define i64 @full_array_source_changed() {
 ; an earlier copy covers the entire source allocation.
 ; CHECK-LABEL: define i64 @partial_array_destination_propagation()
 ; CHECK: %r = call i64 @sum_all_dest(%S* %late)
-; RESULT-LABEL: define i64 @partial_array_destination_propagation()
-; RESULT-NEXT: ret i64 15
+; The complete host value driver checks @partial_array_destination_propagation returns 15.
 define i64 @partial_array_destination_propagation() {
   %src = alloca %S, i64 2, align 8
   %early = alloca %S, i64 2, align 8

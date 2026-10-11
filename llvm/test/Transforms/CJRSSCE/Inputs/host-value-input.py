@@ -20,11 +20,14 @@ def main():
     parser.add_argument("input")
     args = parser.parse_args()
     path = pathlib.Path(args.input)
-    # This is a certificate for two audited complete inputs, not an IR validator.
+    # This is a certificate for audited complete inputs, not an IR validator.
     # Bind every byte of both the module and its value consumer: inline assembly,
     # target attributes, private-symbol references and altered drivers all need
     # a new equivalence proof before they can cross the P/H boundary.
     identities = {
+        "allocation-copy-extent.ll": (
+            "89e3a7910dd355a6c80d1660309c07d0ce826bf8fd76b5bee82c2440db08e4a8",
+            "92449cb456348e6f4da802d082776d9962963f639a2d26b8d2d3f3aa2161c903"),
         "source-copy-range.ll": (
             "2bf64c97d4c14862d58e344b4cba6c7c52a8c2b95a43436f4a348c3813ada3b2",
             "ef67cd425b0128ccba41541f02378a8f5ccf1d88a4a2fe9a7e6f499085296a9b"),
@@ -34,7 +37,7 @@ def main():
     }
     expected_identity = identities.get(path.name)
     if expected_identity is None:
-        raise RuntimeError("input outside the two proved complete modules")
+        raise RuntimeError("input outside the proved complete modules")
     driver = path.with_name("Inputs") / (path.stem + "-values.ll")
     actual_identity = (hashlib.sha256(path.read_bytes()).hexdigest(),
                        hashlib.sha256(driver.read_bytes()).hexdigest())
