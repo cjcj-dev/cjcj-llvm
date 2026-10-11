@@ -218,7 +218,10 @@ static bool runSCCP(Function &F, const DataLayout &DL,
 
   // Mark the first block of the function as being executable.
   Solver.markBlockExecutable(&F.front());
-  Solver.addAnalysis(F, {nullptr, &DTU.getDomTree(), nullptr, LI});
+  // The ordinary SCCP entry may run without a cached dominator tree. The
+  // Cangjie loop refinement is enabled only when both DT and LI are available.
+  Solver.addAnalysis(
+      F, {nullptr, DTU.hasDomTree() ? &DTU.getDomTree() : nullptr, nullptr, LI});
   // Mark all arguments to the function as being overdefined.
   for (Argument &AI : F.args())
     Solver.markOverdefined(&AI);
@@ -272,7 +275,7 @@ PreservedAnalyses SCCPPass::run(Function &F, FunctionAnalysisManager &AM) {
   const DataLayout &DL = F.getParent()->getDataLayout();
   auto &TLI = AM.getResult<TargetLibraryAnalysis>(F);
   auto *DT = AM.getCachedResult<DominatorTreeAnalysis>(F);
-  if (!DT)
+  if (CJPipeline && !DT)
     DT = &AM.getResult<DominatorTreeAnalysis>(F);
   DomTreeUpdater DTU(DT, DomTreeUpdater::UpdateStrategy::Lazy);
   if (!runSCCP(F, DL, &TLI, DTU,

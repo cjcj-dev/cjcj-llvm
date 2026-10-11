@@ -2,6 +2,16 @@
 ; RUN: opt -passes=sccp --cangjie-pipeline -S < %s | FileCheck %s
 ; RUN: opt -enable-new-pm=0 -O2 --cangjie-pipeline -S < %s | FileCheck %s
 ; RUN: opt -enable-new-pm=0 -sccp -S < %s | FileCheck %s
+; RUN: opt -passes=sccp -S < %s | FileCheck %s
+; RUN: opt -passes='require<domtree>,sccp,verify<domtree>' -S < %s | FileCheck %s
+; RUN: opt -enable-new-pm=0 -domtree -sccp -verify-dom-info -S < %s | FileCheck %s
+; RUN: opt -passes=sccp -debug-pass-manager -disable-output < %s 2>&1 | FileCheck %s --check-prefix=OPTIONAL
+
+; OPTIONAL-NOT: Running analysis: DominatorTreeAnalysis
+; OPTIONAL: Running pass: SCCPPass on fold_constant
+; OPTIONAL-NOT: Running analysis: DominatorTreeAnalysis
+; OPTIONAL: Running pass: SCCPPass on live_loop
+; OPTIONAL-NOT: Running analysis: DominatorTreeAnalysis
 
 ; The legacy SCCP entry must declare the LoopInfo it consumes in the
 ; Cangjie pipeline. Check both its ordinary constant result and a live loop
