@@ -117,7 +117,7 @@ define i64 @current_destination_changed() {
 ; Positive control: two unchanged copies are still equivalent.
 ; CHECK-LABEL: define i64 @unchanged_array_copies()
 ; CHECK: [[BASE:%[0-9]+]] = bitcast %S* %early to i8*
-; CHECK-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i32 16
+; CHECK-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i64 16
 ; CHECK-NEXT: [[ARG:%.*]] = bitcast i8* [[RANGE]] to %S*
 ; CHECK-NEXT: %r = call i64 @sum(%S* [[ARG]])
 ; RESULT-LABEL: define i64 @unchanged_array_copies()

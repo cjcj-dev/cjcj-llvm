@@ -49,10 +49,10 @@ define i64 @second_element_changed() {
 ; Positive control: retain the optimization and its exact second-element ptr.
 ; CHECK-LABEL: define i64 @second_element_clean()
 ; TYPED: [[BASE:%.*]] = bitcast %S* %src to i8*
-; TYPED-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i32 16
+; TYPED-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i64 16
 ; TYPED: [[ARG:%.*]] = bitcast i8* [[RANGE]] to %S*
 ; TYPED-NEXT: %r = call i64 @sum(%S* [[ARG]])
-; OPAQUE: [[RANGE:%.*]] = getelementptr inbounds i8, ptr %src, i32 16
+; OPAQUE: [[RANGE:%.*]] = getelementptr inbounds i8, ptr %src, i64 16
 ; OPAQUE: %r = call i64 @sum(ptr [[RANGE]])
 ; RESULT-LABEL: define i64 @second_element_clean()
 ; RESULT-NEXT: ret i64 3
@@ -74,10 +74,10 @@ define i64 @second_element_clean() {
 ; A write to element zero must not invalidate the copy of element one.
 ; CHECK-LABEL: define i64 @second_element_disjoint_write()
 ; TYPED: [[BASE:%.*]] = bitcast %S* %src to i8*
-; TYPED-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i32 16
+; TYPED-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i64 16
 ; TYPED: [[ARG:%.*]] = bitcast i8* [[RANGE]] to %S*
 ; TYPED-NEXT: %r = call i64 @sum(%S* [[ARG]])
-; OPAQUE: [[RANGE:%.*]] = getelementptr inbounds i8, ptr %src, i32 16
+; OPAQUE: [[RANGE:%.*]] = getelementptr inbounds i8, ptr %src, i64 16
 ; OPAQUE: %r = call i64 @sum(ptr [[RANGE]])
 ; RESULT-LABEL: define i64 @second_element_disjoint_write()
 ; RESULT-NEXT: ret i64 3
@@ -255,10 +255,10 @@ define i64 @split_copy_interleaved_write() {
 ; The caller supplies n >= 2.
 ; CHECK-LABEL: define i64 @dynamic_count_clean(
 ; TYPED: [[BASE:%.*]] = bitcast %S* %src to i8*
-; TYPED-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i32 16
+; TYPED-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i64 16
 ; TYPED: [[ARG:%.*]] = bitcast i8* [[RANGE]] to %S*
 ; TYPED-NEXT: %r = call i64 @sum(%S* [[ARG]])
-; OPAQUE: [[RANGE:%.*]] = getelementptr inbounds i8, ptr %src, i32 16
+; OPAQUE: [[RANGE:%.*]] = getelementptr inbounds i8, ptr %src, i64 16
 ; OPAQUE: %r = call i64 @sum(ptr [[RANGE]])
 define i64 @dynamic_count_clean(i64 %n) {
   %src = alloca %S, i64 %n, align 8
@@ -328,10 +328,10 @@ define internal i64 @read_half(%H* %p) #0 {
 ; A write to its other field must not invalidate the copied field.
 ; CHECK-LABEL: define i64 @short_copy_disjoint_write()
 ; TYPED: [[BASE:%.*]] = bitcast %S* %src to i8*
-; TYPED-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i32 8
+; TYPED-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i64 8
 ; TYPED: [[ARG:%.*]] = bitcast i8* [[RANGE]] to %H*
 ; TYPED-NEXT: %r = call i64 @read_half(%H* [[ARG]])
-; OPAQUE: [[RANGE:%.*]] = getelementptr inbounds i8, ptr %src, i32 8
+; OPAQUE: [[RANGE:%.*]] = getelementptr inbounds i8, ptr %src, i64 8
 ; OPAQUE: %r = call i64 @read_half(ptr [[RANGE]])
 ; RESULT-LABEL: define i64 @short_copy_disjoint_write()
 ; RESULT-NEXT: ret i64 2

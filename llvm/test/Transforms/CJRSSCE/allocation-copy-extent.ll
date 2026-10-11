@@ -60,7 +60,7 @@ define i64 @partial_array_source_propagation() {
 ; Positive control: a complete 32-byte array copy can still be propagated.
 ; CHECK-LABEL: define i64 @full_array_source_propagation()
 ; CHECK: [[BASE:%[0-9]+]] = bitcast %S* %src to i8*
-; CHECK-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i32 0
+; CHECK-NEXT: [[RANGE:%.*]] = getelementptr inbounds i8, i8* [[BASE]], i64 0
 ; CHECK: [[ARG:%.*]] = bitcast i8* [[RANGE]] to %S*
 ; CHECK-NEXT: %r = call i64 @sum_all(%S* [[ARG]])
 ; RESULT-LABEL: define i64 @full_array_source_propagation()

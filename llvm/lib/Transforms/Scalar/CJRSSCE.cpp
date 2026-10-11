@@ -86,7 +86,8 @@ getBasePtrAndOffset(const DataLayout &DL, Value *V, Instruction *I,
   // V is not a memory object.
   if (!isa<PointerType>(V->getType()))
     return {nullptr, 0};
-  const unsigned BitWidth = DL.getIndexSizeInBits(0);
+  const unsigned BitWidth =
+      DL.getIndexSizeInBits(V->getType()->getPointerAddressSpace());
   constexpr uint64_t OffsetRawValue = 0;
   APInt Offset(BitWidth, OffsetRawValue);
   Value *BPtr = V->stripAndAccumulateConstantOffsets(DL, Offset, true);
@@ -470,7 +471,8 @@ struct SourcePropagationState {
         IRB.getInt8PtrTy(UnderObj->getType()->getPointerAddressSpace()));
     auto *GEP = IRB.CreateGEP(
         IRB.getInt8Ty(), BC,
-        {ConstantInt::get(IRB.getInt32Ty(), FirstE.Src.first)}, "", true);
+        {ConstantInt::get(DL.getIndexType(UnderObj->getType()), FirstE.Src.first)},
+        "", true);
     // We do not remove possibly redundant def instructions, because their use
     // needs to be analyzed. Therefore, they are removed in subsequent passes.
     return cast<Instruction>(GEP);
@@ -1039,7 +1041,7 @@ struct DestPropagationState {
   }
 
   bool rewriteCallArg(CallBase *CB, unsigned ArgNo, Value *Base,
-                      unsigned Offset) {
+                      uint64_t Offset) {
     // Current implementation may create many redundant GEP, which need to be
     // deleted by SimplifyCFG or InstCombine later.
     Value *Ptr = nullptr;
@@ -1052,7 +1054,9 @@ struct DestPropagationState {
           Base, IRB.getInt8PtrTy(Base->getType()->getPointerAddressSpace()));
       auto *GEP =
           IRB.CreateGEP(IRB.getInt8Ty(), BC,
-                        {ConstantInt::get(IRB.getInt32Ty(), Offset)}, "", true);
+                        {ConstantInt::get(DL.getIndexType(Base->getType()),
+                                          Offset)},
+                        "", true);
       Ptr = IRB.CreatePointerBitCastOrAddrSpaceCast(
           GEP, CB->getArgOperand(ArgNo)->getType());
     }
@@ -1096,7 +1100,7 @@ struct DestPropagationState {
   std::pair<Value *, int64_t> findFullEquivalentValue(Value *Ptr, uint64_t Size,
                                                       BasicBlock *BB,
                                                       Instruction *Use) {
-    APInt VOff(DL.getIndexSizeInBits(0u), 0);
+    APInt VOff(DL.getIndexSizeInBits(Ptr->getType()->getPointerAddressSpace()), 0);
     Value *V = Ptr->stripAndAccumulateConstantOffsets(DL, VOff, true);
     auto ContainCheck = [&](SmallVector<Define, 8>::iterator IT) -> int {
       uint64_t LastPos = IT->IV.second;
@@ -1255,10 +1259,8 @@ struct DestPropagationState {
       // The callee can access memory before a derived argument too. Prove the
       // whole backing allocation equivalent, then restore the argument offset.
       auto [EV, Offset] = findFullEquivalentValue(Base, Size, BB, CB);
-      // rewriteCallArg currently uses a signed 32-bit GEP index. Do not narrow
-      // a larger replacement offset to fit that representation.
-      if (EV && Offset >= 0 && ArgOffset <= INT32_MAX &&
-          static_cast<uint64_t>(Offset) <= INT32_MAX - ArgOffset)
+      if (EV && Offset >= 0 &&
+          ArgOffset <= UINT64_MAX - static_cast<uint64_t>(Offset))
         Changed |= rewriteCallArg(CB, Arg.getOperandNo(), EV, Offset + ArgOffset);
     }
     return Changed;
