@@ -31,7 +31,7 @@ struct CJRSSCEPass : public PassInfoMixin<CJRSSCEPass> {
 
 /// Check all memory in the underlying objects of UnderObj. Callers retaining
 /// several copy ranges or an unknown size must not bound this by a pointee type.
-/// A false result proves that every reaching clobber precedes FirstI, even when
+/// A false result proves that every reaching clobber is at or before FirstI, even when
 /// EnableDiffBB permits a query across blocks and MemoryPhi nodes.
 bool hasMemoryDefBetween(MemorySSA &MSSA, DominatorTree &DT,
                          const DataLayout &DL, Value *UnderObj,

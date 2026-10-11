@@ -174,7 +174,10 @@ static bool hasMemoryDefBetweenForLocation(
   // A Phi after FirstI may include a write on just one incoming path.
   if (auto *Phi = dyn_cast<MemoryPhi>(Clobber))
     return !DT.dominates(Phi->getBlock(), FirstI->getParent());
-  return !DT.dominates(cast<MemoryDef>(Clobber)->getMemoryInst(), FirstI);
+  Instruction *ClobberI = cast<MemoryDef>(Clobber)->getMemoryInst();
+  // Instruction dominance is strict for a use in the defining instruction.
+  // The write at FirstI belongs to the starting snapshot, not the interval.
+  return ClobberI != FirstI && !DT.dominates(ClobberI, FirstI);
 }
 
 bool llvm::hasMemoryDefBetween(MemorySSA &MSSA, DominatorTree &DT,
