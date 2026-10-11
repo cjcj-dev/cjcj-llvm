@@ -2,6 +2,7 @@
 ; RUN: opt -opaque-pointers=1 -passes=cj-rssce -S < %s | FileCheck %s --check-prefixes=CHECK,OPAQUE
 ; RUN: opt -opaque-pointers=0 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S < %s | FileCheck %s --check-prefix=RESULT
 ; RUN: opt -opaque-pointers=1 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S < %s -o %t.opt.ll
+; RUN: FileCheck %s --check-prefix=OPAQUE-RESULT < %t.opt.ll
 ; RUN: cat %t.opt.ll %S/Inputs/source-copy-range-values.ll > %t.values.ll
 ; RUN: lli -opaque-pointers=1 -force-interpreter %t.values.ll
 ;
@@ -165,7 +166,9 @@ define i64 @unknown_length(i64 %length) {
 ; CHECK-LABEL: define i64 @split_copy_changed()
 ; CHECK: %r = call i64 @sum({{%S\*|ptr}} %dst)
 ; RESULT-LABEL: define i64 @split_copy_changed()
+; OPAQUE-RESULT-LABEL: define i64 @split_copy_changed()
 ; RESULT-NEXT: ret i64 3
+; OPAQUE-RESULT-NEXT: ret i64 3
 define i64 @split_copy_changed() {
   %src = alloca %S, i64 2, align 8
   %dst = alloca %S, align 8
@@ -189,7 +192,9 @@ define i64 @split_copy_changed() {
 ; CHECK-LABEL: define i64 @split_copy_tail_changed()
 ; CHECK: %r = call i64 @sum({{%S\*|ptr}} %dst)
 ; RESULT-LABEL: define i64 @split_copy_tail_changed()
+; OPAQUE-RESULT-LABEL: define i64 @split_copy_tail_changed()
 ; RESULT-NEXT: ret i64 3
+; OPAQUE-RESULT-NEXT: ret i64 3
 define i64 @split_copy_tail_changed() {
   %src = alloca %S, i64 2, align 8
   %dst = alloca %S, align 8
@@ -213,7 +218,9 @@ define i64 @split_copy_tail_changed() {
 ; CHECK-LABEL: define i64 @single_element_changed()
 ; CHECK: %r = call i64 @sum({{%S\*|ptr}} %dst)
 ; RESULT-LABEL: define i64 @single_element_changed()
+; OPAQUE-RESULT-LABEL: define i64 @single_element_changed()
 ; RESULT-NEXT: ret i64 3
+; OPAQUE-RESULT-NEXT: ret i64 3
 define i64 @single_element_changed() {
   %src = alloca %S, align 8
   %dst = alloca %S, align 8
@@ -233,7 +240,9 @@ define i64 @single_element_changed() {
 ; CHECK-LABEL: define i64 @split_copy_interleaved_write()
 ; CHECK: %r = call i64 @sum({{%S\*|ptr}} %dst)
 ; RESULT-LABEL: define i64 @split_copy_interleaved_write()
+; OPAQUE-RESULT-LABEL: define i64 @split_copy_interleaved_write()
 ; RESULT-NEXT: ret i64 3
+; OPAQUE-RESULT-NEXT: ret i64 3
 define i64 @split_copy_interleaved_write() {
   %src = alloca %S, i64 2, align 8
   %dst = alloca %S, align 8
@@ -304,7 +313,9 @@ define i64 @may_alias_source_write(i64 %offset) {
 ; CHECK-LABEL: define i64 @partial_copy()
 ; CHECK: %r = call i64 @sum({{%S\*|ptr}} %dst)
 ; RESULT-LABEL: define i64 @partial_copy()
+; OPAQUE-RESULT-LABEL: define i64 @partial_copy()
 ; RESULT-NEXT: ret i64 3
+; OPAQUE-RESULT-NEXT: ret i64 3
 define i64 @partial_copy() {
   %src = alloca %S, i64 2, align 8
   %dst = alloca %S, align 8
@@ -336,7 +347,9 @@ define internal i64 @read_half(%H* %p) #0 {
 ; OPAQUE: [[RANGE:%.*]] = getelementptr inbounds i8, ptr %src, i64 8
 ; OPAQUE: %r = call i64 @read_half(ptr [[RANGE]])
 ; RESULT-LABEL: define i64 @short_copy_disjoint_write()
+; OPAQUE-RESULT-LABEL: define i64 @short_copy_disjoint_write()
 ; RESULT-NEXT: ret i64 2
+; OPAQUE-RESULT-NEXT: ret i64 2
 define i64 @short_copy_disjoint_write() {
   %src = alloca %S, align 8
   %dst = alloca %H, align 8
@@ -356,7 +369,9 @@ define i64 @short_copy_disjoint_write() {
 ; CHECK-LABEL: define i64 @loaded_fields_changed()
 ; CHECK: %r = call i64 @sum({{%S\*|ptr}} %dst)
 ; RESULT-LABEL: define i64 @loaded_fields_changed()
+; OPAQUE-RESULT-LABEL: define i64 @loaded_fields_changed()
 ; RESULT-NEXT: ret i64 3
+; OPAQUE-RESULT-NEXT: ret i64 3
 define i64 @loaded_fields_changed() {
   %src = alloca %S, i64 2, align 8
   %dst = alloca %S, align 8
@@ -380,7 +395,9 @@ define i64 @loaded_fields_changed() {
 ; CHECK-LABEL: define i64 @split_load_copy_interleaved_write()
 ; CHECK: %r = call i64 @sum({{%S\*|ptr}} %dst)
 ; RESULT-LABEL: define i64 @split_load_copy_interleaved_write()
+; OPAQUE-RESULT-LABEL: define i64 @split_load_copy_interleaved_write()
 ; RESULT-NEXT: ret i64 3
+; OPAQUE-RESULT-NEXT: ret i64 3
 define i64 @split_load_copy_interleaved_write() {
   %src = alloca %S, i64 2, align 8
   %dst = alloca %S, align 8
