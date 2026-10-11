@@ -7,7 +7,7 @@
 %ObjLayout.S = type { %ObjLayout.0, i64, i64, %record.T }
 
 ; CHECK: %10 = bitcast %record.T* %2 to i8*
-; CHECK: %11 = getelementptr inbounds i8, i8* %10, i32 16
+; CHECK: %11 = getelementptr inbounds i8, i8* %10, i64 16
 ; CHECK: %12 = bitcast i8* %11 to %record.Q*
 ; CHECK: call void @f2(i8* null, %record.Q* nonnull %12)
 define void @foo(i8 addrspace(1)* nocapture readonly %s) {

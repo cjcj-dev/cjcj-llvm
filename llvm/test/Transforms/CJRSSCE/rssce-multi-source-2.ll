@@ -10,7 +10,7 @@
 
 ; CHECK: use1:
 ; CHECK: %20 = bitcast %record.T* %1 to i8*
-; CHECK: %21 = getelementptr inbounds i8, i8* %20, i32 40
+; CHECK: %21 = getelementptr inbounds i8, i8* %20, i64 40
 ; CHECK: %22 = bitcast i8* %21 to %record.Q*
 ; CHECK: call void @f1(i8* null, %record.Q* %22)
 ; CHECK: redefineQ1:
@@ -78,7 +78,7 @@ ret:
 ; CHECK-NEXT: %14 = bitcast %record.R* %2 to i8*
 ; CHECK-NEXT: call void @llvm.memcpy.p0i8.p1i8.i64(i8* noundef nonnull align 8 dereferenceable(16) %14, i8 addrspace(1)* noundef align 8 dereferenceable(16) %10, i64 32, i1 false)
 ; CHECK-NEXT: %15 = bitcast %record.T* %1 to i8*
-; CHECK-NEXT: %16 = getelementptr inbounds i8, i8* %15, i32 24
+; CHECK-NEXT: %16 = getelementptr inbounds i8, i8* %15, i64 24
 ; CHECK-NEXT: %17 = bitcast i8* %16 to %record.R*
 ; CHECK-NEXT: call void @f2(%record.R* %17)
 define void @foo2(i8 addrspace(1)* %s, %record.P* nocapture readonly %p, i64 %tag) {
