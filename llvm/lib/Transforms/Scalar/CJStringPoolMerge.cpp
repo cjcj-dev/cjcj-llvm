@@ -413,6 +413,29 @@ uint64_t bufferHeaderBytes(const DataLayout &DL, const BufferInfo &B) {
 
 } // end anonymous namespace
 
+bool llvm::hasSafeCJStringPoolViews(GlobalVariable &Buffer) {
+  // Reuse the actual selection rules (including mixed klass and direct data
+  // users), rather than imposing pooling on every deferred representation.
+  auto Buffers = collectBuffers(*Buffer.getParent());
+  auto Mergeable = filterMergeable(Buffers);
+  for (auto &Entry : Mergeable) {
+    if (Entry.first->gv != &Buffer)
+      continue;
+    for (GlobalVariable *View : Entry.second) {
+      auto *Init = dyn_cast_or_null<ConstantStruct>(View->getInitializer());
+      if (!Init || Init->getNumOperands() != LITERAL_FIELD_COUNT)
+        continue; // repointLiteral leaves this initializer untouched.
+      auto *Start = dyn_cast<ConstantInt>(Init->getOperand(1));
+      auto *Length = dyn_cast<ConstantInt>(Init->getOperand(LITERAL_LEN_FIELD));
+      if (!Start || !Start->getType()->isIntegerTy(32) || !Start->isZero() ||
+          !Length || !Length->getType()->isIntegerTy(32) ||
+          Length->getZExtValue() > Entry.first->bytes.size())
+        return false;
+    }
+  }
+  return true;
+}
+
 PreservedAnalyses CJStringPoolMerge::run(Module &M,
                                          ModuleAnalysisManager &) const {
   // Merging off: CodeGen has already emitted one buffer per string and the

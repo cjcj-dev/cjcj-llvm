@@ -19,6 +19,11 @@
 #include "llvm/IR/PassManager.h"
 
 namespace llvm {
+// Query the existing pool selection without changing the layout. A deferred
+// buffer that will be repointed must have valid zero-start views, including
+// every other record sharing that buffer. Skipped buffers keep their layout.
+bool hasSafeCJStringPoolViews(GlobalVariable &Buffer);
+
 struct CJStringPoolMerge : public PassInfoMixin<CJStringPoolMerge> {
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &) const;
 };
