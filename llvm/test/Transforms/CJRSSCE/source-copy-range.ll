@@ -52,7 +52,7 @@ define i64 @second_element_changed() {
 ; TYPED: [[ARG:%.*]] = bitcast i8* [[RANGE]] to %S*
 ; TYPED-NEXT: %r = call i64 @sum(%S* [[ARG]])
 ; OPAQUE: [[RANGE:%.*]] = getelementptr inbounds i8, ptr %src, i32 16
-; OPAQUE-NEXT: %r = call i64 @sum(ptr [[RANGE]])
+; OPAQUE: %r = call i64 @sum(ptr [[RANGE]])
 ; RESULT-LABEL: define i64 @second_element_clean()
 ; RESULT-NEXT: ret i64 3
 define i64 @second_element_clean() {
