@@ -933,9 +933,9 @@ public:
   ~CJGenericIntrinsicOptLegacyPass() = default;
 
   bool runOnFunction(Function &F) override {
-    auto &AA = this->getAnalysis<AAResultsWrapperPass>(F).getAAResults();
-    auto &MSSA = this->getAnalysis<MemorySSAWrapperPass>(F).getMSSA();
-    auto &DT = this->getAnalysis<DominatorTreeWrapperPass>(F).getDomTree();
+    auto &AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
+    auto &MSSA = getAnalysis<MemorySSAWrapperPass>().getMSSA();
+    auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
     MemorySSAUpdater MSSAU(&MSSA);
     bool Changed = simplifyGenericInst(F, MSSAU);
 
