@@ -1,5 +1,7 @@
 ; RUN: opt -passes=cj-generic-intrinsic-opt --cangjie-pipeline -S < %s | FileCheck %s
 ; RUN: opt -enable-new-pm=0 -O2 --cangjie-pipeline -print-after=cj-generic-intrinsic-opt -disable-output < %s 2>&1 | FileCheck %s
+; RUN: opt -enable-new-pm=0 -O2 --cangjie-pipeline -print-after=cj-simple-range-analysis -disable-output < %s 2>&1 | FileCheck %s --check-prefix=RANGE
+; RUN: opt -passes=cj-simple-range-analysis -S < %s | FileCheck %s --check-prefix=RANGE
 
 ; CHECK-LABEL: define void @edge_clean(
 ; CHECK: [[SRC:%.*]] = phi i8 addrspace(1)* [ %right.src, %right ], [ %left.src, %left ]
@@ -96,6 +98,13 @@ declare void @llvm.cj.assign.generic(i8 addrspace(1)* nocapture writeonly, i8 ad
 ; CHECK-LABEL: define void @loop_snapshot(
 ; CHECK-NOT: phi i8 addrspace(1)*
 ; CHECK: call void @llvm.cj.assign.generic(i8 addrspace(1)* %dst, i8 addrspace(1)* %mid, i8* %ti)
+; RANGE-LABEL: define void @loop_snapshot(
+; RANGE: loop:
+; RANGE: call void @llvm.cj.assign.generic(i8 addrspace(1)* %dst, i8 addrspace(1)* %mid, i8* %ti)
+; RANGE: br i1 %cond, label %body, label %exit
+; RANGE: body:
+; RANGE: call void @llvm.cj.assign.generic(i8 addrspace(1)* %mid, i8 addrspace(1)* %src, i8* %ti)
+; RANGE: br label %loop
 define void @loop_snapshot(i8 addrspace(1)* noalias %src, i8 addrspace(1)* noalias %mid, i8 addrspace(1)* noalias %dst, i8* %ti, i1 %cond) {
 entry:
   call void @llvm.cj.assign.generic(i8 addrspace(1)* %mid, i8 addrspace(1)* %src, i8* %ti)

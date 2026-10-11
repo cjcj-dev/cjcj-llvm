@@ -1,6 +1,7 @@
 ; RUN: opt -enable-new-pm=0 -sccp --cangjie-pipeline -S < %s | FileCheck %s
 ; RUN: opt -passes=sccp --cangjie-pipeline -S < %s | FileCheck %s
 ; RUN: opt -enable-new-pm=0 -O2 --cangjie-pipeline -S < %s | FileCheck %s
+; RUN: opt -enable-new-pm=0 -sccp -S < %s | FileCheck %s
 
 ; The legacy SCCP entry must declare the LoopInfo it consumes in the
 ; Cangjie pipeline. Check both its ordinary constant result and a live loop
