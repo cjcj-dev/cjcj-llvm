@@ -1,7 +1,9 @@
 ; RUN: opt -opaque-pointers=0 -passes=cj-rssce -S < %s | FileCheck %s --check-prefixes=CHECK,TYPED
 ; RUN: opt -opaque-pointers=1 -passes=cj-rssce -S < %s | FileCheck %s --check-prefixes=CHECK,OPAQUE
 ; RUN: opt -opaque-pointers=0 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S < %s | FileCheck %s --check-prefix=RESULT
-; RUN: opt -opaque-pointers=1 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S < %s | FileCheck %s --check-prefix=RESULT
+; RUN: opt -opaque-pointers=1 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S < %s -o %t.opt.ll
+; RUN: cat %t.opt.ll %S/Inputs/source-copy-range-values.ll > %t.values.ll
+; RUN: lli -opaque-pointers=1 -force-interpreter %t.values.ll
 ;
 ; Check the actual replacement address and the value read by the consumer.
 ; A struct pointee type bounds neither an alloca array nor a memcpy's source.
