@@ -145,38 +145,36 @@ static bool hasMemoryDefBetweenForLocation(
     return false;
   if (!EnableDiffBB && FirstI->getParent() != LastI->getParent())
     return true;
-  MemoryAccess *FirstDef = MSSA.getMemoryAccess(FirstI);
-  // Find last MemoryDef that dominates LastMA.
+  if (!DT.dominates(FirstI, LastI))
+    return true;
+
+  // Start at the last unoptimized definition, not a MemoryUse's defining
+  // access: that access may already skip writes to other bytes of Loc.
   MemoryAccess *LastDef =
       findLastDefDominateMA(MSSA, LastI->getParent(), LastMA, LastClosure);
-  assert((LastDef || EnableDiffBB) && "Cannot be false at the same time");
-  if (!LastDef) // Now, LastDef is MemoryUse
-    LastDef = cast<MemoryUseOrDef>(LastMA)->getDefiningAccess();
-  // MSSA uses SimpleCaptureInfo by default. To make the result more accurate,
-  // consider using BatchAA for more analysis of MA.
-  MemoryAccess *MA =
+  if (!LastDef) {
+    auto *Node = DT.getNode(LastI->getParent());
+    for (Node = Node ? Node->getIDom() : nullptr; Node;
+         Node = Node->getIDom()) {
+      if (auto *Defs = MSSA.getBlockDefs(Node->getBlock())) {
+        LastDef = &const_cast<MemoryAccess &>(Defs->back());
+        break;
+      }
+    }
+    if (!LastDef)
+      LastDef = MSSA.getLiveOnEntryDef();
+  }
+  MemoryAccess *Clobber =
       MSSA.getWalker()->getClobberingMemoryAccess(LastDef, Loc);
-  // if FirstDef is equal to LastDef, we known FirstDef does not clobber
-  // source.This is based on the premise that we've aligned it by the offset
-  // of source and dest.
-  if (MA == LastDef && LastDef != FirstDef)
-    return true;
-  if (MA == FirstDef)
+  if (MSSA.isLiveOnEntryDef(Clobber))
     return false;
-  // If the MA is MemoryPhi, it is impossible for the MA to satisfy
-  // FirstI->MA->LastI because FirstI and LastI are in the same BB.
-  if (isa<MemoryPhi>(MA) || MSSA.isLiveOnEntryDef(MA))
-    return false;
-  assert((!EnableDiffBB || !isa<MemoryPhi>(MA)) && // Optimize it in future
-         "EnableDiffBB support only single predecessor");
-  Instruction *DefI = cast<MemoryDef>(MA)->getMemoryInst();
-  assert(
-      DefI != FirstI &&
-      "FirstI is last clobber inst of memcpy dest, therefore, def of source "
-      "cannot be equal to FirstI");
-  if (DT.dominates(FirstI, DefI) && MSSA.dominates(MA, LastMA))
-    return true;
-  return false;
+
+  // As in MemCpyOptimizer::writtenBetween, only a clobber at or before the
+  // interval start proves that no intervening write can reach the read.
+  // A Phi after FirstI may include a write on just one incoming path.
+  if (auto *Phi = dyn_cast<MemoryPhi>(Clobber))
+    return !DT.dominates(Phi->getBlock(), FirstI->getParent());
+  return !DT.dominates(cast<MemoryDef>(Clobber)->getMemoryInst(), FirstI);
 }
 
 bool llvm::hasMemoryDefBetween(MemorySSA &MSSA, DominatorTree &DT,

@@ -581,8 +581,9 @@ struct GenericCopyOpt {
       auto *II = cast<IntrinsicInst>(Def->getMemoryInst());
 
       if (IsRef) {
-        // The source-write helper skips MemoryPhi nodes. A ref read must not
-        // accept a copy relation across may-reach definitions on either path.
+        // A ref read's InitEnd is a preceding definition, rather than the
+        // read itself. Keep this separate guard against may-reach definitions
+        // between that boundary and the copy being considered.
         bool HasMemoryPhi = false;
         for (MemoryAccess *MA = InitEnd;
              MA != Def && !MSSA.isLiveOnEntryDef(MA);
