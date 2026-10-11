@@ -62,6 +62,9 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/GlobalAlias.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Operator.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
@@ -413,24 +416,156 @@ uint64_t bufferHeaderBytes(const DataLayout &DL, const BufferInfo &B) {
 
 } // end anonymous namespace
 
-bool llvm::hasSafeCJStringPoolViews(GlobalVariable &Buffer) {
-  // Reuse the actual selection rules (including mixed klass and direct data
-  // users), rather than imposing pooling on every deferred representation.
-  auto Buffers = collectBuffers(*Buffer.getParent());
-  auto Mergeable = filterMergeable(Buffers);
-  for (auto &Entry : Mergeable) {
-    if (Entry.first->gv != &Buffer)
+namespace {
+// A nonzero view may have identical bytes after repointing, but its raw start
+// and buffer identity still change. Prove those fields are unobserved, including
+// through complete copies. Only private, typed stack copies and length reads
+// are transparent here; opaque helpers and outward copies cannot prove this.
+bool hasOnlyLengthObservations(GlobalVariable &View) {
+  const DataLayout &DL = View.getParent()->getDataLayout();
+  auto *Ty = dyn_cast<StructType>(View.getValueType());
+  if (!Ty || !Ty->isSized())
+    return false;
+  uint64_t Size = DL.getTypeAllocSize(Ty).getFixedSize();
+  uint64_t LengthOffset = DL.getStructLayout(Ty)->getElementOffset(2);
+  SmallVector<Value *, 16> Work{&View};
+  SmallDenseSet<Value *, 32> Seen;
+  while (!Work.empty()) {
+    Value *Address = Work.pop_back_val();
+    if (!Seen.insert(Address).second)
       continue;
-    for (GlobalVariable *View : Entry.second) {
-      auto *Init = dyn_cast_or_null<ConstantStruct>(View->getInitializer());
-      if (!Init || Init->getNumOperands() != LITERAL_FIELD_COUNT)
-        continue; // repointLiteral leaves this initializer untouched.
-      auto *Start = dyn_cast<ConstantInt>(Init->getOperand(1));
-      auto *Length = dyn_cast<ConstantInt>(Init->getOperand(LITERAL_LEN_FIELD));
-      if (!Start || !Start->getType()->isIntegerTy(32) || !Start->isZero() ||
-          !Length || !Length->getType()->isIntegerTy(32) ||
-          Length->getZExtValue() > Entry.first->bytes.size())
+    for (Use &U : Address->uses()) {
+      User *User = U.getUser();
+      if (auto *Alias = dyn_cast<GlobalAlias>(User)) {
+        if (!Alias->hasLocalLinkage())
+          return false;
+        Work.push_back(Alias);
+        continue;
+      }
+      if (auto *Op = dyn_cast<Operator>(User)) {
+        if ((Op->getOpcode() == Instruction::BitCast ||
+             Op->getOpcode() == Instruction::GetElementPtr) &&
+            U.getOperandNo() == 0) {
+          Work.push_back(User);
+          continue;
+        }
+      }
+      APInt Offset(DL.getIndexSizeInBits(0), 0);
+      Value *Base = Address->stripAndAccumulateConstantOffsets(DL, Offset, true);
+      if (auto *Load = dyn_cast<LoadInst>(User)) {
+        if (U.getOperandNo() != LoadInst::getPointerOperandIndex() ||
+            Load->isVolatile() || Load->isAtomic() ||
+            !Load->getType()->isIntegerTy(32) || Offset != LengthOffset ||
+            (Base != &View && !isa<AllocaInst>(Base) && !isa<Argument>(Base)))
+          return false;
+        continue;
+      }
+      if (auto *Copy = dyn_cast<MemTransferInst>(User)) {
+        auto *Length = dyn_cast<ConstantInt>(Copy->getLength());
+        if (Copy->isVolatile() || !Length || Length->getZExtValue() != Size ||
+            !Offset.isZero())
+          return false;
+        // Writes are permitted only as complete initializations of a local
+        // copy, never to the source view. Its other uses are checked below.
+        if (&U == &Copy->getArgOperandUse(0)) {
+          if (!isa<AllocaInst>(Base))
+            return false;
+          continue;
+        }
+        if (&U != &Copy->getArgOperandUse(1))
+          return false;
+        APInt DestOffset(DL.getIndexSizeInBits(0), 0);
+        auto *Dest = dyn_cast<AllocaInst>(
+            Copy->getDest()->stripAndAccumulateConstantOffsets(DL, DestOffset, true));
+        if (!Dest || !DestOffset.isZero() || Dest->getAllocatedType() != Ty ||
+            !Dest->isStaticAlloca() || Dest->isArrayAllocation())
+          return false;
+        Work.push_back(Dest);
+        continue;
+      }
+      if (auto *Call = dyn_cast<CallBase>(User)) {
+        if (!Call->isArgOperand(&U) || Call->hasOperandBundles())
+          return false;
+        Function *F = Call->getCalledFunction();
+        unsigned Arg = Call->getArgOperandNo(&U);
+        if (!F || !F->hasLocalLinkage() || F->isDeclaration() ||
+            Arg >= F->arg_size())
+          return false;
+        Work.push_back(F->getArg(Arg));
+        continue;
+      }
+      if (auto *I = dyn_cast<IntrinsicInst>(User)) {
+        if (I->isLifetimeStartOrEnd() || isa<DbgInfoIntrinsic>(I))
+          continue;
+      }
+      return false;
+    }
+  }
+  return true;
+}
+} // namespace
+
+bool llvm::hasSafeCJStringPoolViews(GlobalVariable &Buffer) {
+  // Current direct users, mixed classes and traversal order can disappear in
+  // prelink optimization / DCE / linking. Enumerate initializer views without
+  // applying the pool's current selection filters, which remain unchanged.
+  auto *Data = dyn_cast_or_null<ConstantStruct>(Buffer.getInitializer());
+  if (!Data || Data->getNumOperands() != BUFFER_FIELD_COUNT)
+    return false;
+  auto *BytesTy = dyn_cast<ArrayType>(Data->getOperand(2)->getType());
+  auto *HeaderLength = dyn_cast<ConstantInt>(Data->getOperand(1));
+  if (!BytesTy || !BytesTy->getElementType()->isIntegerTy(8) || !HeaderLength ||
+      HeaderLength->getZExtValue() != BytesTy->getNumElements())
+    return false;
+  std::string Bytes;
+  if (auto *Array = dyn_cast<ConstantDataArray>(Data->getOperand(2)))
+    Bytes = Array->getAsString().str();
+  else if (isa<ConstantAggregateZero>(Data->getOperand(2)))
+    Bytes.assign(BytesTy->getNumElements(), '\0');
+  else
+    return false;
+
+  SmallVector<Constant *, 16> Work{&Buffer};
+  SmallDenseSet<Constant *, 32> Seen;
+  while (!Work.empty()) {
+    Constant *C = Work.pop_back_val();
+    if (!Seen.insert(C).second)
+      continue;
+    for (User *U : C->users()) {
+      // An instruction is a current pool blocker, not evidence that the
+      // initializer branches alongside it will never be repointed.
+      if (isa<Instruction>(U))
+        continue;
+      if (auto *Alias = dyn_cast<GlobalAlias>(U)) {
+        Work.push_back(Alias);
+        continue;
+      }
+      if (auto *View = dyn_cast<GlobalVariable>(U)) {
+        auto *Init = dyn_cast_or_null<ConstantStruct>(View->getInitializer());
+        if (!isStringRecordGV(*View) || !Init ||
+            Init->getNumOperands() != LITERAL_FIELD_COUNT ||
+            Init->getOperand(0)->stripPointerCasts() != &Buffer)
+          return false; // An unresolved potential view is not absent.
+        auto *Start = dyn_cast<ConstantInt>(Init->getOperand(1));
+        auto *Length = dyn_cast<ConstantInt>(Init->getOperand(2));
+        if (!Start || !Start->getType()->isIntegerTy(32) || !Length ||
+            !Length->getType()->isIntegerTy(32))
+          return false;
+        uint64_t S = Start->getZExtValue(), L = Length->getZExtValue();
+        if (S > Bytes.size() || L > Bytes.size() - S ||
+            StringRef(Bytes).substr(S, L) != StringRef(Bytes).take_front(L))
+          return false;
+        if (S != 0 && !hasOnlyLengthObservations(*View))
+          return false;
+        continue;
+      }
+      auto *Next = dyn_cast<Constant>(U);
+      if (!Next)
         return false;
+      if (auto *Expr = dyn_cast<ConstantExpr>(Next))
+        if (!Expr->isCast() && Expr->getOpcode() != Instruction::GetElementPtr)
+          return false;
+      Work.push_back(Next);
     }
   }
   return true;

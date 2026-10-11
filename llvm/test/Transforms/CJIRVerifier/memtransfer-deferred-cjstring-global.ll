@@ -13,8 +13,8 @@
 ; RUN: opt -passes=cj-ir-verifier -disable-output %t/allow-helper-body.ll
 ; RUN: opt -passes=cj-ir-verifier -disable-output %t/allow-alias.ll
 ; RUN: opt -passes=cj-ir-verifier -disable-output %t/allow-loop.ll
-; RUN: opt -passes=cj-ir-verifier -disable-output %t/allow-direct-nonzero.ll
-; RUN: opt -passes=cj-ir-verifier -disable-output %t/allow-mixed-nonzero.ll
+; RUN: not --crash opt -passes=cj-ir-verifier -disable-output %t/reject-direct-nonzero.ll 2>&1 | FileCheck %s --check-prefix=REJECT
+; RUN: not --crash opt -passes=cj-ir-verifier -disable-output %t/reject-mixed-nonzero.ll 2>&1 | FileCheck %s --check-prefix=REJECT
 ; RUN: opt -passes=cj-ir-verifier -disable-output %t/allow-legacy-nonzero.ll
 ; RUN: opt -passes=cj-ir-verifier -disable-output %t/allow-empty.ll
 ; RUN: opt -passes=cj-ir-verifier -disable-output %t/allow-nul.ll
@@ -244,7 +244,7 @@ done:
  ret i32 %v
 }
 
-;--- allow-direct-nonzero.ll
+;--- reject-direct-nonzero.ll
 %"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
 %TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, i8*, i8*, i8*, i8* }
 %StringData = type { i8*, i64, [4 x i8] }
@@ -272,7 +272,7 @@ define i8 @direct() {
  ret i8 %v
 }
 
-;--- allow-mixed-nonzero.ll
+;--- reject-mixed-nonzero.ll
 %"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
 %TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, i8*, i8*, i8*, i8* }
 %StringData = type { i8*, i64, [4 x i8] }
