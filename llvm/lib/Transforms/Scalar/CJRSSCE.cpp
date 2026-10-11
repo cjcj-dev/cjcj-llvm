@@ -655,11 +655,15 @@ struct DestPropagationState {
     Value *Dst = nullptr;
     Interval IV;
     Instruction *I = nullptr;
+    // A store writes a previously read value; its source snapshot is ReadI.
+    Instruction *ReadI = nullptr;
     uint32_t Version = UINT32_MAX;
     Copy() : Dst(nullptr), IV({0, 0}), I(nullptr) {}
-    Copy(Value *Dst, Interval IV, Instruction *I, uint32_t TotalVersion)
-        : Dst(Dst), IV(IV), I(I), Version(TotalVersion) {}
-    Copy(const Copy &C) : Dst(C.Dst), IV(C.IV), I(C.I), Version(C.Version) {}
+    Copy(Value *Dst, Interval IV, Instruction *I, Instruction *ReadI,
+         uint32_t TotalVersion)
+        : Dst(Dst), IV(IV), I(I), ReadI(ReadI), Version(TotalVersion) {}
+    Copy(const Copy &C)
+        : Dst(C.Dst), IV(C.IV), I(C.I), ReadI(C.ReadI), Version(C.Version) {}
   };
   struct Compare {
     // Be careful, LHS < RHS false + RHS < LHS false => LHS == RHS.
@@ -688,8 +692,7 @@ struct DestPropagationState {
   };
   struct ClobberInfo {
     SmallVector<Define, 8> Defines;
-    // For the source on the destination, record the last define instruction
-    // from the source.
+    // For each source on the destination, record its last read snapshot.
     DenseMap<Value *, Instruction *> Sources;
     // Records the last define instruction of the destination.
     Instruction *LastClobberI = nullptr;
@@ -779,6 +782,7 @@ struct DestPropagationState {
     C->Dst = Def.C->Dst;
     C->IV = {OldSIV.first + IV.second - OldDIV.first, OldSIV.second};
     C->I = Def.C->I;
+    C->ReadI = Def.C->ReadI;
     C->Version = Def.C->Version;
     SourceCopys[BB][Def.Source].insert(C);
     return {Def, {Def.Source, C, {IV.second, OldDIV.second}}};
@@ -812,7 +816,7 @@ struct DestPropagationState {
     }
     // Quick check whether LD.Source is still valid.
     if (LD.Source != RD.Source && // This case has been checked.
-        hasMemoryDefBetween(MSSA, DT, DL, LD.Source, LD.C->I,
+        hasMemoryDefBetween(MSSA, DT, DL, LD.Source, LD.C->ReadI,
                             MSSA.getMemoryAccess(I), true, true)) {
       SourceCopys[BB][LD.Source].erase(LD.C);
       delete LD.C;
@@ -990,6 +994,22 @@ struct DestPropagationState {
     Copies.erase(Source);
   }
 
+  // Stores can consume snapshots in the opposite order to their loads.
+  // Compare the actual reads in dominance order, never their later stores.
+  bool sourceChangedBetweenReads(Value *Source, Instruction *First,
+                                 Instruction *Last) {
+    if (First == Last)
+      return false;
+    if (DT.dominates(Last, First))
+      std::swap(First, Last);
+    else if (!DT.dominates(First, Last))
+      return true;
+    auto *MA = MSSA.getMemoryAccess(Last);
+    if (!MA)
+      return true;
+    return hasMemoryDefBetween(MSSA, DT, DL, Source, First, MA, false, true);
+  }
+
   // This function try to insert and merge a new define. For a new define
   // instruction, find the copy interval of source and dest, and try to merge
   // the old define interval of dest. There may be two defined from different
@@ -1000,15 +1020,15 @@ struct DestPropagationState {
     auto [Src, Dst, Size] = getSrcDstPtrAndSize(DL, I);
     if (!Src || !Dst)
       return false;
-    auto [SrcBPtr, SrcOff] = getBasePtrAndOffset(DL, Src, I);
+    Instruction *ReadI = I;
+    auto [SrcBPtr, SrcOff] = getBasePtrAndOffset(DL, Src, I, &ReadI);
     auto [DstBPtr, DstOff] = getBasePtrAndOffset(DL, Dst, I);
     if (!SrcBPtr || !DstBPtr)
       return false;
     auto *BB = I->getParent();
     auto &ClobberB = Clobbers[BB][DstBPtr];
     if (ClobberB.Sources.count(SrcBPtr) &&
-        hasMemoryDefBetween(MSSA, DT, DL, SrcBPtr, ClobberB.Sources[SrcBPtr],
-                            MSSA.getMemoryAccess(I)))
+        sourceChangedBetweenReads(SrcBPtr, ClobberB.Sources[SrcBPtr], ReadI))
       // SrcBPtr is clobbered, so all Src copy destinations need to be
       // invalidated.
       invalidSource(SrcBPtr, SourceCopys[BB], Clobbers[BB]);
@@ -1019,7 +1039,8 @@ struct DestPropagationState {
       // cleared.
       invalidClobber(DstBPtr, Clobbers[BB], SourceCopys[BB]);
     auto &ClobberA = Clobbers[BB][DstBPtr]; // ClobberB may be invalid, rebind.
-    Copy *C = new Copy(DstBPtr, {SrcOff, SrcOff + Size}, I, TotalVersion++);
+    Copy *C = new Copy(DstBPtr, {SrcOff, SrcOff + Size}, I, ReadI,
+                       TotalVersion++);
 #ifndef NDEBUG
     insertNewMem(C);
 #endif
@@ -1035,7 +1056,7 @@ struct DestPropagationState {
       eraseReleaseMem(C);
 #endif
     }
-    ClobberA.Sources[SrcBPtr] = I; // Update Source last define.
+    ClobberA.Sources[SrcBPtr] = ReadI; // Update the source snapshot.
     ClobberA.LastClobberI = I;     // Update dest last define.
     return true;
   }
@@ -1174,10 +1195,20 @@ struct DestPropagationState {
       }
       auto *CandiDI = FindCopyBelongDefine(CandiClob, C);
       assert(CandiDI != nullptr);
+      // The first matching source byte establishes one translation for the
+      // entire destination window. Source coverage alone permits candidate
+      // holes or a different translation in each subsequent define.
+      if (C->IV.first > DI->C->IV.first)
+        continue;
+      uint64_t SourceDelta = DI->C->IV.first - C->IV.first;
+      if (SourceDelta > UINT64_MAX - CandiDI->IV.first)
+        continue;
+      uint64_t WindowStart = CandiDI->IV.first + SourceDelta;
       int I = 0;
       for (; I < DefCount; ++I) {
-        auto *CandiDef =
-            CandiDI + I == CandiClob.Defines.end() ? nullptr : CandiDI + I;
+        auto *CandiDef = I >= std::distance(CandiDI, CandiClob.Defines.end())
+                             ? nullptr
+                             : CandiDI + I;
         if (!CandiDef)
           break;
         auto *Def = DI + I;
@@ -1190,16 +1221,23 @@ struct DestPropagationState {
         bool RightValid = (I == DefCount - 1 &&
                            CandiDef->C->IV.second >= Def->C->IV.second) ||
                           CandiDef->C->IV.second == Def->C->IV.second;
-        // For the same reason, it has been proven safe to replace C->I with
-        // d0.Sources[source] when adding a new define from source to d0.
-        auto *SMA = MSSA.getMemoryAccess(Clobbers[BB][V].Sources[Def->Source]);
-        assert(SMA && "Must has memory access");
-        if (LeftValid && RightValid && CandiDef->Source == Def->Source &&
-            // Be sure that Source has not been modified between the last use of
-            // CandiClob and CurrentClob.
-            !hasMemoryDefBetween(MSSA, DT, DL, Def->Source,
-                                 CandiClob.Sources[Def->Source], SMA, true,
-                                 true)) {
+        if (!LeftValid || !RightValid || CandiDef->Source != Def->Source)
+          break;
+        uint64_t Delta = Def->C->IV.first - CandiDef->C->IV.first;
+        uint64_t RelativeStart = Def->IV.first - DI->IV.first;
+        if (Delta > UINT64_MAX - CandiDef->IV.first ||
+            RelativeStart > UINT64_MAX - WindowStart)
+          break;
+        uint64_t MappedStart = CandiDef->IV.first + Delta;
+        uint64_t RequiredEnd =
+            std::min(Def->IV.second, VOff.getZExtValue() + Size);
+        uint64_t RequiredSize = RequiredEnd - Def->IV.first;
+        bool SameMapping = MappedStart == WindowStart + RelativeStart &&
+                           MappedStart <= CandiDef->IV.second &&
+                           RequiredSize <= CandiDef->IV.second - MappedStart;
+        if (SameMapping &&
+            !sourceChangedBetweenReads(Def->Source, CandiDef->C->ReadI,
+                                       Def->C->ReadI)) {
           continue;
         }
         break;
@@ -1214,8 +1252,7 @@ struct DestPropagationState {
         //         ^ (P: Ptr offset based on V)
         // The final offset for replacing Ptr with candi is
         // L0 + L2 - L1 + P - L3.
-        return {C->Dst, CandiDI->IV.first + DI->C->IV.first - C->IV.first +
-                            VOff.getZExtValue() - DI->IV.first};
+        return {C->Dst, WindowStart + VOff.getZExtValue() - DI->IV.first};
       }
     }
     return {nullptr, 0};
