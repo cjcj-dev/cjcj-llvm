@@ -1,4 +1,5 @@
 ; RUN: split-file %s %t
+; RUN: opt -passes=cj-ir-verifier -disable-output %t/allow-byval.ll
 ; RUN: opt -passes=cj-ir-verifier -disable-output %t/allow-helper-spill.ll
 ; RUN: not --crash opt -passes=cj-ir-verifier -disable-output %t/reject-spill-store.ll 2>&1 | FileCheck %s --check-prefix=REJECT
 ; RUN: not --crash opt -passes=cj-ir-verifier -disable-output %t/reject-spill-escape.ll 2>&1 | FileCheck %s --check-prefix=REJECT
@@ -1020,5 +1021,34 @@ define void @escape() {
  %slot = alloca %"record.std.core:String"*
  store %"record.std.core:String"* @literal, %"record.std.core:String"** %slot
  call void @capture(%"record.std.core:String"** %slot)
+ ret void
+}
+
+;--- allow-byval.ll
+%"record.std.core:String" = type { i8 addrspace(1)*, i32, i32 }
+%TypeInfo = type { i8*, i8, i8, i16, i32, i8*, i32, i8, i8, i16, i32*, i8*, i8*, i8*, i8*, i8*, i8*, i8* }
+%StringData = type { i8*, i64, [4 x i8] }
+
+@"RawArray<UInt8>.ti" = external global %TypeInfo, !RelatedType !0
+@data = private constant %StringData { i8* bitcast (%TypeInfo* @"RawArray<UInt8>.ti" to i8*), i64 4, [4 x i8] c"abcd" } #1
+@literal = private global %"record.std.core:String" { i8 addrspace(1)* addrspacecast (i8* bitcast (%StringData* @data to i8*) to i8 addrspace(1)*), i32 0, i32 4 } #2
+
+define void @target(%"record.std.core:String"* noalias sret(%"record.std.core:String") %out) gc "cangjie" {
+entry:
+  %dst = bitcast %"record.std.core:String"* %out to i8*
+  %src = bitcast %"record.std.core:String"* @literal to i8*
+  call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dst, i8* %src, i64 16, i1 false)
+  ret void
+}
+
+declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+!0 = !{!"ArrayLayout.UInt8"}
+attributes #1 = { "cjstring_data" "cjstring_deferred" }
+attributes #2 = { "cjstring_literal" }
+
+
+declare void @by_value(%"record.std.core:String"* byval(%"record.std.core:String"))
+define void @value_copy() {
+ call void @by_value(%"record.std.core:String"* byval(%"record.std.core:String") @literal)
  ret void
 }
