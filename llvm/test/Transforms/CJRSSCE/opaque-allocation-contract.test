@@ -3,13 +3,13 @@
 ; RUN: opt -opaque-pointers=1 -passes=cj-rssce -S %S/allocation-copy-extent.ll -o %t.extent.ll
 ; RUN: FileCheck %s --check-prefix=EXTENT < %t.extent.ll
 ; RUN: %python %S/Inputs/host-value-input.py --llc llc --certificate %t.range.host.json %S/destination-array-range.ll > %t.range.host.ll
-; RUN: opt -opaque-pointers=1 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' %t.range.host.ll -o %t.range.bc
-; RUN: llvm-link -opaque-pointers=1 %t.range.bc %S/Inputs/destination-array-range-values.ll -o %t.range.values.bc
-; RUN: lli -opaque-pointers=1 %t.range.values.bc
+; RUN: opt -opaque-pointers=1 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S %t.range.host.ll -o %t.range.opt.ll
+; RUN: cat %t.range.opt.ll %S/Inputs/destination-array-range-values.ll > %t.range.values.ll
+; RUN: lli -opaque-pointers=1 %t.range.values.ll
 ; RUN: %python %S/Inputs/host-value-input.py --llc llc --certificate %t.extent.host.json %S/allocation-copy-extent.ll > %t.extent.host.ll
-; RUN: opt -opaque-pointers=1 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' %t.extent.host.ll -o %t.extent.bc
-; RUN: llvm-link -opaque-pointers=1 %t.extent.bc %S/Inputs/allocation-copy-extent-values.ll -o %t.extent.values.bc
-; RUN: lli -opaque-pointers=1 %t.extent.values.bc
+; RUN: opt -opaque-pointers=1 -passes='function(cj-rssce),always-inline,function(sroa,instcombine,simplifycfg)' -S %t.extent.host.ll -o %t.extent.opt.ll
+; RUN: cat %t.extent.opt.ll %S/Inputs/allocation-copy-extent-values.ll > %t.extent.values.ll
+; RUN: lli -opaque-pointers=1 %t.extent.values.ll
 ;
 ; Recovering the GEP type must preserve the entire backing array proof.
 ; RANGE-LABEL: define i64 @source_changed_between_copies()
