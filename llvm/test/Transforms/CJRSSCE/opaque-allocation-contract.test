@@ -26,6 +26,7 @@
 ; EXTENT: %r = call i64 @sum_all(ptr %dst)
 ; EXTENT-LABEL: define i64 @full_array_source_propagation()
 ; EXTENT: %[[ARG:.*]] = getelementptr inbounds i8, ptr %src, i64 0
+; EXTENT-NEXT: call void @llvm.memcpy.p0.p0.i64(ptr %d, ptr %s, i64 32, i1 false)
 ; EXTENT-NEXT: %r = call i64 @sum_all(ptr %[[ARG]])
 ; EXTENT-LABEL: define i64 @full_array_source_changed()
 ; EXTENT: %r = call i64 @sum_all(ptr %dst)
