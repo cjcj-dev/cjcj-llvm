@@ -374,7 +374,13 @@ struct SourcePropagationState {
       if (isa<ConstantInt>(Src))
         continue;
       auto *GV = dyn_cast<GlobalVariable>(Src->stripPointerCasts());
-      if (GV != nullptr && isInt8AS0Pty(Src) && isKlassGlobal(GV))
+      auto *PT = dyn_cast<PointerType>(Src->getType());
+      // The address use and the global's stored type are separate evidence.
+      // Typed pointers must still be byte views. Opaque pointers have no byte
+      // pointee to inspect, so accept only the explicitly known TypeInfo
+      // global in AS0; an arbitrary opaque address is not a TypeInfo source.
+      if (GV && PT && PT->getAddressSpace() == 0 && isKlassGlobal(GV) &&
+          (PT->isOpaque() || isInt8AS0Pty(Src)))
         continue;
       if (auto *AI = dyn_cast<AllocaInst>(Src->stripPointerCasts()))
         if (isa<StructType>(AI->getAllocatedType()))
