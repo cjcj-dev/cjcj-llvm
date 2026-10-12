@@ -29,12 +29,12 @@ define internal i64 @observe(%S* nocapture readonly %p) readonly noinline {
   ret i64 %actual
 }
 
-; TYPED-LABEL: define i64 @ordinary(
+; TYPED-LABEL: define i64 @case_ordinary(
 ; TYPED: %result = call i64 @observe(%S* %dest)
 
-; OPAQUE-LABEL: define i64 @ordinary(
+; OPAQUE-LABEL: define i64 @case_ordinary(
 ; OPAQUE: %result = call i64 @observe(ptr %dest)
-define i64 @ordinary() {
+define i64 @case_ordinary() {
   %slot = alloca i8*
   store i8* bitcast (%Ordinary* @ordinary to i8*), i8** %slot
   %loaded = load i8*, i8** %slot
@@ -45,12 +45,12 @@ define i64 @ordinary() {
   ret i64 %result
 }
 
-; TYPED-LABEL: define i64 @anonymous(
+; TYPED-LABEL: define i64 @case_anonymous(
 ; TYPED: %result = call i64 @observe(%S* %dest)
 
-; OPAQUE-LABEL: define i64 @anonymous(
+; OPAQUE-LABEL: define i64 @case_anonymous(
 ; OPAQUE: %result = call i64 @observe(ptr %dest)
-define i64 @anonymous() {
+define i64 @case_anonymous() {
   %slot = alloca i8*
   store i8* bitcast ({ i8*, i64 }* @anonymous to i8*), i8** %slot
   %loaded = load i8*, i8** %slot
@@ -61,12 +61,12 @@ define i64 @anonymous() {
   ret i64 %result
 }
 
-; TYPED-LABEL: define i64 @array(
+; TYPED-LABEL: define i64 @case_array(
 ; TYPED: %result = call i64 @observe(%S* %dest)
 
-; OPAQUE-LABEL: define i64 @array(
+; OPAQUE-LABEL: define i64 @case_array(
 ; OPAQUE: %result = call i64 @observe(ptr %dest)
-define i64 @array() {
+define i64 @case_array() {
   %slot = alloca i8*
   store i8* bitcast ([2 x i64]* @array to i8*), i8** %slot
   %loaded = load i8*, i8** %slot
@@ -77,12 +77,12 @@ define i64 @array() {
   ret i64 %result
 }
 
-; TYPED-LABEL: define i64 @unknown(
+; TYPED-LABEL: define i64 @case_unknown(
 ; TYPED: %result = call i64 @observe(%S* %dest)
 
-; OPAQUE-LABEL: define i64 @unknown(
+; OPAQUE-LABEL: define i64 @case_unknown(
 ; OPAQUE: %result = call i64 @observe(ptr %dest)
-define i64 @unknown(i8* %arg) {
+define i64 @case_unknown(i8* %arg) {
   %slot = alloca i8*
   store i8* %arg, i8** %slot
   %loaded = load i8*, i8** %slot
@@ -93,12 +93,12 @@ define i64 @unknown(i8* %arg) {
   ret i64 %result
 }
 
-; TYPED-LABEL: define i64 @as1(
+; TYPED-LABEL: define i64 @case_as1(
 ; TYPED: %result = call i64 @observe(%S* %dest)
 
-; OPAQUE-LABEL: define i64 @as1(
+; OPAQUE-LABEL: define i64 @case_as1(
 ; OPAQUE: %result = call i64 @observe(ptr %dest)
-define i64 @as1() {
+define i64 @case_as1() {
   %slot = alloca i8 addrspace(1)*
   store i8 addrspace(1)* bitcast (%TypeInfo addrspace(1)* @ti1 to i8 addrspace(1)*), i8 addrspace(1)** %slot
   %loaded = load i8 addrspace(1)*, i8 addrspace(1)** %slot
@@ -109,12 +109,12 @@ define i64 @as1() {
   ret i64 %result
 }
 
-; TYPED-LABEL: define i64 @nonbyte(
+; TYPED-LABEL: define i64 @case_nonbyte(
 ; TYPED: %result = call i64 @observe(%S* %dest)
 
-; OPAQUE-LABEL: define i64 @nonbyte(
+; OPAQUE-LABEL: define i64 @case_nonbyte(
 ; OPAQUE: %result = call i64 @observe(ptr %{{[0-9]+}})
-define i64 @nonbyte() {
+define i64 @case_nonbyte() {
   %slot = alloca %TypeInfo*
   store %TypeInfo* @ti, %TypeInfo** %slot
   %loaded = load %TypeInfo*, %TypeInfo** %slot
@@ -129,12 +129,12 @@ define i64 @nonbyte() {
 @format = private constant [61 x i8] c"controls=%ld,%ld,%ld,%ld,%ld,%ld expected=17,19,23,17,29,13\0A\00"
 
 define i32 @main() {
-  %v0 = call i64 @ordinary()
-  %v1 = call i64 @anonymous()
-  %v2 = call i64 @array()
-  %v3 = call i64 @unknown(i8* bitcast (%Ordinary* @ordinary to i8*))
-  %v4 = call i64 @as1()
-  %v5 = call i64 @nonbyte()
+  %v0 = call i64 @case_ordinary()
+  %v1 = call i64 @case_anonymous()
+  %v2 = call i64 @case_array()
+  %v3 = call i64 @case_unknown(i8* bitcast (%Ordinary* @ordinary to i8*))
+  %v4 = call i64 @case_as1()
+  %v5 = call i64 @case_nonbyte()
   %fmt = getelementptr [61 x i8], [61 x i8]* @format, i64 0, i64 0
   %print = call i32 (i8*, ...) @printf(i8* %fmt, i64 %v0, i64 %v1, i64 %v2, i64 %v3, i64 %v4, i64 %v5)
   %wrong0 = icmp ne i64 %v0, 17
