@@ -39,6 +39,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/Operator.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Value.h"
@@ -57,6 +58,19 @@ static cl::opt<bool> EnableCJRSSCE("enable-cj-rssce", cl::Hidden,
                                    cl::init(true));
 
 using Interval = std::pair<uint64_t, uint64_t>;
+
+// Opaque pointers do not carry a pointee type. Recover it only from a
+// definition that records one; an unknown type cannot justify propagation.
+static Type *getKnownPointeeType(Value *V) {
+  if (auto *AI = dyn_cast<AllocaInst>(V))
+    return AI->getAllocatedType();
+  if (auto *GV = dyn_cast<GlobalValue>(V))
+    return GV->getValueType();
+  if (auto *GEP = dyn_cast<GEPOperator>(V))
+    return GEP->getResultElementType();
+  auto *PT = dyn_cast<PointerType>(V->getType());
+  return PT && !PT->isOpaque() ? PT->getNonOpaquePointerElementType() : nullptr;
+}
 
 static std::pair<Value *, uint64_t>
 getBasePtrAndOffset(const DataLayout &DL, Value *V, Instruction *I,
@@ -86,7 +100,8 @@ getBasePtrAndOffset(const DataLayout &DL, Value *V, Instruction *I,
   // V is not a memory object.
   if (!isa<PointerType>(V->getType()))
     return {nullptr, 0};
-  const unsigned BitWidth = DL.getIndexSizeInBits(0);
+  const unsigned BitWidth =
+      DL.getIndexSizeInBits(V->getType()->getPointerAddressSpace());
   constexpr uint64_t OffsetRawValue = 0;
   APInt Offset(BitWidth, OffsetRawValue);
   Value *BPtr = V->stripAndAccumulateConstantOffsets(DL, Offset, true);
@@ -134,56 +149,64 @@ static MemoryAccess *findLastDefDominateMA(MemorySSA &MSSA, BasicBlock *BB,
   return nullptr;
 }
 
-bool llvm::hasMemoryDefBetween(MemorySSA &MSSA, DominatorTree &DT,
-                               const DataLayout &DL, Value *UnderObj,
-                               Instruction *FirstI, MemoryAccess *LastMA,
-                               bool LastClosure, bool EnableDiffBB) {
+static bool hasMemoryDefBetweenForLocation(
+    MemorySSA &MSSA, DominatorTree &DT, const MemoryLocation &Loc,
+    Instruction *FirstI, MemoryAccess *LastMA, bool LastClosure = true,
+    bool EnableDiffBB = false) {
   assert(isa<MemoryUseOrDef>(LastMA));
   Instruction *LastI = cast<MemoryUseOrDef>(LastMA)->getMemoryInst();
   if (FirstI->getParent() == LastI->getParent() && !FirstI->comesBefore(LastI))
     return false;
   if (!EnableDiffBB && FirstI->getParent() != LastI->getParent())
     return true;
-  MemoryAccess *FirstDef = MSSA.getMemoryAccess(FirstI);
-  // Find last MemoryDef that dominates LastMA.
+  if (!DT.dominates(FirstI, LastI))
+    return true;
+
+  // Start at the last unoptimized definition, not a MemoryUse's defining
+  // access: that access may already skip writes to other bytes of Loc.
   MemoryAccess *LastDef =
       findLastDefDominateMA(MSSA, LastI->getParent(), LastMA, LastClosure);
-  assert((LastDef || EnableDiffBB) && "Cannot be false at the same time");
-  if (!LastDef) // Now, LastDef is MemoryUse
-    LastDef = cast<MemoryUseOrDef>(LastMA)->getDefiningAccess();
+  if (!LastDef) {
+    auto *Node = DT.getNode(LastI->getParent());
+    for (Node = Node ? Node->getIDom() : nullptr; Node;
+         Node = Node->getIDom()) {
+      if (auto *Defs = MSSA.getBlockDefs(Node->getBlock())) {
+        LastDef = &const_cast<MemoryAccess &>(Defs->back());
+        break;
+      }
+    }
+    if (!LastDef)
+      LastDef = MSSA.getLiveOnEntryDef();
+  }
+  MemoryAccess *Clobber =
+      MSSA.getWalker()->getClobberingMemoryAccess(LastDef, Loc);
+  if (MSSA.isLiveOnEntryDef(Clobber))
+    return false;
+
+  // As in MemCpyOptimizer::writtenBetween, only a clobber at or before the
+  // interval start proves that no intervening write can reach the read.
+  // A Phi after FirstI may include a write on just one incoming path.
+  if (auto *Phi = dyn_cast<MemoryPhi>(Clobber))
+    return !DT.dominates(Phi->getBlock(), FirstI->getParent());
+  Instruction *ClobberI = cast<MemoryDef>(Clobber)->getMemoryInst();
+  // Instruction dominance is strict for a use in the defining instruction.
+  // The write at FirstI belongs to the starting snapshot, not the interval.
+  return ClobberI != FirstI && !DT.dominates(ClobberI, FirstI);
+}
+
+bool llvm::hasMemoryDefBetween(MemorySSA &MSSA, DominatorTree &DT,
+                               const DataLayout &, Value *UnderObj,
+                               Instruction *FirstI, MemoryAccess *LastMA,
+                               bool LastClosure, bool EnableDiffBB) {
   SmallVector<const Value *, 8> UnderObjs;
   getUnderlyingObjects(UnderObj, UnderObjs);
   for (auto *V : UnderObjs) {
-    auto *ST =
-        dyn_cast<StructType>(V->getType()->getNonOpaquePointerElementType());
-    // Loc may be load inst, and the clobber we find may not accurate.
-    MemoryLocation Loc =
-        ST ? MemoryLocation(V, LocationSize::precise(
-                                   DL.getStructLayout(ST)->getSizeInBytes()))
-           : MemoryLocation::getAfter(V);
-    // MSSA uses SimpleCaptureInfo by default. To make the result more accurate,
-    // consider using BatchAA for more analysis of MA.
-    MemoryAccess *MA =
-        MSSA.getWalker()->getClobberingMemoryAccess(LastDef, Loc);
-    // if FirstDef is equal to LastDef, we known FirstDef does not clobber
-    // source.This is based on the premise that we've aligned it by the offset
-    // of source and dest.
-    if (MA == LastDef && LastDef != FirstDef)
-      return true;
-    if (MA == FirstDef)
-      continue;
-    // If the MA is MemoryPhi, it is impossible for the MA to satisfy
-    // FirstI->MA->LastI because FirstI and LastI are in the same BB.
-    if (isa<MemoryPhi>(MA) || MSSA.isLiveOnEntryDef(MA))
-      continue;
-    assert((!EnableDiffBB || !isa<MemoryPhi>(MA)) && // Optimize it in future
-           "EnableDiffBB support only single predecessor");
-    Instruction *DefI = cast<MemoryDef>(MA)->getMemoryInst();
-    assert(
-        DefI != FirstI &&
-        "FirstI is last clobber inst of memcpy dest, therefore, def of source "
-        "cannot be equal to FirstI");
-    if (DT.dominates(FirstI, DefI) && MSSA.dominates(MA, LastMA))
+    // These callers track whole objects, possibly with several copy ranges or
+    // an unknown allocation count. A pointer's element type does not bound the
+    // object: in particular, an alloca may allocate an array of structs.
+    if (hasMemoryDefBetweenForLocation(MSSA, DT,
+                                      MemoryLocation::getBeforeOrAfter(V),
+                                      FirstI, LastMA, LastClosure, EnableDiffBB))
       return true;
   }
   return false;
@@ -336,12 +359,8 @@ struct SourcePropagationState {
   }
 
   bool isKlassGlobal(GlobalVariable *GV) {
-    return GV->getType()->isPointerTy() &&
-           GV->getType()->getNonOpaquePointerElementType()->isStructTy() &&
-           GV->getType()
-               ->getNonOpaquePointerElementType()
-               ->getStructName()
-               .isCangjieTypeInfo();
+    auto *ST = dyn_cast<StructType>(GV->getValueType());
+    return ST && ST->hasName() && ST->getName().isCangjieTypeInfo();
   }
 
   bool isStackValueSrc(SetVector<Instruction *> &BaseStoreMemcpy) {
@@ -355,7 +374,13 @@ struct SourcePropagationState {
       if (isa<ConstantInt>(Src))
         continue;
       auto *GV = dyn_cast<GlobalVariable>(Src->stripPointerCasts());
-      if (GV != nullptr && isInt8AS0Pty(Src) && isKlassGlobal(GV))
+      auto *PT = dyn_cast<PointerType>(Src->getType());
+      // The address use and the global's stored type are separate evidence.
+      // Typed pointers must still be byte views. Opaque pointers have no byte
+      // pointee to inspect, so accept only the explicitly known TypeInfo
+      // global in AS0; an arbitrary opaque address is not a TypeInfo source.
+      if (GV && PT && PT->getAddressSpace() == 0 && isKlassGlobal(GV) &&
+          (PT->isOpaque() || isInt8AS0Pty(Src)))
         continue;
       if (auto *AI = dyn_cast<AllocaInst>(Src->stripPointerCasts()))
         if (isa<StructType>(AI->getAllocatedType()))
@@ -415,7 +440,7 @@ struct SourcePropagationState {
     return Base;
   }
 
-  bool isIntervalsCovered(Value *UnderObj, StructType *ST,
+  bool isIntervalsCovered(uint64_t CopySize,
                           SmallVectorImpl<IVInfo> &Intervals) {
     if (Intervals.empty())
       return false;
@@ -432,9 +457,8 @@ struct SourcePropagationState {
     }
     auto FirstE = Intervals.front();
     auto LastE = Intervals.back();
-    auto Size = DL.getStructLayout(ST)->getSizeInBytes();
-    if (LastE.Src.second - FirstE.Src.first != Size ||
-        LastE.Dst.second - FirstE.Dst.first != Size)
+    if (LastE.Src.second - FirstE.Src.first != CopySize ||
+        FirstE.Dst.first != 0 || LastE.Dst.second != CopySize)
       return false;
     return true;
   }
@@ -464,14 +488,15 @@ struct SourcePropagationState {
         IRB.getInt8PtrTy(UnderObj->getType()->getPointerAddressSpace()));
     auto *GEP = IRB.CreateGEP(
         IRB.getInt8Ty(), BC,
-        {ConstantInt::get(IRB.getInt32Ty(), FirstE.Src.first)}, "", true);
+        {ConstantInt::get(DL.getIndexType(UnderObj->getType()), FirstE.Src.first)},
+        "", true);
     // We do not remove possibly redundant def instructions, because their use
     // needs to be analyzed. Therefore, they are removed in subsequent passes.
     return cast<Instruction>(GEP);
   }
 
   Instruction *getCompleteClobbers(MemoryLocation &Loc, MemoryAccess *OriginMA,
-                                   StructType *ST, uint64_t Limits = 5) {
+                                   uint64_t CopySize, uint64_t Limits = 5) {
     assert(isa<MemoryUseOrDef>(OriginMA));
     CaptureInfo *CI = &EI;
     auto *StartDef = dyn_cast<MemoryDef>(
@@ -484,7 +509,6 @@ struct SourcePropagationState {
 
     SmallVector<IVInfo, 8> Intervals;
     Value *UnderObj = nullptr;
-    Instruction *LastClobberI = nullptr;
     SmallVector<Value *, 8> ArrayIndices;
     // If 2 steps has covered, and 3th step is repeat.
     bool IntervalsValid = false;
@@ -494,8 +518,6 @@ struct SourcePropagationState {
       if (!I || (I != MemI && !DT.dominates(I, MemI)) || I->mayThrow() ||
           !I->willReturn())
         break;
-      if (!LastClobberI)
-        LastClobberI = Current->getMemoryInst();
       // Get ModRefInfo between I and Loc.Ptr, we only deal with MustMod cases.
       ModRefInfo MR = BatchAA.getModRefInfo(I, Loc);
       if (isNoModRef(MR) || !isModSet(MR))
@@ -513,7 +535,7 @@ struct SourcePropagationState {
       }
       assert((isa<StoreInst>(I) || isa<MemCpyInst>(I)) &&
              "Only support to deal store or memcpy");
-      auto [SrcBPtr, SrcOff] = getBasePtrAndOffset(DL, Src, I, &LastClobberI);
+      auto [SrcBPtr, SrcOff] = getBasePtrAndOffset(DL, Src, I);
       auto [DstBPtr, DstOff] = getBasePtrAndOffset(DL, Dst, I);
       if (!SrcBPtr || !DstBPtr)
         break;
@@ -542,19 +564,70 @@ struct SourcePropagationState {
 
       Intervals.push_back(
           {{SrcOff, SrcOff + Size}, {DstOff, DstOff + Size}, I, GEP});
-      if (isIntervalsCovered(UnderObj, ST, Intervals)) {
+      if (isIntervalsCovered(CopySize, Intervals)) {
         IntervalsValid = true;
         break;
       }
     }
-    if (!IntervalsValid && !isIntervalsCovered(UnderObj, ST, Intervals))
+    if (!IntervalsValid && !isIntervalsCovered(CopySize, Intervals))
       return nullptr;
-    if (hasMemoryDefBetween(MSSA, DT, DL, UnderObj, LastClobberI, OriginMA))
-      return nullptr;
+    for (const auto &IV : Intervals) {
+      // Keep the transfer's actual source address and length, including a
+      // nonzero offset within an array allocation. Writes to disjoint parts of
+      // the same object do not invalidate this copy.
+      if (auto *MCI = dyn_cast<MemCpyInst>(IV.DefI)) {
+        if (hasMemoryDefBetweenForLocation(
+                MSSA, DT,
+                getProvenSourceLocation(MemoryLocation::getForSource(MCI)),
+                MCI, OriginMA))
+          return nullptr;
+      } else {
+        // A stored reference may have been obtained through a load or a GC
+        // read. Without a transfer source location, check its whole object
+        // starting at that individual read, not at another copy's read.
+        auto *SI = cast<StoreInst>(IV.DefI);
+        Instruction *FirstReadI = nullptr;
+        getBasePtrAndOffset(DL, SI->getValueOperand(), SI, &FirstReadI);
+        if (hasMemoryDefBetweenForLocation(
+                MSSA, DT, getProvenSourceLocation(
+                              MemoryLocation::getBeforeOrAfter(UnderObj)),
+                FirstReadI, OriginMA))
+          return nullptr;
+      }
+    }
     if (!filterValueCopySrc(UnderObj))
       return nullptr;
     IRBuilder<> IRB(MemI);
     return createIntervalBeginGEP(IRB, UnderObj, Intervals.front());
+  }
+
+  MemoryLocation getProvenSourceLocation(const MemoryLocation &Loc) {
+    // Default AA cannot recover a pointer loaded from a stack field. MemorySSA
+    // can prove its value when one non-atomic store supplies the entire load.
+    // Keep the original copy addresses for replacement, and use the proved
+    // object only for the source-clobber query. Widen to the whole object so
+    // that stripping an offset cannot accidentally exclude copied bytes.
+    Value *Ptr = const_cast<Value *>(getUnderlyingObject(Loc.Ptr));
+    SmallPtrSet<Value *, 8> Visited;
+    bool Resolved = false;
+    while (auto *LI = dyn_cast<LoadInst>(Ptr)) {
+      if (!Visited.insert(LI).second || LI->isVolatile() || LI->isAtomic())
+        break;
+      auto *MA = MSSA.getMemoryAccess(LI);
+      if (!MA)
+        break;
+      auto *Def = dyn_cast<MemoryDef>(
+          MSSA.getWalker()->getClobberingMemoryAccess(MA));
+      auto *SI = Def ? dyn_cast_or_null<StoreInst>(Def->getMemoryInst()) : nullptr;
+      if (!SI || SI->isVolatile() || SI->isAtomic() ||
+          SI->getValueOperand()->getType() != LI->getType() ||
+          AA.alias(MemoryLocation::get(LI), MemoryLocation::get(SI)) !=
+              AliasResult::MustAlias)
+        break;
+      Ptr = getUnderlyingObject(SI->getValueOperand());
+      Resolved = true;
+    }
+    return Resolved ? MemoryLocation::getBeforeOrAfter(Ptr) : Loc;
   }
 
   Instruction *getClobberMemoryAccess(CallBase *CB, unsigned Index) {
@@ -563,10 +636,14 @@ struct SourcePropagationState {
     Instruction *I = cast<Instruction>(CB->getArgOperand(Index));
     auto *AI = dyn_cast<AllocaInst>(I);
     assert(AI != nullptr);
-    auto Loc = MemoryLocation(
-        I, LocationSize::precise(DL.getTypeAllocSize(AI->getAllocatedType())));
-    StructType *ST = cast<StructType>(AI->getAllocatedType());
-    Instruction *NewI = getCompleteClobbers(Loc, OriginMA, ST);
+    // A readonly call may read any element of the destination allocation.
+    // Unknown allocation counts cannot be covered by a fixed copy interval.
+    auto SizeInBits = AI->getAllocationSizeInBits(DL);
+    if (!SizeInBits || SizeInBits->isScalable())
+      return nullptr;
+    uint64_t Size = SizeInBits->getFixedSize() / 8;
+    auto Loc = MemoryLocation(I, LocationSize::precise(Size));
+    Instruction *NewI = getCompleteClobbers(Loc, OriginMA, Size);
     return NewI;
   }
 
@@ -576,8 +653,8 @@ struct SourcePropagationState {
     Value *CastI = NewI;
     if (NewI->getType()->getPointerAddressSpace() != 0) {
       CastI = Builder.CreateAddrSpaceCast(
-          NewI, PointerType::get(
-                    NewI->getType()->getNonOpaquePointerElementType(), 0));
+          NewI, PointerType::getWithSamePointeeType(
+                    cast<PointerType>(NewI->getType()), 0));
     }
     Value *Cast = Builder.CreateBitCast(CastI, Arg->getType());
     CB->setArgOperand(ArgIndex, Cast);
@@ -628,11 +705,15 @@ struct DestPropagationState {
     Value *Dst = nullptr;
     Interval IV;
     Instruction *I = nullptr;
+    // A store writes a previously read value; its source snapshot is ReadI.
+    Instruction *ReadI = nullptr;
     uint32_t Version = UINT32_MAX;
     Copy() : Dst(nullptr), IV({0, 0}), I(nullptr) {}
-    Copy(Value *Dst, Interval IV, Instruction *I, uint32_t TotalVersion)
-        : Dst(Dst), IV(IV), I(I), Version(TotalVersion) {}
-    Copy(const Copy &C) : Dst(C.Dst), IV(C.IV), I(C.I), Version(C.Version) {}
+    Copy(Value *Dst, Interval IV, Instruction *I, Instruction *ReadI,
+         uint32_t TotalVersion)
+        : Dst(Dst), IV(IV), I(I), ReadI(ReadI), Version(TotalVersion) {}
+    Copy(const Copy &C)
+        : Dst(C.Dst), IV(C.IV), I(C.I), ReadI(C.ReadI), Version(C.Version) {}
   };
   struct Compare {
     // Be careful, LHS < RHS false + RHS < LHS false => LHS == RHS.
@@ -661,8 +742,7 @@ struct DestPropagationState {
   };
   struct ClobberInfo {
     SmallVector<Define, 8> Defines;
-    // For the source on the destination, record the last define instruction
-    // from the source.
+    // For each source on the destination, record its last read snapshot.
     DenseMap<Value *, Instruction *> Sources;
     // Records the last define instruction of the destination.
     Instruction *LastClobberI = nullptr;
@@ -752,6 +832,7 @@ struct DestPropagationState {
     C->Dst = Def.C->Dst;
     C->IV = {OldSIV.first + IV.second - OldDIV.first, OldSIV.second};
     C->I = Def.C->I;
+    C->ReadI = Def.C->ReadI;
     C->Version = Def.C->Version;
     SourceCopys[BB][Def.Source].insert(C);
     return {Def, {Def.Source, C, {IV.second, OldDIV.second}}};
@@ -785,7 +866,7 @@ struct DestPropagationState {
     }
     // Quick check whether LD.Source is still valid.
     if (LD.Source != RD.Source && // This case has been checked.
-        hasMemoryDefBetween(MSSA, DT, DL, LD.Source, LD.C->I,
+        hasMemoryDefBetween(MSSA, DT, DL, LD.Source, LD.C->ReadI,
                             MSSA.getMemoryAccess(I), true, true)) {
       SourceCopys[BB][LD.Source].erase(LD.C);
       delete LD.C;
@@ -963,6 +1044,22 @@ struct DestPropagationState {
     Copies.erase(Source);
   }
 
+  // Stores can consume snapshots in the opposite order to their loads.
+  // Compare the actual reads in dominance order, never their later stores.
+  bool sourceChangedBetweenReads(Value *Source, Instruction *First,
+                                 Instruction *Last) {
+    if (First == Last)
+      return false;
+    if (DT.dominates(Last, First))
+      std::swap(First, Last);
+    else if (!DT.dominates(First, Last))
+      return true;
+    auto *MA = MSSA.getMemoryAccess(Last);
+    if (!MA)
+      return true;
+    return hasMemoryDefBetween(MSSA, DT, DL, Source, First, MA, false, true);
+  }
+
   // This function try to insert and merge a new define. For a new define
   // instruction, find the copy interval of source and dest, and try to merge
   // the old define interval of dest. There may be two defined from different
@@ -973,26 +1070,29 @@ struct DestPropagationState {
     auto [Src, Dst, Size] = getSrcDstPtrAndSize(DL, I);
     if (!Src || !Dst)
       return false;
-    auto [SrcBPtr, SrcOff] = getBasePtrAndOffset(DL, Src, I);
+    Instruction *ReadI = I;
+    auto [SrcBPtr, SrcOff] = getBasePtrAndOffset(DL, Src, I, &ReadI);
     auto [DstBPtr, DstOff] = getBasePtrAndOffset(DL, Dst, I);
     if (!SrcBPtr || !DstBPtr)
       return false;
     auto *BB = I->getParent();
     auto &ClobberB = Clobbers[BB][DstBPtr];
     if (ClobberB.Sources.count(SrcBPtr) &&
-        hasMemoryDefBetween(MSSA, DT, DL, SrcBPtr, ClobberB.Sources[SrcBPtr],
-                            MSSA.getMemoryAccess(I)))
+        sourceChangedBetweenReads(SrcBPtr, ClobberB.Sources[SrcBPtr], ReadI))
       // SrcBPtr is clobbered, so all Src copy destinations need to be
       // invalidated.
       invalidSource(SrcBPtr, SourceCopys[BB], Clobbers[BB]);
-    if (ClobberB.LastClobberI &&
-        hasMemoryDefBetween(MSSA, DT, DL, DstBPtr, ClobberB.LastClobberI,
+    // Source invalidation may erase this destination too. Rebind before use.
+    auto &DestClobber = Clobbers[BB][DstBPtr];
+    if (DestClobber.LastClobberI &&
+        hasMemoryDefBetween(MSSA, DT, DL, DstBPtr, DestClobber.LastClobberI,
                             MSSA.getMemoryAccess(I), false))
       // DstBPtr is clobbered. Therefore, all clobber states of Dst need to be
       // cleared.
       invalidClobber(DstBPtr, Clobbers[BB], SourceCopys[BB]);
     auto &ClobberA = Clobbers[BB][DstBPtr]; // ClobberB may be invalid, rebind.
-    Copy *C = new Copy(DstBPtr, {SrcOff, SrcOff + Size}, I, TotalVersion++);
+    Copy *C = new Copy(DstBPtr, {SrcOff, SrcOff + Size}, I, ReadI,
+                       TotalVersion++);
 #ifndef NDEBUG
     insertNewMem(C);
 #endif
@@ -1008,13 +1108,13 @@ struct DestPropagationState {
       eraseReleaseMem(C);
 #endif
     }
-    ClobberA.Sources[SrcBPtr] = I; // Update Source last define.
-    ClobberA.LastClobberI = I;     // Update dest last define.
+    ClobberA.Sources[SrcBPtr] = ReadI; // Update the source snapshot.
+    ClobberA.LastClobberI = I;       // Update dest last define.
     return true;
   }
 
   bool rewriteCallArg(CallBase *CB, unsigned ArgNo, Value *Base,
-                      unsigned Offset) {
+                      uint64_t Offset) {
     // Current implementation may create many redundant GEP, which need to be
     // deleted by SimplifyCFG or InstCombine later.
     Value *Ptr = nullptr;
@@ -1027,7 +1127,9 @@ struct DestPropagationState {
           Base, IRB.getInt8PtrTy(Base->getType()->getPointerAddressSpace()));
       auto *GEP =
           IRB.CreateGEP(IRB.getInt8Ty(), BC,
-                        {ConstantInt::get(IRB.getInt32Ty(), Offset)}, "", true);
+                        {ConstantInt::get(DL.getIndexType(Base->getType()),
+                                          Offset)},
+                        "", true);
       Ptr = IRB.CreatePointerBitCastOrAddrSpaceCast(
           GEP, CB->getArgOperand(ArgNo)->getType());
     }
@@ -1071,7 +1173,7 @@ struct DestPropagationState {
   std::pair<Value *, int64_t> findFullEquivalentValue(Value *Ptr, uint64_t Size,
                                                       BasicBlock *BB,
                                                       Instruction *Use) {
-    APInt VOff(DL.getIndexSizeInBits(0u), 0);
+    APInt VOff(DL.getIndexSizeInBits(Ptr->getType()->getPointerAddressSpace()), 0);
     Value *V = Ptr->stripAndAccumulateConstantOffsets(DL, VOff, true);
     auto ContainCheck = [&](SmallVector<Define, 8>::iterator IT) -> int {
       uint64_t LastPos = IT->IV.second;
@@ -1145,10 +1247,20 @@ struct DestPropagationState {
       }
       auto *CandiDI = FindCopyBelongDefine(CandiClob, C);
       assert(CandiDI != nullptr);
+      // The first matching source byte establishes one translation for the
+      // entire destination window. Source coverage alone permits candidate
+      // holes or a different translation in each subsequent define.
+      if (C->IV.first > DI->C->IV.first)
+        continue;
+      uint64_t SourceDelta = DI->C->IV.first - C->IV.first;
+      if (SourceDelta > UINT64_MAX - CandiDI->IV.first)
+        continue;
+      uint64_t WindowStart = CandiDI->IV.first + SourceDelta;
       int I = 0;
       for (; I < DefCount; ++I) {
-        auto *CandiDef =
-            CandiDI + I == CandiClob.Defines.end() ? nullptr : CandiDI + I;
+        auto *CandiDef = I >= std::distance(CandiDI, CandiClob.Defines.end())
+                             ? nullptr
+                             : CandiDI + I;
         if (!CandiDef)
           break;
         auto *Def = DI + I;
@@ -1161,16 +1273,23 @@ struct DestPropagationState {
         bool RightValid = (I == DefCount - 1 &&
                            CandiDef->C->IV.second >= Def->C->IV.second) ||
                           CandiDef->C->IV.second == Def->C->IV.second;
-        // For the same reason, it has been proven safe to replace C->I with
-        // d0.Sources[source] when adding a new define from source to d0.
-        auto *SMA = MSSA.getMemoryAccess(Clobbers[BB][V].Sources[Def->Source]);
-        assert(SMA && "Must has memory access");
-        if (LeftValid && RightValid && CandiDef->Source == Def->Source &&
-            // Be sure that Source has not been modified between the last use of
-            // CandiClob and CurrentClob.
-            !hasMemoryDefBetween(MSSA, DT, DL, Def->Source,
-                                 CandiClob.Sources[Def->Source], SMA, true,
-                                 true)) {
+        if (!LeftValid || !RightValid || CandiDef->Source != Def->Source)
+          break;
+        uint64_t Delta = Def->C->IV.first - CandiDef->C->IV.first;
+        uint64_t RelativeStart = Def->IV.first - DI->IV.first;
+        if (Delta > UINT64_MAX - CandiDef->IV.first ||
+            RelativeStart > UINT64_MAX - WindowStart)
+          break;
+        uint64_t MappedStart = CandiDef->IV.first + Delta;
+        uint64_t RequiredEnd =
+            std::min(Def->IV.second, VOff.getZExtValue() + Size);
+        uint64_t RequiredSize = RequiredEnd - Def->IV.first;
+        bool SameMapping = MappedStart == WindowStart + RelativeStart &&
+                           MappedStart <= CandiDef->IV.second &&
+                           RequiredSize <= CandiDef->IV.second - MappedStart;
+        if (SameMapping &&
+            !sourceChangedBetweenReads(Def->Source, CandiDef->C->ReadI,
+                                       Def->C->ReadI)) {
           continue;
         }
         break;
@@ -1185,8 +1304,10 @@ struct DestPropagationState {
         //         ^ (P: Ptr offset based on V)
         // The final offset for replacing Ptr with candi is
         // L0 + L2 - L1 + P - L3.
-        return {C->Dst, CandiDI->IV.first + DI->C->IV.first - C->IV.first +
-                            VOff.getZExtValue() - DI->IV.first};
+        uint64_t RelativeOffset = VOff.getZExtValue() - DI->IV.first;
+        if (WindowStart <= INT64_MAX &&
+            RelativeOffset <= INT64_MAX - WindowStart)
+          return {C->Dst, WindowStart + RelativeOffset};
       }
     }
     return {nullptr, 0};
@@ -1209,12 +1330,29 @@ struct DestPropagationState {
       if (!(ArgReadOnly || FnReadOnly) || !ArgNoCaptured ||
           !Arg->getType()->isPointerTy())
         continue;
-      Type *Ty =
-          Arg->stripPointerCasts()->getType()->getNonOpaquePointerElementType();
-      uint64_t Size = Ty->isFunctionTy() ? 8 : DL.getTypeAllocSize(Ty);
-      auto [EV, Offset] = findFullEquivalentValue(Arg, Size, BB, CB);
-      if (EV)
-        Changed |= rewriteCallArg(CB, Arg.getOperandNo(), EV, Offset);
+      Type *Ty = getKnownPointeeType(Arg->stripPointerCasts());
+      if (!Ty || !Ty->isSized())
+        continue;
+      APInt ArgOff(DL.getIndexSizeInBits(
+                       Arg->getType()->getPointerAddressSpace()),
+                   0);
+      Value *Base = Arg->stripAndAccumulateConstantOffsets(DL, ArgOff, true);
+      auto *AI = dyn_cast<AllocaInst>(Base);
+      if (!AI || ArgOff.isNegative())
+        continue;
+      auto SizeInBits = AI->getAllocationSizeInBits(DL);
+      if (!SizeInBits || SizeInBits->isScalable())
+        continue;
+      uint64_t Size = SizeInBits->getFixedSize() / 8;
+      uint64_t ArgOffset = ArgOff.getZExtValue();
+      if (ArgOffset > Size)
+        continue;
+      // The callee can access memory before a derived argument too. Prove the
+      // whole backing allocation equivalent, then restore the argument offset.
+      auto [EV, Offset] = findFullEquivalentValue(Base, Size, BB, CB);
+      if (EV && Offset >= 0 &&
+          ArgOffset <= UINT64_MAX - static_cast<uint64_t>(Offset))
+        Changed |= rewriteCallArg(CB, Arg.getOperandNo(), EV, Offset + ArgOffset);
     }
     return Changed;
   }

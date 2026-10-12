@@ -1,0 +1,14 @@
+; RUN: split-file %S/deferred-copy-pipeline.ll %t
+; RUN: llvm-link %t/producer.ll %t/consumer.ll -o %t/input.bc
+; RUN: opt -opaque-pointers=0 -passes='cj-string-pool-merge,function(cj-rssce),globaldce' %t/input.bc -o %t/typed.bc
+; RUN: lli -opaque-pointers=0 %t/typed.bc | FileCheck %S/deferred-copy-pipeline.ll --check-prefix=MERGED
+; RUN: lli -opaque-pointers=0 %t/typed.bc | FileCheck %S/deferred-copy-pipeline.ll --check-prefix=GUARDED
+; RUN: lli -opaque-pointers=0 %t/typed.bc | FileCheck %S/deferred-copy-pipeline.ll --check-prefix=CONTROL
+; RUN: opt -opaque-pointers=1 -passes='cj-string-pool-merge,function(cj-rssce),globaldce' %t/input.bc -o %t/opaque.bc
+; RUN: lli -opaque-pointers=1 %t/opaque.bc | FileCheck %S/deferred-copy-pipeline.ll --check-prefix=MERGED
+; RUN: lli -opaque-pointers=1 %t/opaque.bc | FileCheck %S/deferred-copy-pipeline.ll --check-prefix=GUARDED
+; RUN: lli -opaque-pointers=1 %t/opaque.bc | FileCheck %S/deferred-copy-pipeline.ll --check-prefix=CONTROL
+;
+; The combined passes feed the native consumer's actual substring, start and
+; length observations. The original fixture retains its real native/Full LTO
+; and UNMERGED arms; this additional typed/opaque arm grants no Thin result.
