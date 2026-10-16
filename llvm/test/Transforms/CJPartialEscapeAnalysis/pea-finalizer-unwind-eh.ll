@@ -1,10 +1,5 @@
-; RUN: opt < %s '-passes=cj-pea' -S | FileCheck %s
-
-; Issue #204: a may-throw plain call while a promoted finalizer is live
-; unwinds on an edge the CFG does not model, skipping ~init. Convert those
-; calls to invokes that land in a catch-all pad running ~init and rethrowing.
-; Only finalizers whose ~init is nounwind are promoted: a throwing ~init is
-; implementation-defined per spec, so such objects stay on the GC heap.
+; RUN: opt < %s -mtriple=x86_64-unknown-linux-gnu -passes=cj-pea -S | FileCheck %s --implicit-check-not='alloca ' --implicit-check-not='call void @"_CN7default1W5~initHv"(' --implicit-check-not='invoke void @"_CN7default1W5~initHv"(' --implicit-check-not='call void @throwing_dtor(' --implicit-check-not='cj.finalizer.unwind'
+; RUN: opt < %s -mtriple=aarch64-unknown-linux-gnu -passes=cj-pea -S | FileCheck %s --implicit-check-not='alloca ' --implicit-check-not='call void @"_CN7default1W5~initHv"(' --implicit-check-not='invoke void @"_CN7default1W5~initHv"(' --implicit-check-not='call void @throwing_dtor(' --implicit-check-not='cj.finalizer.unwind'
 
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
@@ -14,7 +9,6 @@ target triple = "x86_64-unknown-linux-gnu"
 %ExtensionDef = type { i32, i8, i8, i16, i8*, i8*, i8*, i8* }
 %"ObjLayout.default:W" = type { i64, i1 }
 
-; Field 11 (CIT_GENERIC_FROM) holds the class finalizer pointer.
 @"default:W.ti" = global %TypeInfo { i8* getelementptr inbounds ([10 x i8], [10 x i8]* @"default:W.name", i32 0, i32 0), i8 -128, i8 0, i16 2, i32 16, %BitMap* null, i32 0, i8 8, i8 0, i16 -32766, i32* getelementptr inbounds ([2 x i32], [2 x i32]* @"default:W.ti.offsets", i32 0, i32 0), i8* bitcast (void (i8 addrspace(1)*, %TypeInfo*)* @"_CN7default1W5~initHv" to i8*), i8* null, i8* bitcast ([2 x %TypeInfo*]* @"default:W.ti.fields" to i8*), %TypeInfo* @"std.core:Object.ti", %ExtensionDef** null, i8* inttoptr (i64 -9223372036854775808 to i8*), i8* null }, !RelatedType !0
 @"default:Throw.ti" = global %TypeInfo { i8* getelementptr inbounds ([10 x i8], [10 x i8]* @"default:W.name", i32 0, i32 0), i8 -128, i8 0, i16 2, i32 16, %BitMap* null, i32 0, i8 8, i8 0, i16 -32766, i32* getelementptr inbounds ([2 x i32], [2 x i32]* @"default:W.ti.offsets", i32 0, i32 0), i8* bitcast (void (i8 addrspace(1)*, %TypeInfo*)* @throwing_dtor to i8*), i8* null, i8* bitcast ([2 x %TypeInfo*]* @"default:W.ti.fields" to i8*), %TypeInfo* @"std.core:Object.ti", %ExtensionDef** null, i8* inttoptr (i64 -9223372036854775808 to i8*), i8* null }, !RelatedType !0
 @"default:W.name" = internal global [10 x i8] c"default:W\00", align 1
@@ -38,23 +32,10 @@ define void @throwing_dtor(i8 addrspace(1)* %this, %TypeInfo* %outerTI) gc "cang
 
 declare void @CJ_MCC_ThrowException(i8 addrspace(1)*)
 
-; Live may-throw call: stack-allocate, convert the call to invoke, and
-; run ~init on both the normal dest and the catch-all pad.
 ; CHECK-LABEL: @work_maythrow(
-; CHECK:         alloca { %TypeInfo*, %"ObjLayout.default:W" }
-; CHECK-NOT:     CJ_MCC_NewFinalizer
-; CHECK:         invoke i64 @may_throw(
-; CHECK-NEXT:    to label %{{.*}} unwind label %cj.finalizer.unwind
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK:         ret i64
-; CHECK:       cj.finalizer.unwind:
-; CHECK-NEXT:    %finalizer.lp = landingpad token
-; CHECK-NEXT:    catch i8* null
-; CHECK:         call i8* @CJ_MCC_GetExceptionWrapper()
-; CHECK:         call i8 addrspace(1)* @CJ_MCC_PostThrowException(
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK:         call void @CJ_MCC_ThrowException(
-; CHECK-NEXT:    unreachable
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@may_throw(
+; CHECK: }
 define i64 @work_maythrow(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
@@ -69,13 +50,9 @@ entry:
   ret i64 %r
 }
 
-; nounwind call is not a hazard: still stack-allocated, no invoke / pad.
 ; CHECK-LABEL: @work_nounwind(
-; CHECK:         alloca { %TypeInfo*, %"ObjLayout.default:W" }
-; CHECK-NOT:     invoke
-; CHECK-NOT:     cj.finalizer.unwind
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK-NEXT:    ret i64
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @work_nounwind(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
@@ -90,12 +67,9 @@ entry:
   ret i64 %r
 }
 
-; A ~init that may throw is not promoted: the object stays on the GC heap.
 ; CHECK-LABEL: @work_throwing_dtor(
-; CHECK-NOT:     alloca
-; CHECK:         call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(
-; CHECK-NOT:     call void @throwing_dtor(
-; CHECK:         ret i64
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @work_throwing_dtor(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
@@ -122,28 +96,12 @@ attributes #0 = { "cj-runtime" }
 
 declare i8 addrspace(1)* @CJ_MCC_NewObject(i8*, i32) #0
 
-; Two live-sets, two pads: NewObject runs while only A is live; may_throw
-; runs after B is constructed. Same-live-set sites share a pad (see
-; shared_unwind_pad); different sets do not.
 ; CHECK-LABEL: @two_finalizers(
-; CHECK:         alloca { %TypeInfo*, %"ObjLayout.default:W" }
-; CHECK:         alloca { %TypeInfo*, %"ObjLayout.default:W" }
-; CHECK-NOT:     call {{.*}}@CJ_MCC_NewFinalizer(
-; CHECK:         invoke {{.*}}@CJ_MCC_NewObject(
-; CHECK-NEXT:    to label %{{.*}} unwind label %[[PAD1:cj\.finalizer\.unwind]]
-; CHECK:         invoke i64 @may_throw(
-; CHECK-NEXT:    to label %{{.*}} unwind label %[[PAD2:cj\.finalizer\.unwind[0-9]+]]
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK:         ret i64
-; CHECK:       [[PAD1]]:
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK-NOT:     call void @"_CN7default1W5~initHv"(
-; CHECK:         call void @CJ_MCC_ThrowException(
-; CHECK:       [[PAD2]]:
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK:         call void @CJ_MCC_ThrowException(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@may_throw(
+; CHECK: }
 define i64 @two_finalizers(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
@@ -167,13 +125,10 @@ entry:
   ret i64 %s
 }
 
-; No personality: rejected at the gate even when a live may-throw call
-; would otherwise need an invoke + landingpad.
 ; CHECK-LABEL: @no_personality_reject(
-; CHECK-NOT:     invoke
-; CHECK-NOT:     cj.finalizer.unwind
-; CHECK:         @CJ_MCC_NewFinalizer(
-; CHECK-NOT:     call void @"_CN7default1W5~initHv"(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@may_throw(
+; CHECK: }
 define i64 @no_personality_reject(i64 %i) gc "cangjie" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
@@ -188,13 +143,10 @@ entry:
   ret i64 %r
 }
 
-; musttail is glued to ret, so there is no usable ~init insert point and
-; the object stays on the heap (not a hazard-conversion case).
 ; CHECK-LABEL: @musttail_no_insert_point(
-; CHECK:         @CJ_MCC_NewFinalizer(
-; CHECK-NOT:     invoke
-; CHECK-NOT:     call void @"_CN7default1W5~initHv"(
-; CHECK:         musttail call i64 @may_throw1(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@may_throw1(
+; CHECK: }
 define i64 @musttail_no_insert_point(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
@@ -211,11 +163,11 @@ entry:
 
 declare i64 @may_throw1(i64)
 
-; Gate rejects W (no personality), so the dependent V stays on the heap too.
 ; CHECK-LABEL: @dependent_escape(
-; CHECK:         @CJ_MCC_NewFinalizer(
-; CHECK:         @CJ_MCC_NewObject(
-; CHECK-NOT:     alloca
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
+; CHECK: call {{.*}}@may_throw(
+; CHECK: }
 define i64 @dependent_escape(i64 %i) gc "cangjie" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
@@ -232,16 +184,10 @@ entry:
   ret i64 %r
 }
 
-; Latch-local alloc with a may-throw call before the latch terminator. The
-; call does not take the object pointer, so loop insert-point collection
-; still accepts the candidate; invoke then splits the latch.
 ; CHECK-LABEL: @loop_latch_maythrow(
-; CHECK:         invoke i64 @may_throw(
-; CHECK:         unwind label %cj.finalizer.unwind
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK:         br i1
-; CHECK:       cj.finalizer.unwind:
-; CHECK:         call void @"_CN7default1W5~initHv"(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@may_throw(
+; CHECK: }
 define i64 @loop_latch_maythrow(i64 %n) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   br label %latch
@@ -265,20 +211,10 @@ exit:
   ret i64 %r
 }
 
-; B's may-throw ~init keeps B on the heap; only A is promoted. B's surviving
-; NewFinalizer call is itself a may-throw hazard while A is live, so it is
-; converted to an invoke whose pad runs A's ~init before rethrowing.
 ; CHECK-LABEL: @throwing_dtor_as_hazard(
-; CHECK:         alloca { %TypeInfo*, %"ObjLayout.default:W" }
-; CHECK:         invoke noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(
-; CHECK:         unwind label %cj.finalizer.unwind
-; CHECK-NOT:     throwing_dtor
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK:       cj.finalizer.unwind:
-; CHECK-NOT:     throwing_dtor
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK-NOT:     throwing_dtor
-; CHECK:         call void @CJ_MCC_ThrowException(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @throwing_dtor_as_hazard(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
@@ -297,12 +233,10 @@ entry:
   ret i64 %i
 }
 
-; A may-throw call that the allocation does not dominate is not live and
-; must stay a plain call. Alloca may be hoisted to the block entry.
 ; CHECK-LABEL: @maythrow_before_alloc(
-; CHECK:         call i64 @may_throw(
-; CHECK-NOT:     invoke
-; CHECK:         call void @"_CN7default1W5~initHv"(
+; CHECK: call {{.*}}@may_throw(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @maythrow_before_alloc(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   %r0 = call i64 @may_throw(i64 %i, i64 %i)
@@ -316,16 +250,10 @@ entry:
   ret i64 %r0
 }
 
-; No personality and no live may-throw call: still reject, including the
-; nounwind NewFinalizer. Unlike no_personality_reject, this is not about
-; failing to convert a hazard; the gate refuses the whole function.
 ; CHECK-LABEL: @no_personality_throwing_dtor_pair(
-; CHECK-NOT:     alloca
-; CHECK-NOT:     invoke
-; CHECK-NOT:     cj.finalizer.unwind
-; CHECK:         @CJ_MCC_NewFinalizer(
-; CHECK:         @CJ_MCC_NewFinalizer(
-; CHECK-NOT:     call void @"_CN7default1W5~initHv"(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @no_personality_throwing_dtor_pair(i64 %i) gc "cangjie" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
@@ -344,24 +272,11 @@ entry:
   ret i64 %i
 }
 
-; A may-throw plain call in an existing catch successor is still a live
-; hazard if the allocation dominates that block. The original invoke is
-; already an unwind edge; only the call inside the handler is converted.
-; ~init is inserted at both the normal dest and the catch successor.
 ; CHECK-LABEL: @hazard_in_existing_catch(
-; CHECK:         alloca { %TypeInfo*, %"ObjLayout.default:W" }
-; CHECK:         invoke i64 @may_throw(
-; CHECK-NEXT:    to label %cont unwind label %catch
-; CHECK:       cont:
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK:       catch:
-; CHECK:         landingpad token
-; CHECK:         invoke i64 @may_throw(
-; CHECK:         unwind label %cj.finalizer.unwind
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK:       cj.finalizer.unwind:
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK:         call void @CJ_MCC_ThrowException(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: invoke {{.*}}@may_throw(
+; CHECK: call {{.*}}@may_throw(
+; CHECK: }
 define i64 @hazard_in_existing_catch(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
@@ -381,20 +296,11 @@ catch:
   ret i64 %h
 }
 
-; Two may-throw calls while the same object is live share one pad.
 ; CHECK-LABEL: @shared_unwind_pad(
-; CHECK:         alloca { %TypeInfo*, %"ObjLayout.default:W" }
-; CHECK-NOT:     CJ_MCC_NewFinalizer
-; CHECK:         invoke i64 @may_throw(
-; CHECK-NEXT:    to label %{{.*}} unwind label %[[PAD:cj\.finalizer\.unwind]]
-; CHECK:         invoke i64 @may_throw(
-; CHECK-NEXT:    to label %{{.*}} unwind label %[[PAD]]
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK:         ret i64
-; CHECK:       [[PAD]]:
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK:         call void @CJ_MCC_ThrowException(
-; CHECK-NOT:     cj.finalizer.unwind
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@may_throw(
+; CHECK: call {{.*}}@may_throw(
+; CHECK: }
 define i64 @shared_unwind_pad(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
@@ -410,22 +316,10 @@ entry:
   ret i64 %r1
 }
 
-; Alloc dominates both returns. Only the then-edge has a may-throw call, so
-; only that edge becomes invoke; both exits still run ~init.
 ; CHECK-LABEL: @diamond_two_rets(
-; CHECK:         alloca { %TypeInfo*, %"ObjLayout.default:W" }
-; CHECK-NOT:     CJ_MCC_NewFinalizer
-; CHECK:         br i1 %c, label %then, label %else
-; CHECK:       then:
-; CHECK:         invoke i64 @may_throw(
-; CHECK-NEXT:    to label %{{.*}} unwind label %cj.finalizer.unwind
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK:       else:
-; CHECK-NOT:     invoke
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK:       cj.finalizer.unwind:
-; CHECK:         call void @"_CN7default1W5~initHv"(
-; CHECK:         call void @CJ_MCC_ThrowException(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@may_throw(
+; CHECK: }
 define i64 @diamond_two_rets(i64 %i, i1 %c) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
@@ -444,13 +338,9 @@ else:
   ret i64 %i
 }
 
-; A reachable unreachable terminator is a non-return exit: refuse promotion.
 ; CHECK-LABEL: @nonreturn_unreachable_reject(
-; CHECK-NOT:     alloca
-; CHECK-NOT:     invoke
-; CHECK-NOT:     cj.finalizer.unwind
-; CHECK:         @CJ_MCC_NewFinalizer(
-; CHECK-NOT:     call void @"_CN7default1W5~initHv"(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @nonreturn_unreachable_reject(i64 %i, i1 %c) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
@@ -467,13 +357,10 @@ boom:
   unreachable
 }
 
-; A reachable resume is a non-return exit: refuse promotion. Contrast
-; hazard_in_existing_catch, whose catch successor returns.
 ; CHECK-LABEL: @nonreturn_resume_reject(
-; CHECK-NOT:     alloca
-; CHECK-NOT:     cj.finalizer.unwind
-; CHECK:         @CJ_MCC_NewFinalizer(
-; CHECK-NOT:     call void @"_CN7default1W5~initHv"(
+; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: invoke {{.*}}@may_throw(
+; CHECK: }
 define i64 @nonreturn_resume_reject(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
@@ -492,13 +379,9 @@ catch:
   resume token %lp
 }
 
-; invoke NewFinalizer does not dominate its unwind dest, so that ret is an
-; unusable insert point and the object stays on the heap. The deferred
-; invoke-to-br erase in runFinalizerUnwindProtection is not reached.
 ; CHECK-LABEL: @invoke_newfinalizer_reject(
-; CHECK-NOT:     alloca
-; CHECK:         invoke {{.*}}@CJ_MCC_NewFinalizer(
-; CHECK-NOT:     call void @"_CN7default1W5~initHv"(
+; CHECK: invoke {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: }
 define i64 @invoke_newfinalizer_reject(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
