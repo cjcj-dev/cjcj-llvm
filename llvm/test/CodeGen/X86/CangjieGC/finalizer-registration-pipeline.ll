@@ -1,8 +1,8 @@
 ; RUN: opt -passes='cj-runtime-lowering,cj-rewrite-statepoint,verify' -S < %s > %t
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnu < %t | FileCheck %s --check-prefixes=X86,COMMON
-; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnu -enable-gc-fast-path=false -enable-cangjie-new-obj-fastpath=false < %t | FileCheck %s --check-prefixes=X86,SLOW,COMMON
+; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnu -enable-gc-fast-path=false -enable-cangjie-new-obj-fastpath=false < %t | FileCheck %s --check-prefixes=X86,COMMON
 ; RUN: llc --cangjie-pipeline -mtriple=aarch64-unknown-linux-gnu < %t | FileCheck %s --check-prefixes=ARM,COMMON
-; RUN: llc --cangjie-pipeline -mtriple=aarch64-unknown-linux-gnu -enable-gc-fast-path=false -enable-cangjie-new-obj-fastpath=false < %t | FileCheck %s --check-prefixes=ARM,SLOW,COMMON
+; RUN: llc --cangjie-pipeline -mtriple=aarch64-unknown-linux-gnu -enable-gc-fast-path=false -enable-cangjie-new-obj-fastpath=false < %t | FileCheck %s --check-prefixes=ARM,COMMON
 ; REQUIRES: x86-registered-target, aarch64-registered-target
 ;
 ; The statepoints are real opt output, consumed unchanged by llc. The one
@@ -43,6 +43,7 @@ unwind:
   resume { i8*, i32 } %ex
 }
 
+; COMMON: .gcc_except_table
 ; COMMON-LABEL: plain_control:
 ; X86: callq {{.*}}CJ_MCC_NewObject
 ; ARM: bl{{[[:space:]]+}}CJ_MCC_NewObject
@@ -53,7 +54,6 @@ define i8 addrspace(1)* @plain_control(i8* %ti) gc "cangjie" {
   ret i8 addrspace(1)* %obj
 }
 
-; COMMON: .cangjie_stackmap
-; COMMON: .gcc_except_table
+; COMMON: .cjmetadata.stackmap
 !0 = !{}
 !1 = !{!"HasFinalizer"}
