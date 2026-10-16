@@ -39,8 +39,8 @@ define i8 addrspace(1)* @construct_invoke(i8* %ti) gc "cangjie" personality i32 
 normal:
   ret i8 addrspace(1)* %registered
 unwind:
-  %ex = landingpad { i8*, i32 } cleanup
-  resume { i8*, i32 } %ex
+  %ex = landingpad token cleanup
+  resume token %ex
 }
 
 ; COMMON: .gcc_except_table
