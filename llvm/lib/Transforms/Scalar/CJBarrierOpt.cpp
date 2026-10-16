@@ -47,7 +47,7 @@ const static DenseSet<StringRef> NewMallocArrayFunc {
 };
 
 const static DenseSet<StringRef> NewMallocObjFunc {
-    "CJ_MCC_NewFinalizer", "CJ_MCC_NewObject",
+    "CJ_MCC_NewObject",
     "CJ_MCC_NewPinnedObject"};
 
 static bool isNewMallocCall(CallBase *CB) {

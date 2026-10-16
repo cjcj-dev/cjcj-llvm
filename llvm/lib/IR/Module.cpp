@@ -13,6 +13,7 @@
 #include "llvm/IR/Module.h"
 #include "SymbolTableListTraitsImpl.h"
 #include "llvm/ADT/Optional.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
@@ -31,8 +32,10 @@
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/ModuleSummaryIndex.h"
+#include "llvm/IR/Operator.h"
 #include "llvm/IR/SymbolTableListTraits.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/TypeFinder.h"
@@ -41,6 +44,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/RandomNumberGenerator.h"
@@ -169,14 +173,88 @@ FunctionCallee Module::getOrInsertFunction(StringRef Name, FunctionType *Ty) {
   return getOrInsertFunction(Name, Ty, AttributeList());
 }
 
+// Finalizer registration can enter language code, allocate, capture its
+// receiver and unwind (HotSpot Parse::call_register_finalizer uses RC_NO_LEAF).
+// Its returned reference can be updated by GC; it is not a fresh allocation.
+static AttributeList normalizeCJFinalizerAttributes(LLVMContext &C,
+                                                    AttributeList Attrs) {
+  AttributeMask FnAttrs;
+  FnAttrs.addAttribute("gc-leaf-function");
+  FnAttrs.addAttribute("cj-heapmalloc");
+  for (auto Kind : {Attribute::ReadNone, Attribute::ReadOnly,
+                    Attribute::WriteOnly, Attribute::ArgMemOnly,
+                    Attribute::InaccessibleMemOnly,
+                    Attribute::InaccessibleMemOrArgMemOnly,
+                    Attribute::NoUnwind, Attribute::NoFree, Attribute::NoSync,
+                    Attribute::WillReturn, Attribute::NoReturn,
+                    Attribute::Speculatable})
+    FnAttrs.addAttribute(Kind);
+  Attrs = Attrs.removeFnAttributes(C, FnAttrs);
+  Attrs = Attrs.removeRetAttribute(C, Attribute::NoAlias);
+  AttributeMask ParamAttrs;
+  for (auto Kind : {Attribute::NoCapture, Attribute::NoAlias,
+                    Attribute::ReadNone, Attribute::ReadOnly,
+                    Attribute::WriteOnly, Attribute::Returned})
+    ParamAttrs.addAttribute(Kind);
+  return Attrs.removeParamAttributes(C, 0, ParamAttrs);
+}
+
 Function *Module::declareCJRuntimeFunc(StringRef Name, FunctionType *FT,
                                        bool GCLeafFunc, bool GCMalloc) {
+  const bool IsFinalizer = Name == "CJ_MCC_OnFinalizerCreated";
+  const bool IsPinned = Name == "CJ_MCC_NewPinnedObject";
+  if (IsFinalizer || IsPinned) {
+    Type *RefTy = Type::getInt8PtrTy(Context, 1);
+    FunctionType *Expected =
+        IsFinalizer
+            ? FunctionType::get(RefTy, {RefTy}, false)
+            : FunctionType::get(RefTy, {Type::getInt8PtrTy(Context),
+                                      Type::getInt32Ty(Context)}, false);
+    if (FT != Expected)
+      report_fatal_error(Twine("incompatible Cangjie runtime signature: ") +
+                         Name);
+    if (GlobalValue *GV = getNamedValue(Name)) {
+      auto *F = dyn_cast<Function>(GV);
+      if (!F || F->getFunctionType() != Expected)
+        report_fatal_error(Twine("incompatible Cangjie runtime declaration: ") +
+                           Name);
+    }
+  }
+
   Function *Func = getFunction(Name);
-  if (Func)
+  if (Func && !IsFinalizer)
     return Func;
 
-  Func = cast<Function>(getOrInsertFunction(Name, FT).getCallee());
+  if (!Func)
+    Func = cast<Function>(getOrInsertFunction(Name, FT).getCallee());
   Func->addFnAttr(Attribute::get(Context, "cj-runtime"));
+  if (IsFinalizer) {
+    Func->setAttributes(normalizeCJFinalizerAttributes(Context,
+                                                      Func->getAttributes()));
+    // Serialized input may carry call-site attributes independently of the
+    // declaration. Normalize those too, including calls through pointer casts;
+    // a genuinely different call ABI is an error, never a repair by bitcast.
+    SmallVector<Value *, 8> Worklist{Func};
+    SmallPtrSet<Value *, 8> Seen;
+    while (!Worklist.empty()) {
+      Value *V = Worklist.pop_back_val();
+      if (!Seen.insert(V).second)
+        continue;
+      for (User *U : V->users()) {
+        if (auto *CB = dyn_cast<CallBase>(U)) {
+          if (CB->getCalledOperand()->stripPointerCasts() != Func)
+            continue;
+          if (CB->getFunctionType() != FT)
+            report_fatal_error("incompatible Cangjie finalizer call signature");
+          CB->setAttributes(normalizeCJFinalizerAttributes(
+              Context, CB->getAttributes()));
+        } else if (isa<BitCastOperator>(U) || isa<AddrSpaceCastOperator>(U)) {
+          Worklist.push_back(U);
+        }
+      }
+    }
+    return Func;
+  }
   if (GCMalloc) {
     Func->addFnAttr(Attribute::get(Context, "cj-heapmalloc"));
     Func->addFnAttr(Attribute::ArgMemOnly);

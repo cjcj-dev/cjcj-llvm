@@ -9,8 +9,8 @@ target triple = "x86_64-unknown-linux-gnu"
 %ExtensionDef = type { i32, i8, i8, i16, i8*, i8*, i8*, i8* }
 %"ObjLayout.default:W" = type { i64, i1 }
 
-@"default:W.ti" = global %TypeInfo { i8* getelementptr inbounds ([10 x i8], [10 x i8]* @"default:W.name", i32 0, i32 0), i8 -128, i8 0, i16 2, i32 16, %BitMap* null, i32 0, i8 8, i8 0, i16 -32766, i32* getelementptr inbounds ([2 x i32], [2 x i32]* @"default:W.ti.offsets", i32 0, i32 0), i8* bitcast (void (i8 addrspace(1)*, %TypeInfo*)* @"_CN7default1W5~initHv" to i8*), i8* null, i8* bitcast ([2 x %TypeInfo*]* @"default:W.ti.fields" to i8*), %TypeInfo* @"std.core:Object.ti", %ExtensionDef** null, i8* inttoptr (i64 -9223372036854775808 to i8*), i8* null }, !RelatedType !0
-@"default:Throw.ti" = global %TypeInfo { i8* getelementptr inbounds ([10 x i8], [10 x i8]* @"default:W.name", i32 0, i32 0), i8 -128, i8 0, i16 2, i32 16, %BitMap* null, i32 0, i8 8, i8 0, i16 -32766, i32* getelementptr inbounds ([2 x i32], [2 x i32]* @"default:W.ti.offsets", i32 0, i32 0), i8* bitcast (void (i8 addrspace(1)*, %TypeInfo*)* @throwing_dtor to i8*), i8* null, i8* bitcast ([2 x %TypeInfo*]* @"default:W.ti.fields" to i8*), %TypeInfo* @"std.core:Object.ti", %ExtensionDef** null, i8* inttoptr (i64 -9223372036854775808 to i8*), i8* null }, !RelatedType !0
+@"default:W.ti" = global %TypeInfo { i8* getelementptr inbounds ([10 x i8], [10 x i8]* @"default:W.name", i32 0, i32 0), i8 -128, i8 2, i16 2, i32 16, %BitMap* null, i32 0, i8 8, i8 0, i16 -32766, i32* getelementptr inbounds ([2 x i32], [2 x i32]* @"default:W.ti.offsets", i32 0, i32 0), i8* bitcast (void (i8 addrspace(1)*, %TypeInfo*)* @"_CN7default1W5~initHv" to i8*), i8* null, i8* bitcast ([2 x %TypeInfo*]* @"default:W.ti.fields" to i8*), %TypeInfo* @"std.core:Object.ti", %ExtensionDef** null, i8* inttoptr (i64 -9223372036854775808 to i8*), i8* null }, !RelatedType !0
+@"default:Throw.ti" = global %TypeInfo { i8* getelementptr inbounds ([10 x i8], [10 x i8]* @"default:W.name", i32 0, i32 0), i8 -128, i8 2, i16 2, i32 16, %BitMap* null, i32 0, i8 8, i8 0, i16 -32766, i32* getelementptr inbounds ([2 x i32], [2 x i32]* @"default:W.ti.offsets", i32 0, i32 0), i8* bitcast (void (i8 addrspace(1)*, %TypeInfo*)* @throwing_dtor to i8*), i8* null, i8* bitcast ([2 x %TypeInfo*]* @"default:W.ti.fields" to i8*), %TypeInfo* @"std.core:Object.ti", %ExtensionDef** null, i8* inttoptr (i64 -9223372036854775808 to i8*), i8* null }, !RelatedType !0
 @"default:W.name" = internal global [10 x i8] c"default:W\00", align 1
 @"default:W.ti.offsets" = internal global [2 x i32] [i32 0, i32 0]
 @"default:W.ti.fields" = internal global [2 x %TypeInfo*] [%TypeInfo* @"std.core:Object.ti", %TypeInfo* @"std.core:Object.ti"]
@@ -33,13 +33,13 @@ define void @throwing_dtor(i8 addrspace(1)* %this, %TypeInfo* %outerTI) gc "cang
 declare void @CJ_MCC_ThrowException(i8 addrspace(1)*)
 
 ; CHECK-LABEL: @work_maythrow(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: call {{.*}}@may_throw(
 ; CHECK: }
 define i64 @work_maythrow(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
+  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
   %0 = bitcast i8 addrspace(1)* %w to i8* addrspace(1)*
   %ti.payload = getelementptr i8*, i8* addrspace(1)* %0, i32 1
   %1 = bitcast i8* addrspace(1)* %ti.payload to %"ObjLayout.default:W" addrspace(1)*
@@ -51,12 +51,12 @@ entry:
 }
 
 ; CHECK-LABEL: @work_nounwind(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @work_nounwind(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
+  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
   %0 = bitcast i8 addrspace(1)* %w to i8* addrspace(1)*
   %ti.payload = getelementptr i8*, i8* addrspace(1)* %0, i32 1
   %1 = bitcast i8* addrspace(1)* %ti.payload to %"ObjLayout.default:W" addrspace(1)*
@@ -68,12 +68,12 @@ entry:
 }
 
 ; CHECK-LABEL: @work_throwing_dtor(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @work_throwing_dtor(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:Throw.ti" to i8*), i32 24)
+  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:Throw.ti" to i8*), i32 24)
   %0 = bitcast i8 addrspace(1)* %w to i8* addrspace(1)*
   %ti.payload = getelementptr i8*, i8* addrspace(1)* %0, i32 1
   %1 = bitcast i8* addrspace(1)* %ti.payload to %"ObjLayout.default:W" addrspace(1)*
@@ -82,7 +82,7 @@ entry:
   ret i64 %i
 }
 
-declare i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8*, i32) #0
+declare i8 addrspace(1)* @CJ_MCC_NewObject(i8*, i32) #0
 declare i64 @may_throw(i64, i64)
 declare i64 @no_throw(i64, i64) nounwind
 
@@ -94,25 +94,24 @@ attributes #0 = { "cj-runtime" }
 @"default:V.ti" = global %TypeInfo { i8* getelementptr inbounds ([10 x i8], [10 x i8]* @"default:V.name", i32 0, i32 0), i8 -128, i8 0, i16 2, i32 16, %BitMap* null, i32 0, i8 8, i8 0, i16 -32766, i32* getelementptr inbounds ([2 x i32], [2 x i32]* @"default:W.ti.offsets", i32 0, i32 0), i8* null, i8* null, i8* bitcast ([2 x %TypeInfo*]* @"default:W.ti.fields" to i8*), %TypeInfo* @"std.core:Object.ti", %ExtensionDef** null, i8* inttoptr (i64 -9223372036854775808 to i8*), i8* null }, !RelatedType !0
 @"default:V.name" = internal global [10 x i8] c"default:V\00", align 1
 
-declare i8 addrspace(1)* @CJ_MCC_NewObject(i8*, i32) #0
 
 ; CHECK-LABEL: @two_finalizers(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
 ; CHECK: call {{.*}}@CJ_MCC_NewObject(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: call {{.*}}@may_throw(
 ; CHECK: }
 define i64 @two_finalizers(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %a = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
+  %a = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
   %a0 = bitcast i8 addrspace(1)* %a to i8* addrspace(1)*
   %a.ti = getelementptr i8*, i8* addrspace(1)* %a0, i32 1
   %a.layout = bitcast i8* addrspace(1)* %a.ti to %"ObjLayout.default:W" addrspace(1)*
   %a.f = getelementptr inbounds %"ObjLayout.default:W", %"ObjLayout.default:W" addrspace(1)* %a.layout, i32 0, i32 0
   store i64 %i, i64 addrspace(1)* %a.f, align 8
   %o = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:U.ti" to i8*), i32 16)
-  %b = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
+  %b = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
   %b0 = bitcast i8 addrspace(1)* %b to i8* addrspace(1)*
   %b.ti = getelementptr i8*, i8* addrspace(1)* %b0, i32 1
   %b.layout = bitcast i8* addrspace(1)* %b.ti to %"ObjLayout.default:W" addrspace(1)*
@@ -126,13 +125,13 @@ entry:
 }
 
 ; CHECK-LABEL: @no_personality_reject(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: call {{.*}}@may_throw(
 ; CHECK: }
 define i64 @no_personality_reject(i64 %i) gc "cangjie" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
+  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
   %0 = bitcast i8 addrspace(1)* %w to i8* addrspace(1)*
   %ti.payload = getelementptr i8*, i8* addrspace(1)* %0, i32 1
   %1 = bitcast i8* addrspace(1)* %ti.payload to %"ObjLayout.default:W" addrspace(1)*
@@ -144,13 +143,13 @@ entry:
 }
 
 ; CHECK-LABEL: @musttail_no_insert_point(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: call {{.*}}@may_throw1(
 ; CHECK: }
 define i64 @musttail_no_insert_point(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
+  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
   %0 = bitcast i8 addrspace(1)* %w to i8* addrspace(1)*
   %ti.payload = getelementptr i8*, i8* addrspace(1)* %0, i32 1
   %1 = bitcast i8* addrspace(1)* %ti.payload to %"ObjLayout.default:W" addrspace(1)*
@@ -164,14 +163,14 @@ entry:
 declare i64 @may_throw1(i64)
 
 ; CHECK-LABEL: @dependent_escape(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: call {{.*}}@may_throw(
 ; CHECK: }
 define i64 @dependent_escape(i64 %i) gc "cangjie" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
+  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
   ; 16 = 8-byte object head + 8-byte payload (ObjLayout {i64}).
   %d = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:V.ti" to i8*), i32 16)
   %w0 = bitcast i8 addrspace(1)* %w to i8* addrspace(1)*
@@ -185,7 +184,7 @@ entry:
 }
 
 ; CHECK-LABEL: @loop_latch_maythrow(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: call {{.*}}@may_throw(
 ; CHECK: }
 define i64 @loop_latch_maythrow(i64 %n) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
@@ -195,7 +194,7 @@ entry:
 latch:
   %i = phi i64 [ 0, %entry ], [ %inext, %latch ]
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
+  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
   %0 = bitcast i8 addrspace(1)* %w to i8* addrspace(1)*
   %ti.payload = getelementptr i8*, i8* addrspace(1)* %0, i32 1
   %1 = bitcast i8* addrspace(1)* %ti.payload to %"ObjLayout.default:W" addrspace(1)*
@@ -212,19 +211,19 @@ exit:
 }
 
 ; CHECK-LABEL: @throwing_dtor_as_hazard(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @throwing_dtor_as_hazard(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %a = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
+  %a = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
   %a0 = bitcast i8 addrspace(1)* %a to i8* addrspace(1)*
   %a.ti = getelementptr i8*, i8* addrspace(1)* %a0, i32 1
   %a.layout = bitcast i8* addrspace(1)* %a.ti to %"ObjLayout.default:W" addrspace(1)*
   %a.f = getelementptr inbounds %"ObjLayout.default:W", %"ObjLayout.default:W" addrspace(1)* %a.layout, i32 0, i32 0
   store i64 %i, i64 addrspace(1)* %a.f, align 8
-  %b = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:Throw.ti" to i8*), i32 24)
+  %b = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:Throw.ti" to i8*), i32 24)
   %b0 = bitcast i8 addrspace(1)* %b to i8* addrspace(1)*
   %b.ti = getelementptr i8*, i8* addrspace(1)* %b0, i32 1
   %b.layout = bitcast i8* addrspace(1)* %b.ti to %"ObjLayout.default:W" addrspace(1)*
@@ -235,13 +234,13 @@ entry:
 
 ; CHECK-LABEL: @maythrow_before_alloc(
 ; CHECK: call {{.*}}@may_throw(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @maythrow_before_alloc(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   %r0 = call i64 @may_throw(i64 %i, i64 %i)
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
+  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
   %0 = bitcast i8 addrspace(1)* %w to i8* addrspace(1)*
   %ti.payload = getelementptr i8*, i8* addrspace(1)* %0, i32 1
   %1 = bitcast i8* addrspace(1)* %ti.payload to %"ObjLayout.default:W" addrspace(1)*
@@ -251,19 +250,19 @@ entry:
 }
 
 ; CHECK-LABEL: @no_personality_throwing_dtor_pair(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @no_personality_throwing_dtor_pair(i64 %i) gc "cangjie" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %a = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24) nounwind
+  %a = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24) nounwind
   %a0 = bitcast i8 addrspace(1)* %a to i8* addrspace(1)*
   %a.ti = getelementptr i8*, i8* addrspace(1)* %a0, i32 1
   %a.layout = bitcast i8* addrspace(1)* %a.ti to %"ObjLayout.default:W" addrspace(1)*
   %a.f = getelementptr inbounds %"ObjLayout.default:W", %"ObjLayout.default:W" addrspace(1)* %a.layout, i32 0, i32 0
   store i64 %i, i64 addrspace(1)* %a.f, align 8
-  %b = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:Throw.ti" to i8*), i32 24) nounwind
+  %b = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:Throw.ti" to i8*), i32 24) nounwind
   %b0 = bitcast i8 addrspace(1)* %b to i8* addrspace(1)*
   %b.ti = getelementptr i8*, i8* addrspace(1)* %b0, i32 1
   %b.layout = bitcast i8* addrspace(1)* %b.ti to %"ObjLayout.default:W" addrspace(1)*
@@ -273,14 +272,14 @@ entry:
 }
 
 ; CHECK-LABEL: @hazard_in_existing_catch(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: invoke {{.*}}@may_throw(
 ; CHECK: call {{.*}}@may_throw(
 ; CHECK: }
 define i64 @hazard_in_existing_catch(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
+  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
   %0 = bitcast i8 addrspace(1)* %w to i8* addrspace(1)*
   %ti.payload = getelementptr i8*, i8* addrspace(1)* %0, i32 1
   %1 = bitcast i8* addrspace(1)* %ti.payload to %"ObjLayout.default:W" addrspace(1)*
@@ -297,14 +296,14 @@ catch:
 }
 
 ; CHECK-LABEL: @shared_unwind_pad(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: call {{.*}}@may_throw(
 ; CHECK: call {{.*}}@may_throw(
 ; CHECK: }
 define i64 @shared_unwind_pad(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
+  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
   %0 = bitcast i8 addrspace(1)* %w to i8* addrspace(1)*
   %ti.payload = getelementptr i8*, i8* addrspace(1)* %0, i32 1
   %1 = bitcast i8* addrspace(1)* %ti.payload to %"ObjLayout.default:W" addrspace(1)*
@@ -317,13 +316,13 @@ entry:
 }
 
 ; CHECK-LABEL: @diamond_two_rets(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: call {{.*}}@may_throw(
 ; CHECK: }
 define i64 @diamond_two_rets(i64 %i, i1 %c) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
+  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
   %0 = bitcast i8 addrspace(1)* %w to i8* addrspace(1)*
   %ti.payload = getelementptr i8*, i8* addrspace(1)* %0, i32 1
   %1 = bitcast i8* addrspace(1)* %ti.payload to %"ObjLayout.default:W" addrspace(1)*
@@ -339,12 +338,12 @@ else:
 }
 
 ; CHECK-LABEL: @nonreturn_unreachable_reject(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @nonreturn_unreachable_reject(i64 %i, i1 %c) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
+  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
   %0 = bitcast i8 addrspace(1)* %w to i8* addrspace(1)*
   %ti.payload = getelementptr i8*, i8* addrspace(1)* %0, i32 1
   %1 = bitcast i8* addrspace(1)* %ti.payload to %"ObjLayout.default:W" addrspace(1)*
@@ -358,13 +357,13 @@ boom:
 }
 
 ; CHECK-LABEL: @nonreturn_resume_reject(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: invoke {{.*}}@may_throw(
 ; CHECK: }
 define i64 @nonreturn_resume_reject(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
+  %w = call noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
   %0 = bitcast i8 addrspace(1)* %w to i8* addrspace(1)*
   %ti.payload = getelementptr i8*, i8* addrspace(1)* %0, i32 1
   %1 = bitcast i8* addrspace(1)* %ti.payload to %"ObjLayout.default:W" addrspace(1)*
@@ -380,12 +379,12 @@ catch:
 }
 
 ; CHECK-LABEL: @invoke_newfinalizer_reject(
-; CHECK: invoke {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: invoke {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @invoke_newfinalizer_reject(i64 %i) gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 entry:
   ; 24 = 8-byte object head + 16-byte payload (ObjLayout {i64, i1}).
-  %w = invoke noalias i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
+  %w = invoke noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @"default:W.ti" to i8*), i32 24)
           to label %ok unwind label %catch
 ok:
   %0 = bitcast i8 addrspace(1)* %w to i8* addrspace(1)*

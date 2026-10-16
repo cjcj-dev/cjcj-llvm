@@ -32,7 +32,6 @@
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_N2CStub
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on llvm.cj.heapmalloc.class
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_NewObjectFast
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_NewFinalizerFast
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_OnFinalizerCreated
 ; CHECK-O-NEXT: Running pass: Annotation2MetadataPass
 ; CHECK-O-NEXT: Running pass: CrossDSOCFIPass
@@ -60,7 +59,6 @@
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_C2NStub
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_N2CStub
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_NewObjectFast
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_NewFinalizerFast
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_OnFinalizerCreated
 ; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Module
 ; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Module
@@ -704,7 +702,6 @@
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_C2NStub
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_N2CStub
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_NewObjectFast
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_NewFinalizerFast
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_OnFinalizerCreated
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on llvm.lifetime.start.p0i8
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on llvm.lifetime.end.p0i8

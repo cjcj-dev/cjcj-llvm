@@ -11,7 +11,7 @@
 @"Klass0.objKlass" = external global %KlassInfo.0
 @"Klass1.objKlass" = external global %KlassInfo.1
 
-declare i8 addrspace(1)* @CJ_MCC_NewPinnedObjectStub(i8*, i32, i1)
+declare i8 addrspace(1)* @CJ_MCC_NewPinnedObjectStub(i8*, i32)
 declare void @llvm.memcpy.p1i8.p1i8.i64(i8 addrspace(1)* noalias nocapture writeonly, i8 addrspace(1)* noalias nocapture readonly, i64, i1 immarg)
 declare i1 @CJ_MCC_IsInstanceOf(i8 addrspace(1)*, i8*) #1
 
@@ -27,7 +27,7 @@ entry:
   %4 = bitcast  %record3 addrspace(1)* %3 to i8 addrspace(1)*
   %5 = bitcast  %record3 addrspace(1)* %0 to i8 addrspace(1)*
   call void @llvm.memcpy.p1i8.p1i8.i64(i8 addrspace(1)* align 8 %4, i8 addrspace(1)* align 8 %5, i64 8, i1 false)
-  %test1 = call i8 addrspace(1)* @CJ_MCC_NewPinnedObjectStub(i8* bitcast (%KlassInfo.0* @"Klass0.objKlass" to i8*), i32 16, i1 false)
+  %test1 = call i8 addrspace(1)* @CJ_MCC_NewPinnedObjectStub(i8* bitcast (%KlassInfo.0* @"Klass0.objKlass" to i8*), i32 16)
   %test2 = call i1 @CJ_MCC_IsInstanceOf(i8 addrspace(1)* %this, i8* bitcast (%KlassInfo.1* @"Klass1.objKlass" to i8*))
   call void @llvm.memcpy.p1i8.p1i8.i64(i8 addrspace(1)* align 8 %test1, i8 addrspace(1)* align 8 %5, i64 8, i1 false)
   ret void

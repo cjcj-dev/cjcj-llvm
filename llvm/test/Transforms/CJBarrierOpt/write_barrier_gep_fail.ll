@@ -10,7 +10,7 @@
 @"Klass0.objKlass" = external global %KlassInfo.0
 @"Klass1.objKlass" = external global %KlassInfo.1
 
-declare i8 addrspace(1)* @CJ_MCC_NewPinnedObjectStub(i8*, i32, i1)
+declare i8 addrspace(1)* @CJ_MCC_NewPinnedObjectStub(i8*, i32)
 declare void @llvm.memcpy.p1i8.p1i8.i64(i8 addrspace(1)* noalias nocapture writeonly, i8 addrspace(1)* noalias nocapture readonly, i64, i1 immarg)
 declare i1 @CJ_MCC_IsInstanceOf(i8 addrspace(1)*, i8*) #1
 declare void @foo()
@@ -20,7 +20,7 @@ declare void @foo()
 
 define void @foo1(i8 addrspace(1)* %this, %record3 addrspace(1)* %0) #0 gc "cangjie" {
 entry:
-  %test0 = call i8 addrspace(1)* @CJ_MCC_NewPinnedObjectStub(i8* bitcast (%KlassInfo.0* @"Klass0.objKlass" to i8*), i32 16, i1 false)
+  %test0 = call i8 addrspace(1)* @CJ_MCC_NewPinnedObjectStub(i8* bitcast (%KlassInfo.0* @"Klass0.objKlass" to i8*), i32 16)
   %test1 = call i1 @CJ_MCC_IsInstanceOf(i8 addrspace(1)* %this, i8* bitcast (%KlassInfo.1* @"Klass1.objKlass" to i8*))
   %1 = bitcast i8 addrspace(1)* %this to %record1 addrspace(1)*
   %2 = getelementptr inbounds %record1, %record1 addrspace(1)* %1, i32 0, i32 2

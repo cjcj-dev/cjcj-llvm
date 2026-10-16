@@ -905,7 +905,7 @@ namespace llvm {
     bool isCJMutexLock() const { return equals("CJ_MCC_MutexLock"); }
 
     bool isCangjieNewObjFunction() const {
-      return equals("CJ_MCC_NewObject") || equals("CJ_MCC_NewFinalizer");
+      return equals("CJ_MCC_NewObject");
     }
 
     bool isCangjieTypeInfo() const { return startswith("TypeInfo"); }

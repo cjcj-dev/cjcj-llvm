@@ -17,7 +17,7 @@ declare i8 addrspace(1)* @CJ_MCC_BeginCatch(i8*) #1
 declare void @CJ_MCC_EndCatch() #1
 declare void @CJ_MCC_ThrowException(i8 addrspace(1)*)
 declare i32 @personality_function()
-declare i8 addrspace(1)* @CJ_MCC_NewPinnedObjectStub(i8*, i32, i1)
+declare i8 addrspace(1)* @CJ_MCC_NewPinnedObjectStub(i8*, i32)
 declare i8 addrspace(1)* @CJ_MCC_NewObjectStub(i8*, i32)
 declare void @foo()
 
@@ -28,7 +28,7 @@ entry:
   br i1 %cond, label %if, label %else
 
 if:                                        ; preds = %entry
-  %test1 = invoke i8 addrspace(1)* @CJ_MCC_NewPinnedObjectStub(i8* bitcast (%KlassInfo.0* @"Klass0.objKlass" to i8*), i32 16, i1 false)
+  %test1 = invoke i8 addrspace(1)* @CJ_MCC_NewPinnedObjectStub(i8* bitcast (%KlassInfo.0* @"Klass0.objKlass" to i8*), i32 16)
         to label %invoke1 unwind label %finally
 
 invoke1:                                        ; preds = %if
