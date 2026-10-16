@@ -312,8 +312,6 @@ private:
   }
 
   bool canReplaceBarrierCall(CallInst &CI, unsigned Arg) {
-    if (StructAS1Replace)
-      return true;
     Value *Val = findMemoryBasePointer(CI.getArgOperand(Arg));
     if (PHINode *PN = dyn_cast<PHINode>(Val)) {
       return RewritePhiIncoming.count(PN) &&

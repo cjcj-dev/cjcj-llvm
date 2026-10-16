@@ -733,8 +733,7 @@ StackMaps::parseRegisterLiveOutMask(const uint32_t *Mask) const {
   return LiveOuts;
 }
 
-void StackMaps::updateOrInsertFnInfo(const MCSymbol *FnSym,
-                                     CallsiteInfo &CallInfo) {
+StackMaps::FunctionInfo &StackMaps::getOrInsertFnInfo(const MCSymbol *FnSym) {
   auto Itr = FnInfos.find(FnSym);
   if (Itr == FnInfos.end()) {
     // create a new function info.
@@ -770,16 +769,26 @@ void StackMaps::updateOrInsertFnInfo(const MCSymbol *FnSym,
     Itr = FnInfos.find(FnSym);
   }
 
-  // X86/AArch64 emitCJThrowException calls here with a default CallsiteInfo
-  // (CSOffsetExpr=null) only to ensure FnInfo exists. Do not emit a RECORD
-  // without a PC key. Zero-root / zero-line callsites that still have a PC
-  // (normal managed statepoints) are recorded so runtime exact-PC lookup hits.
-  if (!CallInfo.CSOffsetExpr)
+  return Itr->second;
+}
+
+void StackMaps::insertCallsiteInfo(const MCSymbol *FnSym,
+                                 CallsiteInfo &CallInfo) {
+  getOrInsertFnInfo(FnSym).RecordCount++;
+  CSInfos.emplace_back(CallInfo);
+}
+
+void StackMaps::updateOrInsertFnInfo(const MCSymbol *FnSym,
+                                   CallsiteInfo &CallInfo) {
+  getOrInsertFnInfo(FnSym);
+
+  // Do not need emit callsite info when it has no any Locations and LineNumber
+  // in cangjie pipeline.
+  if (CJPipeline && CallInfo.RefPairs.empty() && CallInfo.FOLocations.empty() &&
+      CallInfo.StackLocations.empty() && CallInfo.LineNumber == 0)
     return;
 
-  // update callsite count.
-  Itr->second.RecordCount++;
-  CSInfos.emplace_back(CallInfo);
+  insertCallsiteInfo(FnSym, CallInfo);
 }
 
 MachineInstr::const_mop_iterator
@@ -974,7 +983,13 @@ void StackMaps::recordStackMapOpers(const MCSymbol &MILabel,
     }
     CSInfo.LineNumber = DIL->getLine();
   }
-  updateOrInsertFnInfo(AP.CurrentFnSym, CSInfo);
+  // A real GC statepoint owns its precise PC even when its map is empty.
+  // Keep the operand-free div/stackmap paths under the ordinary filter.
+  // OopMapSet::add_gc_map (compiler/oopMap.cpp:367-386) retains empty maps.
+  if (isStatepointOpcode(MI.getOpcode()))
+    insertCallsiteInfo(AP.CurrentFnSym, CSInfo);
+  else
+    updateOrInsertFnInfo(AP.CurrentFnSym, CSInfo);
 }
 
 void StackMaps::recordStackMap(const MCSymbol &L, const MachineInstr &MI) {
@@ -1043,7 +1058,9 @@ void StackMaps::recordCJReturnMap(const MCSymbol &PC) {
     Info.RefPairs.push_back(Root);
     Info.RefPairs.push_back(Root);
   }
-  updateOrInsertFnInfo(AP.CurrentFnSym, Info);
+  // Return polls own their PC even when there are no return-register roots.
+  // OopMapSet::add_gc_map (oopMap.cpp:367-386) also retains empty maps.
+  insertCallsiteInfo(AP.CurrentFnSym, Info);
 }
 
 void StackMaps::recordCJStackMap(const MachineInstr &MI,
