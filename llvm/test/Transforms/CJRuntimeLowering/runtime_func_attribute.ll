@@ -16,13 +16,15 @@ declare void @llvm.cj.throw.exception(i8 addrspace(1)*)
 ; CHECK:    %3 = load i32, i32* %2, align 4
 ; CHECK:    %4 = add i32 %3, 15
 ; CHECK     %5 = and i32 %4, -8
-; CHECK:    declare noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8*, i32) #2
-; CHECK:    declare i8* @CJ_MCC_GetExceptionWrapper() #3
-; CHECK:    declare i8 addrspace(1)* @CJ_MCC_PostThrowException(i8*) #3
-; CHECK:    declare void @CJ_MCC_ThrowException(i8 addrspace(1)*) #1
-; CHECK:    attributes #1 = { "cj-runtime" "gc-leaf-function" }
-; CHECK:    attributes #2 = { argmemonly "cj-heapmalloc" "cj-runtime" }
-; CHECK:    attributes #3 = { nounwind "cj-runtime" "gc-leaf-function" }
+; CHECK:    declare i8 addrspace(1)* @CJ_MCC_OnFinalizerCreated(i8 addrspace(1)*) #[[REG:[0-9]+]]
+; CHECK:    declare noalias i8 addrspace(1)* @CJ_MCC_NewObject(i8*, i32) #[[ALLOC:[0-9]+]]
+; CHECK:    declare i8* @CJ_MCC_GetExceptionWrapper() #[[EXCEPTION:[0-9]+]]
+; CHECK:    declare i8 addrspace(1)* @CJ_MCC_PostThrowException(i8*) #[[EXCEPTION]]
+; CHECK:    declare void @CJ_MCC_ThrowException(i8 addrspace(1)*) #[[LEAF:[0-9]+]]
+; CHECK:    attributes #[[LEAF]] = { "cj-runtime" "gc-leaf-function" }
+; CHECK:    attributes #[[REG]] = { "cj-runtime" }
+; CHECK:    attributes #[[ALLOC]] = { argmemonly "cj-heapmalloc" "cj-runtime" }
+; CHECK:    attributes #[[EXCEPTION]] = { nounwind "cj-runtime" "gc-leaf-function" }
 ;
 
 define void @lower_new_finalier(i8* %ti) {

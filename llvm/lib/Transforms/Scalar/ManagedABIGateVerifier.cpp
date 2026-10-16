@@ -174,8 +174,6 @@ static constexpr StringLiteral PrivateRuntimeABI[] = {
     "CJ_MCC_NewArray64",
     "CJ_MCC_NewArray8",
     "CJ_MCC_NewArrayGeneric",
-    "CJ_MCC_NewFinalizer",
-    "CJ_MCC_NewFinalizerFast",
     "CJ_MCC_NewObjArray",
     "CJ_MCC_NewObject",
     "CJ_MCC_NewObjectFast",
@@ -398,8 +396,7 @@ static bool isKnownPlainProducer(const CallBase &CB) {
          Name == "CJ_MCC_AtomicSwapReference" || Name == "CJ_MCC_NewArray" ||
          Name == "CJ_MCC_NewArray8" || Name == "CJ_MCC_NewArray16" ||
          Name == "CJ_MCC_NewArray32" || Name == "CJ_MCC_NewArray64" ||
-         Name == "CJ_MCC_NewArrayGeneric" || Name == "CJ_MCC_NewFinalizer" ||
-         Name == "CJ_MCC_NewFinalizerFast" || Name == "CJ_MCC_NewObjArray" ||
+         Name == "CJ_MCC_NewArrayGeneric" || Name == "CJ_MCC_NewObjArray" ||
          Name == "CJ_MCC_NewObject" || Name == "CJ_MCC_NewObjectFast" ||
          Name == "CJ_MCC_NewPinnedObject" ||
          Name == "CJ_MCC_NewWeakRefObject" ||

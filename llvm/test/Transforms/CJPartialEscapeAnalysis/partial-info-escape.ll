@@ -76,7 +76,6 @@ declare void @CJ_MCC_N2CStub(...) #22
 
 declare i8 addrspace(1)* @CJ_MCC_NewObjectFast(i8* %0, i32 %1) #22
 
-declare i8 addrspace(1)* @CJ_MCC_NewFinalizerFast(i8* %0, i32 %1) #22
 
 declare i8 addrspace(1)* @CJ_MCC_OnFinalizerCreated(i8 addrspace(1)* %0) #22
 

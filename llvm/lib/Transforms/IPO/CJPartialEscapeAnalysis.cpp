@@ -153,16 +153,13 @@ bool isRewriteableCangjieMallocFunc(Function *F) {
   auto FuncName = F->getName();
   if (FuncName.startswith("CJ_MCC_NewObject") ||
       FuncName.startswith("CJ_MCC_NewArray") ||
-      FuncName.startswith("CJ_MCC_NewFinalizer") ||
       FuncName.startswith("CJ_MCC_NewObjArray")) {
     return true;
   }
   return false;
 }
 
-static bool isFinalizableAllocation(CallBase *CB, GlobalVariable *Klass) {
-  if (CB->getCalledFunction()->getName().startswith("CJ_MCC_NewFinalizer"))
-    return true;
+static bool isFinalizableAllocation(GlobalVariable *Klass) {
   if (Klass->hasAttribute("HasFinalizer"))
     return true;
   if (!Klass->hasInitializer())
@@ -763,7 +760,7 @@ public:
       : ObjectLocation(NewLoc, V, F, LoopDepth) {
     CallBase *I = dyn_cast<CallBase>(V);
     GlobalVariable *Klass = getNewKlass(I);
-    if (Klass == nullptr || isFinalizableAllocation(I, Klass)) {
+    if (Klass == nullptr || isFinalizableAllocation(Klass)) {
       Escaped = true;
       return;
     }
@@ -3447,7 +3444,7 @@ public:
     if (!Callee || !isRewriteableCangjieMallocFunc(Callee))
       return false;
     GlobalVariable *Klass = getNewKlass(CB);
-    if (Klass == nullptr || isFinalizableAllocation(CB, Klass)) {
+    if (Klass == nullptr || isFinalizableAllocation(Klass)) {
       setEscaped(GCPtr::create(CB, *this, LI), CB->getParent());
       return true;
     }

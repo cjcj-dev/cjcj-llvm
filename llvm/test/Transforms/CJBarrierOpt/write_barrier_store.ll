@@ -14,7 +14,7 @@
 @"Klass0.objKlass" = external global %KlassInfo.0
 
 declare void @llvm.cj.gcwrite.static(i8 addrspace(1)*, i8 addrspace(1)** nocapture)
-declare i8 addrspace(1)* @CJ_MCC_NewPinnedObjectStub(i8*, i32, i1)
+declare i8 addrspace(1)* @CJ_MCC_NewPinnedObjectStub(i8*, i32)
 declare void @foo()
 
 define void @foo1() #0 gc "cangjie" {
@@ -28,7 +28,7 @@ entry:
 ; CHECK: call void @llvm.cj.gcwrite.static(i8 addrspace(1)* %4, i8 addrspace(1)** getelementptr inbounds (%record0, %record0* @global0, i32 0, i32 2))
 thunk:                                        ; preds = %entry
   call void @foo()
-  %1 = call i8 addrspace(1)* @CJ_MCC_NewPinnedObjectStub(i8* bitcast (%KlassInfo.0* @"Klass0.objKlass" to i8*), i32 16, i1 false)
+  %1 = call i8 addrspace(1)* @CJ_MCC_NewPinnedObjectStub(i8* bitcast (%KlassInfo.0* @"Klass0.objKlass" to i8*), i32 16)
   store i8 addrspace(1)* %1, i8 addrspace(1)** %0
   %2 = load i8 addrspace(1)*, i8 addrspace(1)** %0
   store i8 addrspace(1)* %2, i8 addrspace(1)** %test

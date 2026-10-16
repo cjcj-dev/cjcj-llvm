@@ -379,18 +379,14 @@ public:
 
   void replaceFixedNewObject(CallBase *&CI) {
     IRBuilder<> Bdr(CI);
-    Function *Func = M.getFunction("CJ_MCC_NewPinnedObject");
-    if (Func == nullptr) {
-      Type *I8Ptr = Bdr.getInt8PtrTy();
-      Type *RefPtr = Bdr.getInt8PtrTy(1);
-      Type *I32 = Bdr.getInt32Ty();
-      Type *I1 = Bdr.getInt1Ty();
-      FunctionType *FT = FunctionType::get(RefPtr, {I8Ptr, I32, I1}, false);
-      Func = M.declareCJRuntimeFunc("CJ_MCC_NewPinnedObject", FT, false, true);
-    }
+    Type *I8Ptr = Bdr.getInt8PtrTy();
+    Type *RefPtr = Bdr.getInt8PtrTy(1);
+    Type *I32 = Bdr.getInt32Ty();
+    FunctionType *FT = FunctionType::get(RefPtr, {I8Ptr, I32}, false);
+    Function *Func =
+        M.declareCJRuntimeFunc("CJ_MCC_NewPinnedObject", FT, false, true);
     CallBase *I = nullptr;
-    SmallVector<Value *> Params = {CI->getArgOperand(0), Bdr.getInt32(SyncSize),
-                                   Bdr.getInt1(false)};
+    SmallVector<Value *> Params = {CI->getArgOperand(0), Bdr.getInt32(SyncSize)};
     if (isa<CallInst>(CI)) {
       I = Bdr.CreateCall(Func, Params);
     } else if (auto II = dyn_cast<InvokeInst>(CI)) {
@@ -401,18 +397,6 @@ public:
     CI->replaceAllUsesWith(I);
     CI->eraseFromParent();
     CI = I;
-  }
-
-  void replaceNewFinalizerFunc(CallBase *CI) {
-    IRBuilder<> Bdr(CI);
-    Function *Func = M.getFunction("CJ_MCC_NewFinalizer");
-    if (Func == nullptr) {
-      // NewFinalier cannot add "cj-heapmalloc" attribute, because it may
-      // call a finalier method when destructor performing.
-      Func = M.declareCJRuntimeFunc("CJ_MCC_NewFinalizer",
-                                    CI->getFunctionType(), false);
-    }
-    CI->setCalledFunction(Func);
   }
 
   void replaceNewWeakRefFunc(CallBase *CI) {
@@ -760,10 +744,7 @@ public:
       replaceWithRuntimeFunc(CI, false, true);
     } else {
       StringRef Ty = dyn_cast<MDString>(MD->getOperand(0).get())->getString();
-      if (Ty.equals("HasFinalizer")) {
-        setHeapMallocSizeAlign(CI);
-        replaceNewFinalizerFunc(CI);
-      } else if (Ty.equals("Future") || Ty.equals("Mutex") ||
+      if (Ty.equals("Future") || Ty.equals("Mutex") ||
                  Ty.equals("Monitor") || Ty.equals("WaitQueue")) {
         replaceFixedNewObject(CI);
       } else if (Ty.equals("WeakRef")) {
@@ -999,7 +980,7 @@ static void declareRuntimeFunc(Module &M) {
 
   Type *RefType = Type::getInt8PtrTy(C, 1);
   auto *FinalizerFT = FunctionType::get(RefType, RefType, false);
-  M.declareCJRuntimeFunc(FinalizerStr, FinalizerFT, true);
+  M.declareCJRuntimeFunc(FinalizerStr, FinalizerFT, false);
 }
 
 static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
@@ -1141,7 +1122,8 @@ PreservedAnalyses CJRuntimeLowering::run(Module &M,
                     ConstantAsMetadata::get(ConstantInt::get(
                         Type::getInt32Ty(M.getContext()), 1)));
   }
-  bool Changed = false;
+  // Declarations and serialized registration call attributes are normalized.
+  bool Changed = true;
   auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   // Declaring MCC Functions for Backend Processing.
   declareRuntimeFunc(M);
@@ -1183,7 +1165,8 @@ public:
   ~CJRuntimeLoweringLegacyPass() = default;
 
   bool runOnModule(Module &M) override {
-    bool Changed = false;
+    // declareRuntimeFunc also normalizes existing registration attributes.
+    bool Changed = true;
     // Declaring MCC Functions for Backend Processing.
     declareRuntimeFunc(M);
     CJIntrinsicLowering CJLowering(M);

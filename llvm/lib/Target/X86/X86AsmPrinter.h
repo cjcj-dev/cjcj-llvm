@@ -187,24 +187,7 @@ private:
   void extendStackAndInsertFFIInfoForJmp(MCInst &MovGVToR11,
                                          unsigned CallFrameSize);
 
-  struct ParamForEmitNewObj {
-    ParamForEmitNewObj(const MachineInstr *MIInit,
-                       const MachineOperand &MOSymInit, unsigned int OpcodeInit,
-                       X86MCInstLower &MCILoweing, MCInst &CallSlow,
-                       StringRef FastFuncName)
-        : MI(MIInit), MOSym(MOSymInit), Opcode(OpcodeInit),
-          MCInstLowering(MCILoweing), CallNewObjSlowPath(CallSlow),
-          FastFuncName(FastFuncName) {}
-    ~ParamForEmitNewObj() = default;
-    const MachineInstr *MI;
-    const MachineOperand &MOSym;
-    unsigned int Opcode;
-    X86MCInstLower &MCInstLowering;
-    MCInst &CallNewObjSlowPath;
-    StringRef FastFuncName;
-  };
-
-  void emitMccNewObjectForCopyGC(ParamForEmitNewObj &Param);
+  void emitMccNewObjectForCopyGC(MCInst &CallNewObjSlowPath);
   void emitMccNewObjectFastPath(const MachineInstr *MI,
                                 const MachineOperand &MOSym,
                                 unsigned Opcode) override;
