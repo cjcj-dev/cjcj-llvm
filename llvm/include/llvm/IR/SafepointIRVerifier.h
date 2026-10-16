@@ -83,7 +83,6 @@ bool isCJAtomicIntrinsic(Intrinsic::ID IID);
 bool isSafepointCall(CallBase *CB);
 bool isInt8AS1Pty(Type *Ty);
 bool isInt8AS0Pty(Value *Ptr);
-bool maybeCJFinalizerObj(Value *V);
 Type *getUniqueActualType(Value *V);
 StructType *getLastStructTypeContain(Value *V);
 void getAllStructTypes(Value *V, SmallSet<StructType *, 8> &STs);

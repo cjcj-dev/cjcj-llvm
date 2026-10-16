@@ -233,21 +233,14 @@ private:
 
   void emitGetCJThreadId() override;
   struct ParamForEmitNewObj {
-    ParamForEmitNewObj(const MachineInstr *MIInit,
-                       const MachineOperand &MOSymInit, unsigned int OpcodeInit,
-                       MCSymbol *LFinish, const MCSymbolRefExpr *FinishExpr,
-                       const MCInst &CallSlow, StringRef FastName)
-        : MI(MIInit), MOSym(MOSymInit), Opcode(OpcodeInit), LFin(LFinish),
-          FinExpr(FinishExpr), CallNewObjSlowPath(CallSlow),
-          FastFuncName(FastName) {}
+    ParamForEmitNewObj(MCSymbol *LFinish,
+                       const MCSymbolRefExpr *FinishExpr,
+                       const MCInst &CallSlow)
+        : LFin(LFinish), FinExpr(FinishExpr), CallNewObjSlowPath(CallSlow) {}
     ~ParamForEmitNewObj() = default;
-    const MachineInstr *MI;
-    const MachineOperand &MOSym;
-    unsigned int Opcode;
     MCSymbol *LFin;
     const MCSymbolRefExpr *FinExpr;
     const MCInst &CallNewObjSlowPath;
-    StringRef FastFuncName;
   };
 
   void emitMccNewObjectForCopyGC(const ParamForEmitNewObj &Param);
@@ -2044,9 +2037,6 @@ void AArch64AsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
 //   str  x0, [x3]             // allocPtr->KlassInfo = Klass
 //   str  x5, [x2]             // AllocBuffer.tlab.top = allocPtr + size
 //   mov  x0, x3               // ret/arg = allocPtr
-//  <<< hasFinalizer
-//   bl   MCC_OnFinalizerCreated
-//  >>>
 //   b    .LNewObjFin
 // .LNewObjSlowPath
 //   bl   MCC_NewObjectStub
@@ -2092,13 +2082,6 @@ void AArch64AsmPrinter::emitMccNewObjectForCopyGC(
   EmitToStreamer(*OutStreamer, SetKlass);
   EmitToStreamer(*OutStreamer, StoreNewAllocPtr);
   EmitToStreamer(*OutStreamer, CopyAllocPtrToX0);
-  if (Param.FastFuncName.equals("CJ_MCC_NewFinalizerFast")) {
-    MCOperand FinalizerMC = setGAAndLower(
-        Param.MOSym, Param.MI->getMF()->getFunction().getParent()->getFunction(
-                         "CJ_MCC_OnFinalizerCreated"));
-    EmitToStreamer(*OutStreamer,
-                   MCInstBuilder(Param.Opcode).addOperand(FinalizerMC));
-  }
   EmitToStreamer(*OutStreamer, BranchToFin);
   OutStreamer->emitLabel(LSlow);
   EmitToStreamer(*OutStreamer, Param.CallNewObjSlowPath);
@@ -2118,18 +2101,12 @@ void AArch64AsmPrinter::emitMccNewObjectFastPath(const MachineInstr *MI,
     return;
   }
 
-  StringRef FastFuncName =
-      (MOSym.getGlobal()->getName().find("Object") != StringRef::npos)
-          ? "CJ_MCC_NewObjectFast"
-          : "CJ_MCC_NewFinalizerFast";
-
   MCSymbol *LFinish = OutContext.createTempSymbol("NewObjFin", true);
   const MCSymbolRefExpr *FinExpr = MCSymbolRefExpr::create(LFinish, OutContext);
   MCOperand CallSlowPath;
   MCInstLowering.lowerOperand(MOSym, CallSlowPath);
   MCInst CallNewObjSlowPath = MCInstBuilder(Opcode).addOperand(CallSlowPath);
-  ParamForEmitNewObj Param(MI, MOSym, Opcode, LFinish, FinExpr,
-                           CallNewObjSlowPath, FastFuncName);
+  ParamForEmitNewObj Param(LFinish, FinExpr, CallNewObjSlowPath);
   emitMccNewObjectForCopyGC(Param);
   SM.recordCJStackMap(*MI);
 }

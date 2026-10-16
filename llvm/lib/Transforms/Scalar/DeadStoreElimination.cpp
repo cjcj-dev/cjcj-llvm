@@ -1747,8 +1747,6 @@ struct DSEState {
         const Value *UO = getUnderlyingObject(DefLoc->Ptr);
         if (!isInvisibleToCallerAfterRet(UO))
           continue;
-        if (CJPipeline && maybeCJFinalizerObj(const_cast<Value*>(UO)))
-          continue;
         if (isWriteAtEndOfFunction(Def)) {
           // See through pointer-to-pointer bitcasts
           LLVM_DEBUG(dbgs() << "   ... MemoryDef is not accessed until the end "

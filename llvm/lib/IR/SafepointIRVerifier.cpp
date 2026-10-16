@@ -1153,19 +1153,6 @@ bool llvm::isInt8AS0Pty(Value *Ptr) {
          (PT->getElementType()->isIntegerTy(8));
 }
 
-bool llvm::maybeCJFinalizerObj(Value *V) {
-  SmallVector<const Value *, 8> Bases;
-  getUnderlyingObjects(V, Bases, nullptr, 0);
-  for (auto *Base : Bases) {
-    if (auto *CB = dyn_cast<CallBase>(Base)) {
-      auto *F = CB->getCalledFunction();
-      if (F && F->getName().startswith("CJ_MCC_NewFinalizer"))
-        return true;
-    }
-  }
-  return false;
-}
-
 Type *llvm::getUniqueActualType(Value *V) {
   Type *CommonTy = nullptr;
   for (Value *U : V->users()) {

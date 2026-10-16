@@ -55,7 +55,6 @@ extern cl::opt<bool> EnableSafepointOutline;
 
 namespace {
 const static StringRef NewObjFastStr = "CJ_MCC_NewObjectFast";
-const static StringRef NewObjFinalizerFastStr = "CJ_MCC_NewFinalizerFast";
 constexpr StringRef SafepointStub = "CJ_Safepoint_Stub";
 // Runtime P04 publishes every ZGC reservation (ZMaxVirtualReservations=100).
 // This table is the P01 slot-domain ABI; query only the live entries.
@@ -473,7 +472,7 @@ static bool hasHeapAllocationOrigin(Value *Ptr,
         return false;
       StringRef Name = Callee->getName();
       return Name.isCangjieNewObjFunction() || Name == NewObjFastStr ||
-             Name == NewObjFinalizerFastStr || Name == "CJ_MCC_NewPinnedObject" ||
+             Name == "CJ_MCC_NewPinnedObject" ||
              Name == "CJ_MCC_NewArray" || Name == "CJ_MCC_NewArray8" ||
              Name == "CJ_MCC_NewArray16" || Name == "CJ_MCC_NewArray32" ||
              Name == "CJ_MCC_NewArray64" || Name == "CJ_MCC_NewObjArray";
@@ -1293,12 +1292,7 @@ static bool doNewFastPath(Function &F, SetVector<GCStatepointInst *> &NewObjs) {
   if (CangjieJIT)
     return false;
   for (GCStatepointInst *CI : NewObjs) {
-    Function *Callee = CI->getActualCalledFunction();
-    if (Callee->getName().equals("CJ_MCC_NewObject")) {
-      replaceFastFunc(F, CI, NewObjFastStr);
-    } else {
-      replaceFastFunc(F, CI, NewObjFinalizerFastStr);
-    }
+    replaceFastFunc(F, CI, NewObjFastStr);
   }
   return true;
 }

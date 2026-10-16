@@ -107,11 +107,6 @@ unsigned AArch64InstrInfo::getCangjieSpecificCallInstSizeInBytes(
       return 4;
     return 44; // 44 bytes (11 instructions) for the direct TLAB object path
   }
-  if (Callee->getName().equals("CJ_MCC_NewFinalizer")) {
-    if (MI.getOpcode() == AArch64::TCRETURNdi)
-      return 4;
-    return 48; // 48 bytes (12 instructions) for the direct TLAB finalizer path
-  }
   // Under large code model on MachO, emitCangjieRuntimeCall emits ADRP+LDR+BLR
   // (12B) instead of BL (4B) for runtime calls embedded in the inline lowering
   // of some cangjie sentinels (e.g. CJStackCheck -> emitStackOverflowCall).
