@@ -35,19 +35,11 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/CJFillMetadata.h"
 #include <cstdint>
 
 using namespace llvm;
-
-static cl::opt<unsigned> CJArrayThreshold(
-    // 128 is cj-array-threshol default Initial Value
-    "cj-array-threshold", cl::Hidden, cl::init(128 * 1024),
-    cl::desc("When array size is bigger than cj-array-threshold "
-             "and array element type is primitive type, "
-             "its write barriers can be removed."));
 
 const static DenseSet<StringRef> NewMallocArrayFunc {
     "CJ_MCC_NewArray", "CJ_MCC_NewArray8", "CJ_MCC_NewArray16",
