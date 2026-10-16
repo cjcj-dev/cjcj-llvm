@@ -1122,7 +1122,8 @@ PreservedAnalyses CJRuntimeLowering::run(Module &M,
                     ConstantAsMetadata::get(ConstantInt::get(
                         Type::getInt32Ty(M.getContext()), 1)));
   }
-  bool Changed = false;
+  // Declarations and serialized registration call attributes are normalized.
+  bool Changed = true;
   auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   // Declaring MCC Functions for Backend Processing.
   declareRuntimeFunc(M);
@@ -1164,7 +1165,8 @@ public:
   ~CJRuntimeLoweringLegacyPass() = default;
 
   bool runOnModule(Module &M) override {
-    bool Changed = false;
+    // declareRuntimeFunc also normalizes existing registration attributes.
+    bool Changed = true;
     // Declaring MCC Functions for Backend Processing.
     declareRuntimeFunc(M);
     CJIntrinsicLowering CJLowering(M);
