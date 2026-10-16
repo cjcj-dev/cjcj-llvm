@@ -3305,7 +3305,7 @@ void X86AsmPrinter::reloadSPForEpilogue(MachineFunction &MF) {
 // LNewObjFin
 // endif
 void X86AsmPrinter::emitMccNewObjectForCopyGC(
-    const MCInst &CallNewObjSlowPath) {
+    MCInst &CallNewObjSlowPath) {
   unsigned AllocBufferReg;
   unsigned AllocPtrReg;
   unsigned LimitReg;

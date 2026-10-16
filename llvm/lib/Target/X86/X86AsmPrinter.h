@@ -187,7 +187,7 @@ private:
   void extendStackAndInsertFFIInfoForJmp(MCInst &MovGVToR11,
                                          unsigned CallFrameSize);
 
-  void emitMccNewObjectForCopyGC(const MCInst &CallNewObjSlowPath);
+  void emitMccNewObjectForCopyGC(MCInst &CallNewObjSlowPath);
   void emitMccNewObjectFastPath(const MachineInstr *MI,
                                 const MachineOperand &MOSym,
                                 unsigned Opcode) override;
