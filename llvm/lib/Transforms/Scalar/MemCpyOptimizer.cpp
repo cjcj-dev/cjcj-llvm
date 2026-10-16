@@ -73,6 +73,16 @@ STATISTIC(NumMoveToCpy,   "Number of memmoves converted to memcpy");
 STATISTIC(NumCpyToSet,    "Number of memcpys converted to memset");
 STATISTIC(NumCallSlot,    "Number of call slot optimizations performed");
 
+// CJGCInstrRestore needs the reference value type and semantic store strength
+// to restore the heap write barrier. Byte stores cannot represent that duty,
+// even for null. ZGC likewise retains barrier_data on oop stores (see
+// zBarrierSetC2.cpp:342-375 and zBarrierSet.inline.hpp:349-359).
+static bool isCJReferenceStore(const StoreInst *SI) {
+  Type *Ty = SI->getValueOperand()->getType()->getScalarType();
+  return SI->getCJStoreStrength() ||
+         (Ty->isPointerTy() && Ty->getPointerAddressSpace() == 1);
+}
+
 namespace {
 
 /// Represents a range of memset'd bytes with the ByteVal value.
@@ -430,7 +440,7 @@ Instruction *MemCpyOptPass::tryMergingIntoMemset(Instruction *StartInst,
 
     if (auto *NextStore = dyn_cast<StoreInst>(BI)) {
       // If this is a store, see if we can merge it in.
-      if (!NextStore->isSimple()) break;
+      if (!NextStore->isSimple() || isCJReferenceStore(NextStore)) break;
 
       Value *StoredVal = NextStore->getValueOperand();
 
@@ -658,7 +668,7 @@ bool MemCpyOptPass::moveUp(StoreInst *SI, Instruction *P, const LoadInst *LI) {
 }
 
 bool MemCpyOptPass::processStore(StoreInst *SI, BasicBlock::iterator &BBI) {
-  if (!SI->isSimple()) return false;
+  if (!SI->isSimple() || isCJReferenceStore(SI)) return false;
 
   // Avoid merging nontemporal stores since the resulting
   // memcpy/memset would not be able to preserve the nontemporal hint.

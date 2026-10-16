@@ -55,7 +55,7 @@ define void @foo1(i8 addrspace(1)* nocapture readonly %s1, i8 addrspace(1)* noca
 
 ; CHECK: 20:
 ; CHECK: %24 = bitcast %record.T* %1 to i8*
-; CHECK: %25 = getelementptr inbounds i8, i8* %24, i32 24
+; CHECK: %25 = getelementptr inbounds i8, i8* %24, i64 24
 ; CHECK: %26 = bitcast i8* %25 to %record.P*
 ; CHECK: call void @f3(i8* null, %record.P* %26)
 define void @foo2(i8 addrspace(1)* nocapture readonly %s1, i8 addrspace(1)* nocapture readonly %s2) {

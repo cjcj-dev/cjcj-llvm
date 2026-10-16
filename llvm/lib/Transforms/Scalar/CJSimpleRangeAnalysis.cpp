@@ -492,8 +492,8 @@ public:
   ~CJSimpleRangeAnalysis() = default;
 
   bool runOnFunction(Function &F) override {
-    auto &LI = this->getAnalysis<LoopInfoWrapperPass>(F).getLoopInfo();
-    auto &DT = this->getAnalysis<DominatorTreeWrapperPass>(F).getDomTree();
+    auto &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+    auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
     return Impl.runImpl(F, LI, DT);
   }
 

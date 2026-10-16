@@ -390,7 +390,8 @@ struct GenericCopyOpt {
   // 0: base ptr, 1: derived ptr, 2: size
   std::tuple<Value *, Value *, Value *>
   processMemoryPhi(MemoryPhi *Phi, MemoryAccess *End, MemoryAccess *InitEnd,
-                   MemoryLocation &Loc, Value *TI, bool &Changed) {
+                   MemoryLocation &Loc, Value *TI, bool IncludeEnd,
+                   bool &Changed) {
     SmallVector<Value *, 4> Bases;
     SmallVector<Value *, 4> Deriveds;
     SmallVector<Value *, 4> Sizes;
@@ -405,8 +406,28 @@ struct GenericCopyOpt {
         return {nullptr, nullptr, nullptr}; // Maybe this is a loop.
       auto [TmpB, TmpD, TmpS] = findPotentialEqualMem(
           IncomingBB->getTerminator(),
-          cast<MemoryAccess>(Phi->getIncomingValue(I)), InitEnd,
+          cast<MemoryAccess>(Phi->getIncomingValue(I)),
+          cast<MemoryAccess>(Phi->getIncomingValue(I)),
           MemoryLocation::getAfter(EQV), nullptr, TI, nullptr, Changed);
+      if (TmpD) {
+        // The incoming snapshot is proved only through its incoming edge.
+        // Separately check the continuation from this Phi to the consumer:
+        // writes on another incoming edge are before this boundary, whereas
+        // any may-alias write after it invalidates the propagated source.
+        auto *MUD = cast<MemoryUseOrDef>(InitEnd);
+        MemoryAccess *TailEnd = IncludeEnd ? InitEnd : MUD->getDefiningAccess();
+        SmallVector<const Value *, 8> Objects;
+        getUnderlyingObjects(TmpB ? TmpB : TmpD, Objects);
+        for (const Value *Object : Objects) {
+          MemoryAccess *Clobber = MSSA.getWalker()->getClobberingMemoryAccess(
+              TailEnd, MemoryLocation::getBeforeOrAfter(Object));
+          if (!MSSA.isLiveOnEntryDef(Clobber) && Clobber != Phi &&
+              !MSSA.dominates(Clobber, Phi)) {
+            TmpD = nullptr;
+            break;
+          }
+        }
+      }
       if (!TmpD) {
         Bases.push_back(nullptr);
         Deriveds.push_back(EQV);
@@ -537,12 +558,15 @@ struct GenericCopyOpt {
     // MemoryPhi may appear in gcread.ref
     if (isa<MemoryPhi>(End))
       return {nullptr, nullptr, nullptr};
-    // A reference read starts at a preceding definition, which is part of
-    // the interval checked for source writes. Generic copies exclude their
-    // own definition at the end of that interval.
+    // Every copy snapshots its source at the intrinsic, before the following
+    // instruction can write it. A reference read includes its preceding end
+    // definition; a generic copy excludes its own end definition.
     bool IsRef = isa<IntrinsicInst>(Inst) &&
                  cast<IntrinsicInst>(Inst)->getIntrinsicID() ==
                      Intrinsic::cj_gcread_ref;
+    // Recursive Phi queries end at the edge's last definition, which belongs
+    // to the interval. Ordinary copies exclude their own destination write.
+    bool IncludeEnd = IsRef || Inst->isTerminator();
     // Offset of Loc.Ptr relative to Base, true: positive, false: negative
     SmallVector<std::pair<Value *, bool>, 4> Offsets;
     auto *BV = getDerivedOffset(const_cast<Value *>(Loc.Ptr), Offsets);
@@ -562,7 +586,7 @@ struct GenericCopyOpt {
         if (Base || !TI)
           break;
         auto [AB, AV, AS] =
-            processMemoryPhi(Phi, End, InitEnd, Loc, TI, Changed);
+            processMemoryPhi(Phi, End, InitEnd, Loc, TI, IncludeEnd, Changed);
         if (AV && AV->stripPointerCasts() != Loc.Ptr->stripPointerCasts()) {
           Base = AB;
           Loc = MemoryLocation::getAfter(AV);
@@ -581,8 +605,9 @@ struct GenericCopyOpt {
       auto *II = cast<IntrinsicInst>(Def->getMemoryInst());
 
       if (IsRef) {
-        // The source-write helper skips MemoryPhi nodes. A ref read must not
-        // accept a copy relation across may-reach definitions on either path.
+        // A ref read's InitEnd is a preceding definition, rather than the
+        // read itself. Keep this separate guard against may-reach definitions
+        // between that boundary and the copy being considered.
         bool HasMemoryPhi = false;
         for (MemoryAccess *MA = InitEnd;
              MA != Def && !MSSA.isLiveOnEntryDef(MA);
@@ -607,7 +632,7 @@ struct GenericCopyOpt {
         if (Ptr->stripPointerCasts() != V->stripPointerCasts() ||
             // Obviously, define source connot be changed in between.
             hasMemoryDefBetween(MSSA, DT, DL, getSource(II),
-                                IsRef ? II : II->getNextNode(), InitEnd, IsRef,
+                                II, InitEnd, IncludeEnd,
                                 true))
           Stop = true;
         else {
@@ -635,7 +660,7 @@ struct GenericCopyOpt {
             Ptr->stripPointerCasts() != V->stripPointerCasts();
         if (IsPointerNotMatch ||
             hasMemoryDefBetween(MSSA, DT, DL, getSource(II),
-                                IsRef ? II : II->getNextNode(), InitEnd, IsRef,
+                                II, InitEnd, IncludeEnd,
                                 true))
           Stop = true;
         else {
@@ -691,7 +716,7 @@ struct GenericCopyOpt {
             Derived->stripPointerCasts() != Loc.Ptr->stripPointerCasts();
         if (IsPointerNotMatch ||
             hasMemoryDefBetween(MSSA, DT, DL, getSource(II),
-                                IsRef ? II : II->getNextNode(), InitEnd, IsRef,
+                                II, InitEnd, IncludeEnd,
                                 true))
           Stop = true;
         else {
@@ -908,9 +933,9 @@ public:
   ~CJGenericIntrinsicOptLegacyPass() = default;
 
   bool runOnFunction(Function &F) override {
-    auto &AA = this->getAnalysis<AAResultsWrapperPass>(F).getAAResults();
-    auto &MSSA = this->getAnalysis<MemorySSAWrapperPass>(F).getMSSA();
-    auto &DT = this->getAnalysis<DominatorTreeWrapperPass>(F).getDomTree();
+    auto &AA = getAnalysis<AAResultsWrapperPass>().getAAResults();
+    auto &MSSA = getAnalysis<MemorySSAWrapperPass>().getMSSA();
+    auto &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
     MemorySSAUpdater MSSAU(&MSSA);
     bool Changed = simplifyGenericInst(F, MSSAU);
 
