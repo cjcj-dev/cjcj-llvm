@@ -79,6 +79,8 @@ cl::opt<bool> CJDisablePEA("cj-disable-partial-ea",
                                   cl::Hidden, cl::init(false));
 
 GlobalVariable *getNewKlass(CallBase *I) {
+  if (I->arg_empty())
+    return nullptr;
   GlobalVariable *Klass =
       dyn_cast<GlobalVariable>(I->getArgOperand(0)->stripPointerCasts());
   if (Klass && (Klass->getMetadata("RelatedType") != 0)) {
