@@ -3063,12 +3063,14 @@ static bool rewriteCJThrowException(Module &M) {
   if (!F || F->use_empty())
     return false;
   SmallVector<CallBase *, 32> Users;
-  for (auto *U : F->users()) {
-    auto *CB = dyn_cast<CallBase>(U);
-    assert(CB != nullptr &&
-           "User of CJ_MCC_ThrowException must be call instruction");
+  for (Use &U : F->uses()) {
+    auto *CB = dyn_cast<CallBase>(U.getUser());
+    if (!CB || !CB->isCallee(&U) || isa<GCStatepointInst>(CB))
+      continue;
     Users.push_back(CB);
   }
+  if (Users.empty())
+    return false;
   std::vector<DeferredReplacement> Replacements;
   for (auto *CB : Users) {
     SafepointRecord Result;

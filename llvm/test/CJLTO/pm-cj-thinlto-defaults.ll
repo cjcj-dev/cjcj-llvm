@@ -1,4 +1,3 @@
-; XFAIL: *
 ; Basic test for the cangjie ThinLTO pipeline.
 
 ; RUN: llvm-as %s -o %t
@@ -6,11 +5,10 @@
 ; RUN:     --mllvm --cj-stack-grow --plugin-opt=no-opaque-pointers %t 2>&1 \
 ; RUN:     | FileCheck %s --check-prefix=CHECK-O
 
-; CHECK-O:      Running pass: VerifierPass
-; CHECK-O-NEXT: Running analysis: VerifierAnalysis
-; CHECK-O-NEXT: Running pass: CJRuntimeLowering
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Module
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_ThrowException
+; CHECK-O: Running pass: VerifierPass on [module]
+; CHECK-O-NEXT: Running analysis: VerifierAnalysis on [module]
+; CHECK-O-NEXT: Running pass: CJRuntimeLowering on [module]
+; CHECK-O: Running analysis: TargetLibraryAnalysis on CJ_MCC_ThrowException
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$core6String1+ER_ZN11std$FS$core6StringE
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$core6String23createStringFromLiteralE
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$core7printlnER_ZN11std$FS$core6StringE
@@ -31,859 +29,444 @@
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_C2NStub
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_N2CStub
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_OnFinalizerCreated
-; CHECK-O-NEXT: Running pass: Annotation2MetadataPass
-; CHECK-O-NEXT: Running pass: WholeProgramDevirtPass
-; CHECK-O-NEXT: Running pass: LowerTypeTestsPass
-; CHECK-O-NEXT: Invalidating analysis: VerifierAnalysis
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Module
-; CHECK-O-NEXT: Running pass: ForceFunctionAttrsPass
-; CHECK-O-NEXT: Running pass: PGOIndirectCallPromotion
-; CHECK-O-NEXT: Running analysis: ProfileSummaryAnalysis
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Module
-; CHECK-O-NEXT: Running analysis: OptimizationRemarkEmitterAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: OptimizationRemarkEmitterAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: OptimizationRemarkEmitterAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: OptimizationRemarkEmitterAnalysis on user.main
-; CHECK-O-NEXT: Running pass: InferFunctionAttrsPass
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_ThrowException
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$core6String1+ER_ZN11std$FS$core6StringE
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$core6String23createStringFromLiteralE
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$core7printlnER_ZN11std$FS$core6StringE
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$time8DateTime1-ER_ZN11std$FS$time8DateTimeE
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$time8DateTime3nowE$timeZone___0v
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$time8DateTime3nowEC_ZN11std$FS$time8TimeZoneE
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$time8Duration13toNanosecondsEv
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN13std$FS$format6Extend7Float646formatER_ZN11std$FS$core6StringE
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on llvm.cj.memset.p0i8
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on llvm.expect.i1
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on llvm.memcpy.p0i8.p0i8.i64
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on llvm.sadd.with.overflow.i64
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on rt$CreateOverflowException_msg
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_C2NStub
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_N2CStub
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_OnFinalizerCreated
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_GetObjClass
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_GetFuncPtrFromItab
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on llvm.cj.get.virtual.func
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on llvm.cj.get.interface.func
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Module
-; CHECK-O-NEXT: Running pass: CoroEarlyPass
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Module
+; CHECK-O: Running pass: CJBarrierSplit on [module]
+; CHECK-O: Running pass: CJSimpleOpt on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: CJSimpleOpt on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: CJSimpleOpt on _ZN7default4mainEv
+; CHECK-O: Running pass: CJSimpleOpt on user.main
+; CHECK-O: Running pass: GlobalDCEPass on [module]
+; CHECK-O: Running pass: CJStringPoolMerge on [module]
+; CHECK-O-NEXT: Running pass: Annotation2MetadataPass on [module]
+; CHECK-O-NEXT: Running pass: WholeProgramDevirtPass on [module]
+; CHECK-O: Running pass: LowerTypeTestsPass on [module]
+; CHECK-O: Running pass: ForceFunctionAttrsPass on [module]
+; CHECK-O-NEXT: Running pass: PGOIndirectCallPromotion on [module]
+; CHECK-O: Running pass: InferFunctionAttrsPass on [module]
+; CHECK-O: Running pass: CoroEarlyPass on [module]
+; CHECK-O: Running pass: LoopSimplifyPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: LCSSAPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: LoopSimplifyCFGPass on Loop at depth 1 containing: %block.body797E<header><exiting>,%while.body1620E<exiting>,%normal0E,%if.else1608E,%if.else1607E,%if.else1606E,%if.else1605E,%if.else1604E,%if.else1603E,%if.else1602E,%if.else1601E,%if.else1600E,%if.else1599E,%if.else1598E,%if.else1597E,%if.else1596E,%if.else1595E,%if.else1594E,%if.else1591E,%if.then1591E,%if.else1582E,%if.then1582E,%if.else1573E,%if.then1573E,%if.end1573E,%if.end1582E,%if.end1591E,%if.then1594E,%if.else1546E,%if.then1546E,%if.else1537E,%if.then1537E,%if.else1528E,%if.then1528E,%if.end1528E,%if.end1537E,%if.end1546E,%if.end1594E,%if.then1595E,%if.else1497E,%if.then1497E,%if.else1488E,%if.then1488E,%if.else1479E,%if.then1479E,%if.end1479E,%if.end1488E,%if.end1497E,%if.end1595E,%if.then1596E,%if.else1448E,%if.then1448E,%if.else1439E,%if.then1439E,%if.else1430E,%if.then1430E,%if.end1430E,%if.end1439E,%if.end1448E,%if.end1596E,%if.then1597E,%if.else1399E,%if.then1399E,%if.else1390E,%if.then1390E,%if.else1381E,%if.then1381E,%if.end1381E,%if.end1390E,%if.end1399E,%if.end1597E,%if.then1598E,%if.else1350E,%if.then1350E,%if.else1341E,%if.then1341E,%if.else1332E,%if.then1332E,%if.end1332E,%if.end1341E,%if.end1350E,%if.end1598E,%if.then1599E,%if.else1301E,%if.then1301E,%if.else1292E,%if.then1292E,%if.else1283E,%if.then1283E,%if.end1283E,%if.end1292E,%if.end1301E,%if.end1599E,%if.then1600E,%if.else1252E,%if.then1252E,%if.else1243E,%if.then1243E,%if.else1234E,%if.then1234E,%if.end1234E,%if.end1243E,%if.end1252E,%if.end1600E,%if.then1601E,%if.else1203E,%if.then1203E,%if.else1194E,%if.then1194E,%if.else1185E,%if.then1185E,%if.end1185E,%if.end1194E,%if.end1203E,%if.end1601E,%if.then1602E,%if.else1154E,%if.then1154E,%if.else1145E,%if.then1145E,%if.else1136E,%if.then1136E,%if.end1136E,%if.end1145E,%if.end1154E,%if.end1602E,%if.then1603E,%if.else1105E,%if.then1105E,%if.else1096E,%if.then1096E,%if.else1087E,%if.then1087E,%if.end1087E,%if.end1096E,%if.end1105E,%if.end1603E,%if.then1604E,%if.else1056E,%if.then1056E,%if.else1047E,%if.then1047E,%if.else1038E,%if.then1038E,%if.end1038E,%if.end1047E,%if.end1056E,%if.end1604E,%if.then1605E,%if.else1007E,%if.then1007E,%if.else998E,%if.then998E,%if.else989E,%if.then989E,%if.end989E,%if.end998E,%if.end1007E,%if.end1605E,%if.then1606E,%if.else958E,%if.then958E,%if.else949E,%if.then949E,%if.else940E,%if.then940E,%if.end940E,%if.end949E,%if.end958E,%if.end1606E,%if.then1607E,%if.else909E,%if.then909E,%if.else900E,%if.then900E,%if.else891E,%if.then891E,%if.end891E,%if.end900E,%if.end909E,%if.end1607E,%if.then1608E,%if.else860E,%if.then860E,%if.else851E,%if.then851E,%if.else842E,%if.then842E,%if.end842E,%if.end851E,%if.end860E,%if.end1608E<latch>
 ; CHECK-O-NEXT: Running pass: LowerExpectIntrinsicPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: TargetIRAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: AssumptionAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: SROAPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: EarlyCSEPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: SimplifyCFGPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: SROAPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: EarlyCSEPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O-NEXT: Running pass: CJObjectReuseOpt on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: DCEPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: LoopSimplifyPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: LCSSAPass on _ZN7default21timeBenchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: LowerExpectIntrinsicPass on _ZN7default21timeBenchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: TargetIRAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: AssumptionAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: SROAPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: EarlyCSEPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: SROAPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: EarlyCSEPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: CJObjectReuseOpt on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: DCEPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: LoopSimplifyPass on _ZN7default4mainEv
+; CHECK-O: Running pass: LCSSAPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: LowerExpectIntrinsicPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: TargetIRAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: AssumptionAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: SROAPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: EarlyCSEPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default4mainEv
+; CHECK-O: Running pass: SROAPass on _ZN7default4mainEv
+; CHECK-O: Running pass: EarlyCSEPass on _ZN7default4mainEv
+; CHECK-O: Running pass: CJObjectReuseOpt on _ZN7default4mainEv
+; CHECK-O: Running pass: DCEPass on _ZN7default4mainEv
+; CHECK-O: Running pass: LoopSimplifyPass on user.main
+; CHECK-O: Running pass: LCSSAPass on user.main
 ; CHECK-O-NEXT: Running pass: LowerExpectIntrinsicPass on user.main
 ; CHECK-O-NEXT: Running pass: SimplifyCFGPass on user.main
-; CHECK-O-NEXT: Running analysis: TargetIRAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: AssumptionAnalysis on user.main
-; CHECK-O-NEXT: Running pass: SROAPass on user.main
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Running pass: EarlyCSEPass on user.main
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Running pass: OpenMPOptPass
-; CHECK-O-NEXT: Running pass: LowerTypeTestsPass
-; CHECK-O-NEXT: Running pass: IPSCCPPass
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Running pass: CalledValuePropagationPass
-; CHECK-O-NEXT: Running pass: GlobalOptPass
-; CHECK-O-NEXT: Running analysis: BlockFrequencyAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: BranchProbabilityAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_ThrowException
-; CHECK-O-NEXT: Running pass: PromotePass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: PromotePass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: PromotePass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: PromotePass on user.main
-; CHECK-O-NEXT: Running pass: DeadArgumentEliminationPass
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Module
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Module
+; CHECK-O: Running pass: SROAPass on user.main
+; CHECK-O: Running pass: EarlyCSEPass on user.main
+; CHECK-O: Running pass: CJObjectReuseOpt on user.main
+; CHECK-O: Running pass: DCEPass on user.main
+; CHECK-O: Running pass: OpenMPOptPass on [module]
+; CHECK-O-NEXT: Running pass: LowerTypeTestsPass on [module]
+; CHECK-O-NEXT: Running pass: IPSCCPPass on [module]
+; CHECK-O: Running pass: CalledValuePropagationPass on [module]
+; CHECK-O-NEXT: Running pass: GlobalOptPass on [module]
+; CHECK-O: Running pass: PromotePass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: PromotePass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: PromotePass on _ZN7default4mainEv
+; CHECK-O: Running pass: PromotePass on user.main
+; CHECK-O: Running pass: DeadArgumentEliminationPass on [module]
+; CHECK-O: Running pass: InstCombinePass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: SimplifyCFGPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: InstCombinePass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: SimplifyCFGPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: InstCombinePass on _ZN7default4mainEv
+; CHECK-O: Running pass: SimplifyCFGPass on _ZN7default4mainEv
+; CHECK-O: Running pass: InstCombinePass on user.main
+; CHECK-O: Running pass: SimplifyCFGPass on user.main
+; CHECK-O: Running pass: ModuleInlinerWrapperPass on [module]
+; CHECK-O: Running pass: RequireAnalysisPass<llvm::GlobalsAA, llvm::Module> on [module]
+; CHECK-O: Running pass: InvalidateAnalysisPass<llvm::AAManager> on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: InvalidateAnalysisPass<llvm::AAManager> on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: InvalidateAnalysisPass<llvm::AAManager> on _ZN7default4mainEv
+; CHECK-O: Running pass: InvalidateAnalysisPass<llvm::AAManager> on user.main
+; CHECK-O: Running pass: RequireAnalysisPass<llvm::ProfileSummaryAnalysis, llvm::Module> on [module]
+; CHECK-O: Running pass: DevirtSCCRepeatedPass on (_ZN7default17benchmarkIfElseD4Ev) (1 node)
+; CHECK-O-NEXT: Running pass: InlinerPass on (_ZN7default17benchmarkIfElseD4Ev) (1 node)
+; CHECK-O-NEXT: Running pass: InlinerPass on (_ZN7default17benchmarkIfElseD4Ev) (1 node)
+; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass on (_ZN7default17benchmarkIfElseD4Ev) (1 node)
+; CHECK-O: Running pass: OpenMPOptCGSCCPass on (_ZN7default17benchmarkIfElseD4Ev) (1 node)
+; CHECK-O-NEXT: Running pass: CJDevirtualOpt on (_ZN7default17benchmarkIfElseD4Ev) (1 node)
+; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default17benchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: AssumptionAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: TargetIRAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: OptimizationRemarkEmitterAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: ScopedNoAliasAA on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: TypeBasedAA on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: OuterAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: AssumptionAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: TargetIRAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: OptimizationRemarkEmitterAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: ScopedNoAliasAA on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: TypeBasedAA on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: OuterAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: AssumptionAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: TargetIRAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: OptimizationRemarkEmitterAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: ScopedNoAliasAA on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: TypeBasedAA on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: OuterAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: InstCombinePass on user.main
-; CHECK-O-NEXT: Running analysis: AssumptionAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: TargetIRAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: OptimizationRemarkEmitterAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: AAManager on user.main
-; CHECK-O-NEXT: Running analysis: BasicAA on user.main
-; CHECK-O-NEXT: Running analysis: ScopedNoAliasAA on user.main
-; CHECK-O-NEXT: Running analysis: TypeBasedAA on user.main
-; CHECK-O-NEXT: Running analysis: OuterAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on user.main
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on user.main
-; CHECK-O-NEXT: Invalidating analysis: AAManager on user.main
-; CHECK-O-NEXT: Running pass: ModuleInlinerWrapperPass
-; CHECK-O-NEXT: Running analysis: InlineAdvisorAnalysis
-; CHECK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}Module
-; CHECK-O-NEXT: Running analysis: GlobalsAA
-; CHECK-O-NEXT: Running analysis: CallGraphAnalysis
-; CHECK-O-NEXT: Running pass: InvalidateAnalysisPass<llvm::AAManager> on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: InvalidateAnalysisPass<llvm::AAManager> on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: InvalidateAnalysisPass<llvm::AAManager> on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: InvalidateAnalysisPass<llvm::AAManager> on user.main
-; CHECK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}Module
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Module
-; CHECK-O-NEXT: Running analysis: LazyCallGraphAnalysis
-; CHECK-O-NEXT: Running analysis: FunctionAnalysisManagerCGSCCProxy on (_ZN7default17benchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running analysis: OuterAnalysisManagerProxy<{{.*}}LazyCallGraph
-; CHECK-O-NEXT: Running pass: DevirtSCCRepeatedPass on (_ZN7default17benchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running pass: InlinerPass on (_ZN7default17benchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running pass: InlinerPass on (_ZN7default17benchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass on (_ZN7default17benchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: OpenMPOptCGSCCPass on (_ZN7default17benchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: PEAPass on (_ZN7default17benchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: PartialEscapeAnalysisPass on (_ZN7default17benchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: SROAPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O-NEXT: Running pass: SCCPPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: CJPartialEscapeAnalysisPass on (_ZN7default17benchmarkIfElseD4Ev) (1 node)
+; CHECK-O: Running pass: CJSimpleOpt on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: SROAPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O-NEXT: Running pass: CJObjectReuseOpt on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: DCEPass on _ZN7default17benchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: EarlyCSEPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: MemorySSAAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: SpeculativeExecutionPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: SpeculativeExecutionPass on _ZN7default17benchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: JumpThreadingPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: LazyValueAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: CorrelatedValuePropagationPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: MemorySSAAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: LazyValueAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: LibCallsShrinkWrapPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: CorrelatedValuePropagationPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: CJGenericIntrinsicOpt on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: CJSimpleRangeAnalysisPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: SimplifyCFGPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: InstCombinePass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: LibCallsShrinkWrapPass on _ZN7default17benchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: TailCallElimPass on _ZN7default17benchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: ReassociatePass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}Function
+; CHECK-O: Running pass: ReassociatePass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: InstCombinePass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: RequireAnalysisPass<llvm::OptimizationRemarkEmitterAnalysis, llvm::Function> on _ZN7default17benchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: LoopSimplifyPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: LCSSAPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: LICMPass on Loop at depth 1 containing: %block.body797E<header><exiting>,%while.body1620E,%if.else1608E,%if.else1607E,%if.else1606E,%if.else1605E,%if.else1604E,%if.else1603E,%if.else1602E,%if.else1601E,%if.else1600E,%if.else1599E,%if.else1598E,%if.else1597E,%if.else1596E,%if.else1595E,%if.else1594E,%if.else1591E,%if.then1591E,%if.else1582E,%if.then1582E,%if.else1573E,%if.then1573E,%if.then1594E,%if.else1546E,%if.then1546E,%if.else1537E,%if.then1537E,%if.else1528E,%if.then1528E,%if.then1595E,%if.else1497E,%if.then1497E,%if.else1488E,%if.then1488E,%if.else1479E,%if.then1479E,%if.then1596E,%if.else1448E,%if.then1448E,%if.else1439E,%if.then1439E,%if.else1430E,%if.then1430E,%if.then1597E,%if.else1399E,%if.then1399E,%if.else1390E,%if.then1390E,%if.else1381E,%if.then1381E,%if.then1598E,%if.else1350E,%if.then1350E,%if.else1341E,%if.then1341E,%if.else1332E,%if.then1332E,%if.then1599E,%if.else1301E,%if.then1301E,%if.else1292E,%if.then1292E,%if.else1283E,%if.then1283E,%if.then1600E,%if.else1252E,%if.then1252E,%if.else1243E,%if.then1243E,%if.else1234E,%if.then1234E,%if.then1601E,%if.else1203E,%if.then1203E,%if.else1194E,%if.then1194E,%if.else1185E,%if.then1185E,%if.then1602E,%if.else1154E,%if.then1154E,%if.else1145E,%if.then1145E,%if.else1136E,%if.then1136E,%if.then1603E,%if.else1105E,%if.then1105E,%if.else1096E,%if.then1096E,%if.else1087E,%if.then1087E,%if.then1604E,%if.else1056E,%if.then1056E,%if.else1047E,%if.then1047E,%if.else1038E,%if.then1038E,%if.then1605E,%if.else1007E,%if.then1007E,%if.else998E,%if.then998E,%if.else989E,%if.then989E,%if.then1606E,%if.else958E,%if.then958E,%if.else949E,%if.then949E,%if.else940E,%if.then940E,%if.then1607E,%if.else909E,%if.then909E,%if.else900E,%if.then900E,%if.else891E,%if.then891E,%if.then1608E,%if.else860E,%if.then860E,%if.else851E,%if.then851E,%if.else842E,%if.then842E,%if.end1608E<latch>
+; CHECK-O-NEXT: Running pass: LoopRotatePass on Loop at depth 1 containing: %block.body797E<header><exiting>,%while.body1620E,%if.else1608E,%if.else1607E,%if.else1606E,%if.else1605E,%if.else1604E,%if.else1603E,%if.else1602E,%if.else1601E,%if.else1600E,%if.else1599E,%if.else1598E,%if.else1597E,%if.else1596E,%if.else1595E,%if.else1594E,%if.else1591E,%if.then1591E,%if.else1582E,%if.then1582E,%if.else1573E,%if.then1573E,%if.then1594E,%if.else1546E,%if.then1546E,%if.else1537E,%if.then1537E,%if.else1528E,%if.then1528E,%if.then1595E,%if.else1497E,%if.then1497E,%if.else1488E,%if.then1488E,%if.else1479E,%if.then1479E,%if.then1596E,%if.else1448E,%if.then1448E,%if.else1439E,%if.then1439E,%if.else1430E,%if.then1430E,%if.then1597E,%if.else1399E,%if.then1399E,%if.else1390E,%if.then1390E,%if.else1381E,%if.then1381E,%if.then1598E,%if.else1350E,%if.then1350E,%if.else1341E,%if.then1341E,%if.else1332E,%if.then1332E,%if.then1599E,%if.else1301E,%if.then1301E,%if.else1292E,%if.then1292E,%if.else1283E,%if.then1283E,%if.then1600E,%if.else1252E,%if.then1252E,%if.else1243E,%if.then1243E,%if.else1234E,%if.then1234E,%if.then1601E,%if.else1203E,%if.then1203E,%if.else1194E,%if.then1194E,%if.else1185E,%if.then1185E,%if.then1602E,%if.else1154E,%if.then1154E,%if.else1145E,%if.then1145E,%if.else1136E,%if.then1136E,%if.then1603E,%if.else1105E,%if.then1105E,%if.else1096E,%if.then1096E,%if.else1087E,%if.then1087E,%if.then1604E,%if.else1056E,%if.then1056E,%if.else1047E,%if.then1047E,%if.else1038E,%if.then1038E,%if.then1605E,%if.else1007E,%if.then1007E,%if.else998E,%if.then998E,%if.else989E,%if.then989E,%if.then1606E,%if.else958E,%if.then958E,%if.else949E,%if.then949E,%if.else940E,%if.then940E,%if.then1607E,%if.else909E,%if.then909E,%if.else900E,%if.then900E,%if.else891E,%if.then891E,%if.then1608E,%if.else860E,%if.then860E,%if.else851E,%if.then851E,%if.else842E,%if.then842E,%if.end1608E<latch>
+; CHECK-O-NEXT: Running pass: IndVarSimplifyPass on Loop at depth 1 containing: %while.body1620E<header>,%if.else1608E,%if.else1607E,%if.else1606E,%if.else1605E,%if.else1604E,%if.else1603E,%if.else1602E,%if.else1601E,%if.else1600E,%if.else1599E,%if.else1598E,%if.else1597E,%if.else1596E,%if.else1595E,%if.else1594E,%if.else1591E,%if.then1591E,%if.else1582E,%if.then1582E,%if.else1573E,%if.then1573E,%if.then1594E,%if.else1546E,%if.then1546E,%if.else1537E,%if.then1537E,%if.else1528E,%if.then1528E,%if.then1595E,%if.else1497E,%if.then1497E,%if.else1488E,%if.then1488E,%if.else1479E,%if.then1479E,%if.then1596E,%if.else1448E,%if.then1448E,%if.else1439E,%if.then1439E,%if.else1430E,%if.then1430E,%if.then1597E,%if.else1399E,%if.then1399E,%if.else1390E,%if.then1390E,%if.else1381E,%if.then1381E,%if.then1598E,%if.else1350E,%if.then1350E,%if.else1341E,%if.then1341E,%if.else1332E,%if.then1332E,%if.then1599E,%if.else1301E,%if.then1301E,%if.else1292E,%if.then1292E,%if.else1283E,%if.then1283E,%if.then1600E,%if.else1252E,%if.then1252E,%if.else1243E,%if.then1243E,%if.else1234E,%if.then1234E,%if.then1601E,%if.else1203E,%if.then1203E,%if.else1194E,%if.then1194E,%if.else1185E,%if.then1185E,%if.then1602E,%if.else1154E,%if.then1154E,%if.else1145E,%if.then1145E,%if.else1136E,%if.then1136E,%if.then1603E,%if.else1105E,%if.then1105E,%if.else1096E,%if.then1096E,%if.else1087E,%if.then1087E,%if.then1604E,%if.else1056E,%if.then1056E,%if.else1047E,%if.then1047E,%if.else1038E,%if.then1038E,%if.then1605E,%if.else1007E,%if.then1007E,%if.else998E,%if.then998E,%if.else989E,%if.then989E,%if.then1606E,%if.else958E,%if.then958E,%if.else949E,%if.then949E,%if.else940E,%if.then940E,%if.then1607E,%if.else909E,%if.then909E,%if.else900E,%if.then900E,%if.else891E,%if.then891E,%if.then1608E,%if.else860E,%if.then860E,%if.else851E,%if.then851E,%if.else842E,%if.then842E,%if.end1608E<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopDeletionPass on Loop at depth 1 containing: %while.body1620E<header>,%if.else1608E,%if.else1607E,%if.else1606E,%if.else1605E,%if.else1604E,%if.else1603E,%if.else1602E,%if.else1601E,%if.else1600E,%if.else1599E,%if.else1598E,%if.else1597E,%if.else1596E,%if.else1595E,%if.else1594E,%if.else1591E,%if.then1591E,%if.else1582E,%if.then1582E,%if.else1573E,%if.then1573E,%if.then1594E,%if.else1546E,%if.then1546E,%if.else1537E,%if.then1537E,%if.else1528E,%if.then1528E,%if.then1595E,%if.else1497E,%if.then1497E,%if.else1488E,%if.then1488E,%if.else1479E,%if.then1479E,%if.then1596E,%if.else1448E,%if.then1448E,%if.else1439E,%if.then1439E,%if.else1430E,%if.then1430E,%if.then1597E,%if.else1399E,%if.then1399E,%if.else1390E,%if.then1390E,%if.else1381E,%if.then1381E,%if.then1598E,%if.else1350E,%if.then1350E,%if.else1341E,%if.then1341E,%if.else1332E,%if.then1332E,%if.then1599E,%if.else1301E,%if.then1301E,%if.else1292E,%if.then1292E,%if.else1283E,%if.then1283E,%if.then1600E,%if.else1252E,%if.then1252E,%if.else1243E,%if.then1243E,%if.else1234E,%if.then1234E,%if.then1601E,%if.else1203E,%if.then1203E,%if.else1194E,%if.then1194E,%if.else1185E,%if.then1185E,%if.then1602E,%if.else1154E,%if.then1154E,%if.else1145E,%if.then1145E,%if.else1136E,%if.then1136E,%if.then1603E,%if.else1105E,%if.then1105E,%if.else1096E,%if.then1096E,%if.else1087E,%if.then1087E,%if.then1604E,%if.else1056E,%if.then1056E,%if.else1047E,%if.then1047E,%if.else1038E,%if.then1038E,%if.then1605E,%if.else1007E,%if.then1007E,%if.else998E,%if.then998E,%if.else989E,%if.then989E,%if.then1606E,%if.else958E,%if.then958E,%if.else949E,%if.then949E,%if.else940E,%if.then940E,%if.then1607E,%if.else909E,%if.then909E,%if.else900E,%if.then900E,%if.else891E,%if.then891E,%if.then1608E,%if.else860E,%if.then860E,%if.else851E,%if.then851E,%if.else842E,%if.then842E,%if.end1608E<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopInstSimplifyPass on Loop at depth 1 containing: %while.body1620E<header>,%if.else1608E,%if.else1607E,%if.else1606E,%if.else1605E,%if.else1604E,%if.else1603E,%if.else1602E,%if.else1601E,%if.else1600E,%if.else1599E,%if.else1598E,%if.else1597E,%if.else1596E,%if.else1595E,%if.else1594E,%if.else1591E,%if.then1591E,%if.else1582E,%if.then1582E,%if.else1573E,%if.then1573E,%if.then1594E,%if.else1546E,%if.then1546E,%if.else1537E,%if.then1537E,%if.else1528E,%if.then1528E,%if.then1595E,%if.else1497E,%if.then1497E,%if.else1488E,%if.then1488E,%if.else1479E,%if.then1479E,%if.then1596E,%if.else1448E,%if.then1448E,%if.else1439E,%if.then1439E,%if.else1430E,%if.then1430E,%if.then1597E,%if.else1399E,%if.then1399E,%if.else1390E,%if.then1390E,%if.else1381E,%if.then1381E,%if.then1598E,%if.else1350E,%if.then1350E,%if.else1341E,%if.then1341E,%if.else1332E,%if.then1332E,%if.then1599E,%if.else1301E,%if.then1301E,%if.else1292E,%if.then1292E,%if.else1283E,%if.then1283E,%if.then1600E,%if.else1252E,%if.then1252E,%if.else1243E,%if.then1243E,%if.else1234E,%if.then1234E,%if.then1601E,%if.else1203E,%if.then1203E,%if.else1194E,%if.then1194E,%if.else1185E,%if.then1185E,%if.then1602E,%if.else1154E,%if.then1154E,%if.else1145E,%if.then1145E,%if.else1136E,%if.then1136E,%if.then1603E,%if.else1105E,%if.then1105E,%if.else1096E,%if.then1096E,%if.else1087E,%if.then1087E,%if.then1604E,%if.else1056E,%if.then1056E,%if.else1047E,%if.then1047E,%if.else1038E,%if.then1038E,%if.then1605E,%if.else1007E,%if.then1007E,%if.else998E,%if.then998E,%if.else989E,%if.then989E,%if.then1606E,%if.else958E,%if.then958E,%if.else949E,%if.then949E,%if.else940E,%if.then940E,%if.then1607E,%if.else909E,%if.then909E,%if.else900E,%if.then900E,%if.else891E,%if.then891E,%if.then1608E,%if.else860E,%if.then860E,%if.else851E,%if.then851E,%if.else842E,%if.then842E,%if.end1608E<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopSimplifyCFGPass on Loop at depth 1 containing: %while.body1620E<header>,%if.else1608E,%if.else1607E,%if.else1606E,%if.else1605E,%if.else1604E,%if.else1603E,%if.else1602E,%if.else1601E,%if.else1600E,%if.else1599E,%if.else1598E,%if.else1597E,%if.else1596E,%if.else1595E,%if.else1594E,%if.else1591E,%if.then1591E,%if.else1582E,%if.then1582E,%if.else1573E,%if.then1573E,%if.then1594E,%if.else1546E,%if.then1546E,%if.else1537E,%if.then1537E,%if.else1528E,%if.then1528E,%if.then1595E,%if.else1497E,%if.then1497E,%if.else1488E,%if.then1488E,%if.else1479E,%if.then1479E,%if.then1596E,%if.else1448E,%if.then1448E,%if.else1439E,%if.then1439E,%if.else1430E,%if.then1430E,%if.then1597E,%if.else1399E,%if.then1399E,%if.else1390E,%if.then1390E,%if.else1381E,%if.then1381E,%if.then1598E,%if.else1350E,%if.then1350E,%if.else1341E,%if.then1341E,%if.else1332E,%if.then1332E,%if.then1599E,%if.else1301E,%if.then1301E,%if.else1292E,%if.then1292E,%if.else1283E,%if.then1283E,%if.then1600E,%if.else1252E,%if.then1252E,%if.else1243E,%if.then1243E,%if.else1234E,%if.then1234E,%if.then1601E,%if.else1203E,%if.then1203E,%if.else1194E,%if.then1194E,%if.else1185E,%if.then1185E,%if.then1602E,%if.else1154E,%if.then1154E,%if.else1145E,%if.then1145E,%if.else1136E,%if.then1136E,%if.then1603E,%if.else1105E,%if.then1105E,%if.else1096E,%if.then1096E,%if.else1087E,%if.then1087E,%if.then1604E,%if.else1056E,%if.then1056E,%if.else1047E,%if.then1047E,%if.else1038E,%if.then1038E,%if.then1605E,%if.else1007E,%if.then1007E,%if.else998E,%if.then998E,%if.else989E,%if.then989E,%if.then1606E,%if.else958E,%if.then958E,%if.else949E,%if.then949E,%if.else940E,%if.then940E,%if.then1607E,%if.else909E,%if.then909E,%if.else900E,%if.then900E,%if.else891E,%if.then891E,%if.then1608E,%if.else860E,%if.then860E,%if.else851E,%if.then851E,%if.else842E,%if.then842E,%if.end1608E<latch><exiting>
+; CHECK-O-NEXT: Running pass: LICMPass on Loop at depth 1 containing: %while.body1620E<header>,%if.else1608E,%if.else1607E,%if.else1606E,%if.else1605E,%if.else1604E,%if.else1603E,%if.else1602E,%if.else1601E,%if.else1600E,%if.else1599E,%if.else1598E,%if.else1597E,%if.else1596E,%if.else1595E,%if.else1594E,%if.else1591E,%if.then1591E,%if.else1582E,%if.then1582E,%if.else1573E,%if.then1573E,%if.then1594E,%if.else1546E,%if.then1546E,%if.else1537E,%if.then1537E,%if.else1528E,%if.then1528E,%if.then1595E,%if.else1497E,%if.then1497E,%if.else1488E,%if.then1488E,%if.else1479E,%if.then1479E,%if.then1596E,%if.else1448E,%if.then1448E,%if.else1439E,%if.then1439E,%if.else1430E,%if.then1430E,%if.then1597E,%if.else1399E,%if.then1399E,%if.else1390E,%if.then1390E,%if.else1381E,%if.then1381E,%if.then1598E,%if.else1350E,%if.then1350E,%if.else1341E,%if.then1341E,%if.else1332E,%if.then1332E,%if.then1599E,%if.else1301E,%if.then1301E,%if.else1292E,%if.then1292E,%if.else1283E,%if.then1283E,%if.then1600E,%if.else1252E,%if.then1252E,%if.else1243E,%if.then1243E,%if.else1234E,%if.then1234E,%if.then1601E,%if.else1203E,%if.then1203E,%if.else1194E,%if.then1194E,%if.else1185E,%if.then1185E,%if.then1602E,%if.else1154E,%if.then1154E,%if.else1145E,%if.then1145E,%if.else1136E,%if.then1136E,%if.then1603E,%if.else1105E,%if.then1105E,%if.else1096E,%if.then1096E,%if.else1087E,%if.then1087E,%if.then1604E,%if.else1056E,%if.then1056E,%if.else1047E,%if.then1047E,%if.else1038E,%if.then1038E,%if.then1605E,%if.else1007E,%if.then1007E,%if.else998E,%if.then998E,%if.else989E,%if.then989E,%if.then1606E,%if.else958E,%if.then958E,%if.else949E,%if.then949E,%if.else940E,%if.then940E,%if.then1607E,%if.else909E,%if.then909E,%if.else900E,%if.then900E,%if.else891E,%if.then891E,%if.then1608E,%if.else860E,%if.then860E,%if.else851E,%if.then851E,%if.else842E,%if.then842E,%if.end1608E<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopRotatePass on Loop at depth 1 containing: %while.body1620E<header>,%if.else1608E,%if.else1607E,%if.else1606E,%if.else1605E,%if.else1604E,%if.else1603E,%if.else1602E,%if.else1601E,%if.else1600E,%if.else1599E,%if.else1598E,%if.else1597E,%if.else1596E,%if.else1595E,%if.else1594E,%if.else1591E,%if.then1591E,%if.else1582E,%if.then1582E,%if.else1573E,%if.then1573E,%if.then1594E,%if.else1546E,%if.then1546E,%if.else1537E,%if.then1537E,%if.else1528E,%if.then1528E,%if.then1595E,%if.else1497E,%if.then1497E,%if.else1488E,%if.then1488E,%if.else1479E,%if.then1479E,%if.then1596E,%if.else1448E,%if.then1448E,%if.else1439E,%if.then1439E,%if.else1430E,%if.then1430E,%if.then1597E,%if.else1399E,%if.then1399E,%if.else1390E,%if.then1390E,%if.else1381E,%if.then1381E,%if.then1598E,%if.else1350E,%if.then1350E,%if.else1341E,%if.then1341E,%if.else1332E,%if.then1332E,%if.then1599E,%if.else1301E,%if.then1301E,%if.else1292E,%if.then1292E,%if.else1283E,%if.then1283E,%if.then1600E,%if.else1252E,%if.then1252E,%if.else1243E,%if.then1243E,%if.else1234E,%if.then1234E,%if.then1601E,%if.else1203E,%if.then1203E,%if.else1194E,%if.then1194E,%if.else1185E,%if.then1185E,%if.then1602E,%if.else1154E,%if.then1154E,%if.else1145E,%if.then1145E,%if.else1136E,%if.then1136E,%if.then1603E,%if.else1105E,%if.then1105E,%if.else1096E,%if.then1096E,%if.else1087E,%if.then1087E,%if.then1604E,%if.else1056E,%if.then1056E,%if.else1047E,%if.then1047E,%if.else1038E,%if.then1038E,%if.then1605E,%if.else1007E,%if.then1007E,%if.else998E,%if.then998E,%if.else989E,%if.then989E,%if.then1606E,%if.else958E,%if.then958E,%if.else949E,%if.then949E,%if.else940E,%if.then940E,%if.then1607E,%if.else909E,%if.then909E,%if.else900E,%if.then900E,%if.else891E,%if.then891E,%if.then1608E,%if.else860E,%if.then860E,%if.else851E,%if.then851E,%if.else842E,%if.then842E,%if.end1608E<latch><exiting>
+; CHECK-O-NEXT: Running pass: LICMPass on Loop at depth 1 containing: %while.body1620E<header>,%if.else1608E,%if.else1607E,%if.else1606E,%if.else1605E,%if.else1604E,%if.else1603E,%if.else1602E,%if.else1601E,%if.else1600E,%if.else1599E,%if.else1598E,%if.else1597E,%if.else1596E,%if.else1595E,%if.else1594E,%if.else1591E,%if.then1591E,%if.else1582E,%if.then1582E,%if.else1573E,%if.then1573E,%if.then1594E,%if.else1546E,%if.then1546E,%if.else1537E,%if.then1537E,%if.else1528E,%if.then1528E,%if.then1595E,%if.else1497E,%if.then1497E,%if.else1488E,%if.then1488E,%if.else1479E,%if.then1479E,%if.then1596E,%if.else1448E,%if.then1448E,%if.else1439E,%if.then1439E,%if.else1430E,%if.then1430E,%if.then1597E,%if.else1399E,%if.then1399E,%if.else1390E,%if.then1390E,%if.else1381E,%if.then1381E,%if.then1598E,%if.else1350E,%if.then1350E,%if.else1341E,%if.then1341E,%if.else1332E,%if.then1332E,%if.then1599E,%if.else1301E,%if.then1301E,%if.else1292E,%if.then1292E,%if.else1283E,%if.then1283E,%if.then1600E,%if.else1252E,%if.then1252E,%if.else1243E,%if.then1243E,%if.else1234E,%if.then1234E,%if.then1601E,%if.else1203E,%if.then1203E,%if.else1194E,%if.then1194E,%if.else1185E,%if.then1185E,%if.then1602E,%if.else1154E,%if.then1154E,%if.else1145E,%if.then1145E,%if.else1136E,%if.then1136E,%if.then1603E,%if.else1105E,%if.then1105E,%if.else1096E,%if.then1096E,%if.else1087E,%if.then1087E,%if.then1604E,%if.else1056E,%if.then1056E,%if.else1047E,%if.then1047E,%if.else1038E,%if.then1038E,%if.then1605E,%if.else1007E,%if.then1007E,%if.else998E,%if.then998E,%if.else989E,%if.then989E,%if.then1606E,%if.else958E,%if.then958E,%if.else949E,%if.then949E,%if.else940E,%if.then940E,%if.then1607E,%if.else909E,%if.then909E,%if.else900E,%if.then900E,%if.else891E,%if.then891E,%if.then1608E,%if.else860E,%if.then860E,%if.else851E,%if.then851E,%if.else842E,%if.then842E,%if.end1608E<latch><exiting>
+; CHECK-O-NEXT: Running pass: SimpleLoopUnswitchPass on Loop at depth 1 containing: %while.body1620E<header>,%if.else1608E,%if.else1607E,%if.else1606E,%if.else1605E,%if.else1604E,%if.else1603E,%if.else1602E,%if.else1601E,%if.else1600E,%if.else1599E,%if.else1598E,%if.else1597E,%if.else1596E,%if.else1595E,%if.else1594E,%if.else1591E,%if.then1591E,%if.else1582E,%if.then1582E,%if.else1573E,%if.then1573E,%if.then1594E,%if.else1546E,%if.then1546E,%if.else1537E,%if.then1537E,%if.else1528E,%if.then1528E,%if.then1595E,%if.else1497E,%if.then1497E,%if.else1488E,%if.then1488E,%if.else1479E,%if.then1479E,%if.then1596E,%if.else1448E,%if.then1448E,%if.else1439E,%if.then1439E,%if.else1430E,%if.then1430E,%if.then1597E,%if.else1399E,%if.then1399E,%if.else1390E,%if.then1390E,%if.else1381E,%if.then1381E,%if.then1598E,%if.else1350E,%if.then1350E,%if.else1341E,%if.then1341E,%if.else1332E,%if.then1332E,%if.then1599E,%if.else1301E,%if.then1301E,%if.else1292E,%if.then1292E,%if.else1283E,%if.then1283E,%if.then1600E,%if.else1252E,%if.then1252E,%if.else1243E,%if.then1243E,%if.else1234E,%if.then1234E,%if.then1601E,%if.else1203E,%if.then1203E,%if.else1194E,%if.then1194E,%if.else1185E,%if.then1185E,%if.then1602E,%if.else1154E,%if.then1154E,%if.else1145E,%if.then1145E,%if.else1136E,%if.then1136E,%if.then1603E,%if.else1105E,%if.then1105E,%if.else1096E,%if.then1096E,%if.else1087E,%if.then1087E,%if.then1604E,%if.else1056E,%if.then1056E,%if.else1047E,%if.then1047E,%if.else1038E,%if.then1038E,%if.then1605E,%if.else1007E,%if.then1007E,%if.else998E,%if.then998E,%if.else989E,%if.then989E,%if.then1606E,%if.else958E,%if.then958E,%if.else949E,%if.then949E,%if.else940E,%if.then940E,%if.then1607E,%if.else909E,%if.then909E,%if.else900E,%if.then900E,%if.else891E,%if.then891E,%if.then1608E,%if.else860E,%if.then860E,%if.else851E,%if.then851E,%if.else842E,%if.then842E,%if.end1608E<latch><exiting>
+; CHECK-O: Running pass: SimplifyCFGPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: InstCombinePass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: CJLoopFloatOpt on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: LoopSimplifyPass on _ZN7default17benchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: LCSSAPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: MemorySSAAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: ScalarEvolutionAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: LoopRotatePass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: IndVarSimplifyPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopDeletionPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopInstSimplifyPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopSimplifyCFGPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LICMPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopRotatePass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LICMPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: SimpleLoopUnswitchPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Clearing all analysis results for: <possibly invalidated loop>
-; CHECK-O-NEXT: Invalidating analysis: MemorySSAAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: ScalarEvolutionAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: LoopSimplifyPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: LCSSAPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: ScalarEvolutionAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: LoopIdiomRecognizePass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: IndVarSimplifyPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopDeletionPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopFullUnrollPass on Loop at depth 1
+; CHECK-O: Running pass: LoopIdiomRecognizePass on Loop at depth 1 containing: %while.body1620E<header>,%if.else1608E,%if.else1607E,%if.else1606E,%if.else1605E,%if.else1604E,%if.else1603E,%if.else1602E,%if.else1601E,%if.else1600E,%if.else1599E,%if.else1598E,%if.else1597E,%if.else1596E,%if.else1595E,%if.else1594E,%if.else1591E,%if.then1591E,%if.else1582E,%if.then1582E,%if.else1573E,%if.then1573E,%if.then1594E,%if.else1546E,%if.then1546E,%if.else1537E,%if.then1537E,%if.else1528E,%if.then1528E,%if.then1595E,%if.else1497E,%if.then1497E,%if.else1488E,%if.then1488E,%if.else1479E,%if.then1479E,%if.then1596E,%if.else1448E,%if.then1448E,%if.else1439E,%if.then1439E,%if.else1430E,%if.then1430E,%if.then1597E,%if.else1399E,%if.then1399E,%if.else1390E,%if.then1390E,%if.else1381E,%if.then1381E,%if.then1598E,%if.else1350E,%if.then1350E,%if.else1341E,%if.then1341E,%if.else1332E,%if.then1332E,%if.then1599E,%if.else1301E,%if.then1301E,%if.else1292E,%if.then1292E,%if.else1283E,%if.then1283E,%if.then1600E,%if.else1252E,%if.then1252E,%if.else1243E,%if.then1243E,%if.else1234E,%if.then1234E,%if.then1601E,%if.else1203E,%if.then1203E,%if.else1194E,%if.then1194E,%if.else1185E,%if.then1185E,%if.then1602E,%if.else1154E,%if.then1154E,%if.else1145E,%if.then1145E,%if.else1136E,%if.then1136E,%if.then1603E,%if.else1105E,%if.then1105E,%if.else1096E,%if.then1096E,%if.else1087E,%if.then1087E,%if.then1604E,%if.else1056E,%if.then1056E,%if.else1047E,%if.then1047E,%if.else1038E,%if.then1038E,%if.then1605E,%if.else1007E,%if.then1007E,%if.else998E,%if.then998E,%if.else989E,%if.then989E,%if.then1606E,%if.else958E,%if.then958E,%if.else949E,%if.then949E,%if.else940E,%if.then940E,%if.then1607E,%if.else909E,%if.then909E,%if.else900E,%if.then900E,%if.else891E,%if.then891E,%if.then1608E,%if.else860E,%if.then860E,%if.else851E,%if.then851E,%if.else842E,%if.then842E,%if.end1608E<latch><exiting>
+; CHECK-O-NEXT: Running pass: IndVarSimplifyPass on Loop at depth 1 containing: %while.body1620E<header>,%if.else1608E,%if.else1607E,%if.else1606E,%if.else1605E,%if.else1604E,%if.else1603E,%if.else1602E,%if.else1601E,%if.else1600E,%if.else1599E,%if.else1598E,%if.else1597E,%if.else1596E,%if.else1595E,%if.else1594E,%if.else1591E,%if.then1591E,%if.else1582E,%if.then1582E,%if.else1573E,%if.then1573E,%if.then1594E,%if.else1546E,%if.then1546E,%if.else1537E,%if.then1537E,%if.else1528E,%if.then1528E,%if.then1595E,%if.else1497E,%if.then1497E,%if.else1488E,%if.then1488E,%if.else1479E,%if.then1479E,%if.then1596E,%if.else1448E,%if.then1448E,%if.else1439E,%if.then1439E,%if.else1430E,%if.then1430E,%if.then1597E,%if.else1399E,%if.then1399E,%if.else1390E,%if.then1390E,%if.else1381E,%if.then1381E,%if.then1598E,%if.else1350E,%if.then1350E,%if.else1341E,%if.then1341E,%if.else1332E,%if.then1332E,%if.then1599E,%if.else1301E,%if.then1301E,%if.else1292E,%if.then1292E,%if.else1283E,%if.then1283E,%if.then1600E,%if.else1252E,%if.then1252E,%if.else1243E,%if.then1243E,%if.else1234E,%if.then1234E,%if.then1601E,%if.else1203E,%if.then1203E,%if.else1194E,%if.then1194E,%if.else1185E,%if.then1185E,%if.then1602E,%if.else1154E,%if.then1154E,%if.else1145E,%if.then1145E,%if.else1136E,%if.then1136E,%if.then1603E,%if.else1105E,%if.then1105E,%if.else1096E,%if.then1096E,%if.else1087E,%if.then1087E,%if.then1604E,%if.else1056E,%if.then1056E,%if.else1047E,%if.then1047E,%if.else1038E,%if.then1038E,%if.then1605E,%if.else1007E,%if.then1007E,%if.else998E,%if.then998E,%if.else989E,%if.then989E,%if.then1606E,%if.else958E,%if.then958E,%if.else949E,%if.then949E,%if.else940E,%if.then940E,%if.then1607E,%if.else909E,%if.then909E,%if.else900E,%if.then900E,%if.else891E,%if.then891E,%if.then1608E,%if.else860E,%if.then860E,%if.else851E,%if.then851E,%if.else842E,%if.then842E,%if.end1608E<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopDeletionPass on Loop at depth 1 containing: %while.body1620E<header>,%if.else1608E,%if.else1607E,%if.else1606E,%if.else1605E,%if.else1604E,%if.else1603E,%if.else1602E,%if.else1601E,%if.else1600E,%if.else1599E,%if.else1598E,%if.else1597E,%if.else1596E,%if.else1595E,%if.else1594E,%if.else1591E,%if.then1591E,%if.else1582E,%if.then1582E,%if.else1573E,%if.then1573E,%if.then1594E,%if.else1546E,%if.then1546E,%if.else1537E,%if.then1537E,%if.else1528E,%if.then1528E,%if.then1595E,%if.else1497E,%if.then1497E,%if.else1488E,%if.then1488E,%if.else1479E,%if.then1479E,%if.then1596E,%if.else1448E,%if.then1448E,%if.else1439E,%if.then1439E,%if.else1430E,%if.then1430E,%if.then1597E,%if.else1399E,%if.then1399E,%if.else1390E,%if.then1390E,%if.else1381E,%if.then1381E,%if.then1598E,%if.else1350E,%if.then1350E,%if.else1341E,%if.then1341E,%if.else1332E,%if.then1332E,%if.then1599E,%if.else1301E,%if.then1301E,%if.else1292E,%if.then1292E,%if.else1283E,%if.then1283E,%if.then1600E,%if.else1252E,%if.then1252E,%if.else1243E,%if.then1243E,%if.else1234E,%if.then1234E,%if.then1601E,%if.else1203E,%if.then1203E,%if.else1194E,%if.then1194E,%if.else1185E,%if.then1185E,%if.then1602E,%if.else1154E,%if.then1154E,%if.else1145E,%if.then1145E,%if.else1136E,%if.then1136E,%if.then1603E,%if.else1105E,%if.then1105E,%if.else1096E,%if.then1096E,%if.else1087E,%if.then1087E,%if.then1604E,%if.else1056E,%if.then1056E,%if.else1047E,%if.then1047E,%if.else1038E,%if.then1038E,%if.then1605E,%if.else1007E,%if.then1007E,%if.else998E,%if.then998E,%if.else989E,%if.then989E,%if.then1606E,%if.else958E,%if.then958E,%if.else949E,%if.then949E,%if.else940E,%if.then940E,%if.then1607E,%if.else909E,%if.then909E,%if.else900E,%if.then900E,%if.else891E,%if.then891E,%if.then1608E,%if.else860E,%if.then860E,%if.else851E,%if.then851E,%if.else842E,%if.then842E,%if.end1608E<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopFullUnrollPass on Loop at depth 1 containing: %while.body1620E<header>,%if.else1608E,%if.else1607E,%if.else1606E,%if.else1605E,%if.else1604E,%if.else1603E,%if.else1602E,%if.else1601E,%if.else1600E,%if.else1599E,%if.else1598E,%if.else1597E,%if.else1596E,%if.else1595E,%if.else1594E,%if.else1591E,%if.then1591E,%if.else1582E,%if.then1582E,%if.else1573E,%if.then1573E,%if.then1594E,%if.else1546E,%if.then1546E,%if.else1537E,%if.then1537E,%if.else1528E,%if.then1528E,%if.then1595E,%if.else1497E,%if.then1497E,%if.else1488E,%if.then1488E,%if.else1479E,%if.then1479E,%if.then1596E,%if.else1448E,%if.then1448E,%if.else1439E,%if.then1439E,%if.else1430E,%if.then1430E,%if.then1597E,%if.else1399E,%if.then1399E,%if.else1390E,%if.then1390E,%if.else1381E,%if.then1381E,%if.then1598E,%if.else1350E,%if.then1350E,%if.else1341E,%if.then1341E,%if.else1332E,%if.then1332E,%if.then1599E,%if.else1301E,%if.then1301E,%if.else1292E,%if.then1292E,%if.else1283E,%if.then1283E,%if.then1600E,%if.else1252E,%if.then1252E,%if.else1243E,%if.then1243E,%if.else1234E,%if.then1234E,%if.then1601E,%if.else1203E,%if.then1203E,%if.else1194E,%if.then1194E,%if.else1185E,%if.then1185E,%if.then1602E,%if.else1154E,%if.then1154E,%if.else1145E,%if.then1145E,%if.else1136E,%if.then1136E,%if.then1603E,%if.else1105E,%if.then1105E,%if.else1096E,%if.then1096E,%if.else1087E,%if.then1087E,%if.then1604E,%if.else1056E,%if.then1056E,%if.else1047E,%if.then1047E,%if.else1038E,%if.then1038E,%if.then1605E,%if.else1007E,%if.then1007E,%if.else998E,%if.then998E,%if.else989E,%if.then989E,%if.then1606E,%if.else958E,%if.then958E,%if.else949E,%if.then949E,%if.else940E,%if.then940E,%if.then1607E,%if.else909E,%if.then909E,%if.else900E,%if.then900E,%if.else891E,%if.then891E,%if.then1608E,%if.else860E,%if.then860E,%if.else851E,%if.then851E,%if.else842E,%if.then842E,%if.end1608E<latch><exiting>
 ; CHECK-O-NEXT: Running pass: SROAPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Clearing all analysis results for: <possibly invalidated loop>
-; CHECK-O-NEXT: Invalidating analysis: ScalarEvolutionAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Function
 ; CHECK-O-NEXT: Running pass: MergedLoadStoreMotionPass on _ZN7default17benchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: GVNPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: MemoryDependenceAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: PhiValuesAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: PhiValuesAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: MemoryDependenceAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: SCCPPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: BDCEPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DemandedBitsAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: DemandedBitsAnalysis on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: SCCPPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: BDCEPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: InstCombinePass on _ZN7default17benchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: JumpThreadingPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: LazyValueAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: CorrelatedValuePropagationPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: LazyValueAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: ADCEPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: MemCpyOptPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: MemorySSAAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: DSEPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: CorrelatedValuePropagationPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: ADCEPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: MemCpyOptPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: CJRSSCEPass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O-NEXT: Running pass: CJObjectReuseOpt on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: DSEPass on _ZN7default17benchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: LoopSimplifyPass on _ZN7default17benchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: LCSSAPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: ScalarEvolutionAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: LICMPass on Loop at depth 1
+; CHECK-O: Running pass: LICMPass on Loop at depth 1 containing: %while.body1620E<header>,%if.else1608E,%if.else1607E,%if.else1606E,%if.else1605E,%if.else1604E,%if.else1603E,%if.else1602E,%if.else1601E,%if.else1600E,%if.else1599E,%if.else1598E,%if.else1597E,%if.else1596E,%if.else1595E,%if.else1594E,%if.else1591E,%if.then1591E,%if.else1582E,%if.then1582E,%if.else1573E,%if.then1573E,%if.then1594E,%if.else1546E,%if.then1546E,%if.else1537E,%if.then1537E,%if.else1528E,%if.then1528E,%if.then1595E,%if.else1497E,%if.then1497E,%if.else1488E,%if.then1488E,%if.else1479E,%if.then1479E,%if.then1596E,%if.else1448E,%if.then1448E,%if.else1439E,%if.then1439E,%if.else1430E,%if.then1430E,%if.then1597E,%if.else1399E,%if.then1399E,%if.else1390E,%if.then1390E,%if.else1381E,%if.then1381E,%if.then1598E,%if.else1350E,%if.then1350E,%if.else1341E,%if.then1341E,%if.else1332E,%if.then1332E,%if.then1599E,%if.else1301E,%if.then1301E,%if.else1292E,%if.then1292E,%if.else1283E,%if.then1283E,%if.then1600E,%if.else1252E,%if.then1252E,%if.else1243E,%if.then1243E,%if.else1234E,%if.then1234E,%if.then1601E,%if.else1203E,%if.then1203E,%if.else1194E,%if.then1194E,%if.else1185E,%if.then1185E,%if.then1602E,%if.else1154E,%if.then1154E,%if.else1145E,%if.then1145E,%if.else1136E,%if.then1136E,%if.then1603E,%if.else1105E,%if.then1105E,%if.else1096E,%if.then1096E,%if.else1087E,%if.then1087E,%if.then1604E,%if.else1056E,%if.then1056E,%if.else1047E,%if.then1047E,%if.else1038E,%if.then1038E,%if.then1605E,%if.else1007E,%if.then1007E,%if.else998E,%if.then998E,%if.else989E,%if.then989E,%if.then1606E,%if.else958E,%if.then958E,%if.else949E,%if.then949E,%if.else940E,%if.then940E,%if.then1607E,%if.else909E,%if.then909E,%if.else900E,%if.then900E,%if.else891E,%if.then891E,%if.then1608E,%if.else860E,%if.then860E,%if.else851E,%if.then851E,%if.else842E,%if.then842E,%if.end1608E<latch><exiting>
 ; CHECK-O-NEXT: Running pass: CoroElidePass on _ZN7default17benchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: PostDominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: MemorySSAAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: ScalarEvolutionAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: ShouldNotRunFunctionPassesAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: CoroSplitPass on (_ZN7default17benchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Invalidating analysis: ShouldNotRunFunctionPassesAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: FunctionAnalysisManagerCGSCCProxy on (_ZN7default21timeBenchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running analysis: OuterAnalysisManagerProxy<{{.*}}LazyCallGraph
-; CHECK-O-NEXT: Running pass: DevirtSCCRepeatedPass on (_ZN7default21timeBenchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running pass: InlinerPass on (_ZN7default21timeBenchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running pass: InlinerPass on (_ZN7default21timeBenchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running analysis: BlockFrequencyAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: BranchProbabilityAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: BlockFrequencyAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: BranchProbabilityAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: PostDominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: BranchProbabilityAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: BlockFrequencyAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Clearing all analysis results for: _ZN7default17benchmarkIfElseD4Ev
-; CHECK-O-NEXT: Clearing all analysis results for: (_ZN7default17benchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass on (_ZN7default21timeBenchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: OpenMPOptCGSCCPass on (_ZN7default21timeBenchmarkIfElseD4Ev)
+; CHECK-O: Running pass: InstCombinePass on _ZN7default17benchmarkIfElseD4Ev
+; CHECK-O: Running pass: CoroSplitPass on (_ZN7default17benchmarkIfElseD4Ev) (1 node)
+; CHECK-O: Running pass: DevirtSCCRepeatedPass on (_ZN7default21timeBenchmarkIfElseD4Ev) (1 node)
+; CHECK-O-NEXT: Running pass: InlinerPass on (_ZN7default21timeBenchmarkIfElseD4Ev) (1 node)
+; CHECK-O-NEXT: Running pass: InlinerPass on (_ZN7default21timeBenchmarkIfElseD4Ev) (1 node)
+; CHECK-O: Running pass: PostOrderFunctionAttrsPass on (_ZN7default21timeBenchmarkIfElseD4Ev) (1 node)
+; CHECK-O: Running pass: OpenMPOptCGSCCPass on (_ZN7default21timeBenchmarkIfElseD4Ev) (1 node)
+; CHECK-O-NEXT: Running pass: CJDevirtualOpt on (_ZN7default21timeBenchmarkIfElseD4Ev) (1 node)
 ; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: PEAPass on (_ZN7default21timeBenchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: PartialEscapeAnalysisPass on (_ZN7default21timeBenchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: SROAPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: InstCombinePass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O-NEXT: Running pass: SCCPPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: CJPartialEscapeAnalysisPass on (_ZN7default21timeBenchmarkIfElseD4Ev) (1 node)
+; CHECK-O: Running pass: CJSimpleOpt on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: SROAPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O-NEXT: Running pass: CJObjectReuseOpt on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: DCEPass on _ZN7default21timeBenchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: EarlyCSEPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: MemorySSAAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: SpeculativeExecutionPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: SpeculativeExecutionPass on _ZN7default21timeBenchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: JumpThreadingPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: LazyValueAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: CorrelatedValuePropagationPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: MemorySSAAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: LazyValueAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: LibCallsShrinkWrapPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: CorrelatedValuePropagationPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: CJGenericIntrinsicOpt on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O-NEXT: Running pass: CJSimpleRangeAnalysisPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: SimplifyCFGPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: InstCombinePass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: LibCallsShrinkWrapPass on _ZN7default21timeBenchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: TailCallElimPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: ReassociatePass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: SimplifyCFGPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: ReassociatePass on _ZN7default21timeBenchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}Function
+; CHECK-O-NEXT: Running pass: RequireAnalysisPass<llvm::OptimizationRemarkEmitterAnalysis, llvm::Function> on _ZN7default21timeBenchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: LoopSimplifyPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: LCSSAPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: LICMPass on Loop at depth 1 containing: %while.body1620E.i<header>,%if.else1608E.i,%if.else1607E.i,%if.else1606E.i,%if.else1605E.i,%if.else1604E.i,%if.else1603E.i,%if.else1602E.i,%if.else1601E.i,%if.else1600E.i,%if.else1599E.i,%if.else1598E.i,%if.else1597E.i,%if.else1596E.i,%if.else1595E.i,%if.else1594E.i,%if.then1591E.i,%if.then1594E.i,%if.then1546E.i,%if.then1595E.i,%if.then1497E.i,%if.then1596E.i,%if.then1448E.i,%if.then1597E.i,%if.then1399E.i,%if.then1598E.i,%if.then1350E.i,%if.then1599E.i,%if.then1301E.i,%if.then1600E.i,%if.then1252E.i,%if.then1601E.i,%if.then1203E.i,%if.then1602E.i,%if.then1154E.i,%if.then1603E.i,%if.then1105E.i,%if.then1604E.i,%if.then1056E.i,%if.then1605E.i,%if.then1007E.i,%if.then1606E.i,%if.then958E.i,%if.then1607E.i,%if.then909E.i,%if.then1608E.i,%if.then860E.i,%if.end1608E.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopRotatePass on Loop at depth 1 containing: %while.body1620E.i<header>,%if.else1608E.i,%if.else1607E.i,%if.else1606E.i,%if.else1605E.i,%if.else1604E.i,%if.else1603E.i,%if.else1602E.i,%if.else1601E.i,%if.else1600E.i,%if.else1599E.i,%if.else1598E.i,%if.else1597E.i,%if.else1596E.i,%if.else1595E.i,%if.else1594E.i,%if.then1591E.i,%if.then1594E.i,%if.then1546E.i,%if.then1595E.i,%if.then1497E.i,%if.then1596E.i,%if.then1448E.i,%if.then1597E.i,%if.then1399E.i,%if.then1598E.i,%if.then1350E.i,%if.then1599E.i,%if.then1301E.i,%if.then1600E.i,%if.then1252E.i,%if.then1601E.i,%if.then1203E.i,%if.then1602E.i,%if.then1154E.i,%if.then1603E.i,%if.then1105E.i,%if.then1604E.i,%if.then1056E.i,%if.then1605E.i,%if.then1007E.i,%if.then1606E.i,%if.then958E.i,%if.then1607E.i,%if.then909E.i,%if.then1608E.i,%if.then860E.i,%if.end1608E.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: IndVarSimplifyPass on Loop at depth 1 containing: %while.body1620E.i<header>,%if.else1608E.i,%if.else1607E.i,%if.else1606E.i,%if.else1605E.i,%if.else1604E.i,%if.else1603E.i,%if.else1602E.i,%if.else1601E.i,%if.else1600E.i,%if.else1599E.i,%if.else1598E.i,%if.else1597E.i,%if.else1596E.i,%if.else1595E.i,%if.else1594E.i,%if.then1591E.i,%if.then1594E.i,%if.then1546E.i,%if.then1595E.i,%if.then1497E.i,%if.then1596E.i,%if.then1448E.i,%if.then1597E.i,%if.then1399E.i,%if.then1598E.i,%if.then1350E.i,%if.then1599E.i,%if.then1301E.i,%if.then1600E.i,%if.then1252E.i,%if.then1601E.i,%if.then1203E.i,%if.then1602E.i,%if.then1154E.i,%if.then1603E.i,%if.then1105E.i,%if.then1604E.i,%if.then1056E.i,%if.then1605E.i,%if.then1007E.i,%if.then1606E.i,%if.then958E.i,%if.then1607E.i,%if.then909E.i,%if.then1608E.i,%if.then860E.i,%if.end1608E.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopDeletionPass on Loop at depth 1 containing: %while.body1620E.i<header>,%if.else1608E.i,%if.else1607E.i,%if.else1606E.i,%if.else1605E.i,%if.else1604E.i,%if.else1603E.i,%if.else1602E.i,%if.else1601E.i,%if.else1600E.i,%if.else1599E.i,%if.else1598E.i,%if.else1597E.i,%if.else1596E.i,%if.else1595E.i,%if.else1594E.i,%if.then1591E.i,%if.then1594E.i,%if.then1546E.i,%if.then1595E.i,%if.then1497E.i,%if.then1596E.i,%if.then1448E.i,%if.then1597E.i,%if.then1399E.i,%if.then1598E.i,%if.then1350E.i,%if.then1599E.i,%if.then1301E.i,%if.then1600E.i,%if.then1252E.i,%if.then1601E.i,%if.then1203E.i,%if.then1602E.i,%if.then1154E.i,%if.then1603E.i,%if.then1105E.i,%if.then1604E.i,%if.then1056E.i,%if.then1605E.i,%if.then1007E.i,%if.then1606E.i,%if.then958E.i,%if.then1607E.i,%if.then909E.i,%if.then1608E.i,%if.then860E.i,%if.end1608E.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopInstSimplifyPass on Loop at depth 1 containing: %while.body1620E.i<header>,%if.else1608E.i,%if.else1607E.i,%if.else1606E.i,%if.else1605E.i,%if.else1604E.i,%if.else1603E.i,%if.else1602E.i,%if.else1601E.i,%if.else1600E.i,%if.else1599E.i,%if.else1598E.i,%if.else1597E.i,%if.else1596E.i,%if.else1595E.i,%if.else1594E.i,%if.then1591E.i,%if.then1594E.i,%if.then1546E.i,%if.then1595E.i,%if.then1497E.i,%if.then1596E.i,%if.then1448E.i,%if.then1597E.i,%if.then1399E.i,%if.then1598E.i,%if.then1350E.i,%if.then1599E.i,%if.then1301E.i,%if.then1600E.i,%if.then1252E.i,%if.then1601E.i,%if.then1203E.i,%if.then1602E.i,%if.then1154E.i,%if.then1603E.i,%if.then1105E.i,%if.then1604E.i,%if.then1056E.i,%if.then1605E.i,%if.then1007E.i,%if.then1606E.i,%if.then958E.i,%if.then1607E.i,%if.then909E.i,%if.then1608E.i,%if.then860E.i,%if.end1608E.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopSimplifyCFGPass on Loop at depth 1 containing: %while.body1620E.i<header>,%if.else1608E.i,%if.else1607E.i,%if.else1606E.i,%if.else1605E.i,%if.else1604E.i,%if.else1603E.i,%if.else1602E.i,%if.else1601E.i,%if.else1600E.i,%if.else1599E.i,%if.else1598E.i,%if.else1597E.i,%if.else1596E.i,%if.else1595E.i,%if.else1594E.i,%if.then1591E.i,%if.then1594E.i,%if.then1546E.i,%if.then1595E.i,%if.then1497E.i,%if.then1596E.i,%if.then1448E.i,%if.then1597E.i,%if.then1399E.i,%if.then1598E.i,%if.then1350E.i,%if.then1599E.i,%if.then1301E.i,%if.then1600E.i,%if.then1252E.i,%if.then1601E.i,%if.then1203E.i,%if.then1602E.i,%if.then1154E.i,%if.then1603E.i,%if.then1105E.i,%if.then1604E.i,%if.then1056E.i,%if.then1605E.i,%if.then1007E.i,%if.then1606E.i,%if.then958E.i,%if.then1607E.i,%if.then909E.i,%if.then1608E.i,%if.then860E.i,%if.end1608E.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LICMPass on Loop at depth 1 containing: %while.body1620E.i<header>,%if.else1608E.i,%if.else1607E.i,%if.else1606E.i,%if.else1605E.i,%if.else1604E.i,%if.else1603E.i,%if.else1602E.i,%if.else1601E.i,%if.else1600E.i,%if.else1599E.i,%if.else1598E.i,%if.else1597E.i,%if.else1596E.i,%if.else1595E.i,%if.else1594E.i,%if.then1591E.i,%if.then1594E.i,%if.then1546E.i,%if.then1595E.i,%if.then1497E.i,%if.then1596E.i,%if.then1448E.i,%if.then1597E.i,%if.then1399E.i,%if.then1598E.i,%if.then1350E.i,%if.then1599E.i,%if.then1301E.i,%if.then1600E.i,%if.then1252E.i,%if.then1601E.i,%if.then1203E.i,%if.then1602E.i,%if.then1154E.i,%if.then1603E.i,%if.then1105E.i,%if.then1604E.i,%if.then1056E.i,%if.then1605E.i,%if.then1007E.i,%if.then1606E.i,%if.then958E.i,%if.then1607E.i,%if.then909E.i,%if.then1608E.i,%if.then860E.i,%if.end1608E.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopRotatePass on Loop at depth 1 containing: %while.body1620E.i<header>,%if.else1608E.i,%if.else1607E.i,%if.else1606E.i,%if.else1605E.i,%if.else1604E.i,%if.else1603E.i,%if.else1602E.i,%if.else1601E.i,%if.else1600E.i,%if.else1599E.i,%if.else1598E.i,%if.else1597E.i,%if.else1596E.i,%if.else1595E.i,%if.else1594E.i,%if.then1591E.i,%if.then1594E.i,%if.then1546E.i,%if.then1595E.i,%if.then1497E.i,%if.then1596E.i,%if.then1448E.i,%if.then1597E.i,%if.then1399E.i,%if.then1598E.i,%if.then1350E.i,%if.then1599E.i,%if.then1301E.i,%if.then1600E.i,%if.then1252E.i,%if.then1601E.i,%if.then1203E.i,%if.then1602E.i,%if.then1154E.i,%if.then1603E.i,%if.then1105E.i,%if.then1604E.i,%if.then1056E.i,%if.then1605E.i,%if.then1007E.i,%if.then1606E.i,%if.then958E.i,%if.then1607E.i,%if.then909E.i,%if.then1608E.i,%if.then860E.i,%if.end1608E.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LICMPass on Loop at depth 1 containing: %while.body1620E.i<header>,%if.else1608E.i,%if.else1607E.i,%if.else1606E.i,%if.else1605E.i,%if.else1604E.i,%if.else1603E.i,%if.else1602E.i,%if.else1601E.i,%if.else1600E.i,%if.else1599E.i,%if.else1598E.i,%if.else1597E.i,%if.else1596E.i,%if.else1595E.i,%if.else1594E.i,%if.then1591E.i,%if.then1594E.i,%if.then1546E.i,%if.then1595E.i,%if.then1497E.i,%if.then1596E.i,%if.then1448E.i,%if.then1597E.i,%if.then1399E.i,%if.then1598E.i,%if.then1350E.i,%if.then1599E.i,%if.then1301E.i,%if.then1600E.i,%if.then1252E.i,%if.then1601E.i,%if.then1203E.i,%if.then1602E.i,%if.then1154E.i,%if.then1603E.i,%if.then1105E.i,%if.then1604E.i,%if.then1056E.i,%if.then1605E.i,%if.then1007E.i,%if.then1606E.i,%if.then958E.i,%if.then1607E.i,%if.then909E.i,%if.then1608E.i,%if.then860E.i,%if.end1608E.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: SimpleLoopUnswitchPass on Loop at depth 1 containing: %while.body1620E.i<header>,%if.else1608E.i,%if.else1607E.i,%if.else1606E.i,%if.else1605E.i,%if.else1604E.i,%if.else1603E.i,%if.else1602E.i,%if.else1601E.i,%if.else1600E.i,%if.else1599E.i,%if.else1598E.i,%if.else1597E.i,%if.else1596E.i,%if.else1595E.i,%if.else1594E.i,%if.then1591E.i,%if.then1594E.i,%if.then1546E.i,%if.then1595E.i,%if.then1497E.i,%if.then1596E.i,%if.then1448E.i,%if.then1597E.i,%if.then1399E.i,%if.then1598E.i,%if.then1350E.i,%if.then1599E.i,%if.then1301E.i,%if.then1600E.i,%if.then1252E.i,%if.then1601E.i,%if.then1203E.i,%if.then1602E.i,%if.then1154E.i,%if.then1603E.i,%if.then1105E.i,%if.then1604E.i,%if.then1056E.i,%if.then1605E.i,%if.then1007E.i,%if.then1606E.i,%if.then958E.i,%if.then1607E.i,%if.then909E.i,%if.then1608E.i,%if.then860E.i,%if.end1608E.i<latch><exiting>
+; CHECK-O: Running pass: SimplifyCFGPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: InstCombinePass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: CJLoopFloatOpt on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: LoopSimplifyPass on _ZN7default21timeBenchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: LCSSAPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: MemorySSAAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: ScalarEvolutionAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: LoopRotatePass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: IndVarSimplifyPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopDeletionPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopInstSimplifyPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopSimplifyCFGPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LICMPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopRotatePass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LICMPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: SimpleLoopUnswitchPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Clearing all analysis results for: <possibly invalidated loop>
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: MemorySSAAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: ScalarEvolutionAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: LoopSimplifyPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: LCSSAPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: ScalarEvolutionAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: LoopIdiomRecognizePass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: IndVarSimplifyPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopDeletionPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopFullUnrollPass on Loop at depth 1
+; CHECK-O: Running pass: LoopIdiomRecognizePass on Loop at depth 1 containing: %while.body1620E.i<header>,%if.else1608E.i,%if.else1607E.i,%if.else1606E.i,%if.else1605E.i,%if.else1604E.i,%if.else1603E.i,%if.else1602E.i,%if.else1601E.i,%if.else1600E.i,%if.else1599E.i,%if.else1598E.i,%if.else1597E.i,%if.else1596E.i,%if.else1595E.i,%if.else1594E.i,%if.then1594E.i,%if.then1595E.i,%if.then1596E.i,%if.then1597E.i,%if.then1598E.i,%if.then1599E.i,%if.then1600E.i,%if.then1601E.i,%if.then1602E.i,%if.then1603E.i,%if.then1604E.i,%if.then1605E.i,%if.then1606E.i,%if.then1607E.i,%if.then1608E.i,%if.end1608E.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: IndVarSimplifyPass on Loop at depth 1 containing: %while.body1620E.i<header>,%if.else1608E.i,%if.else1607E.i,%if.else1606E.i,%if.else1605E.i,%if.else1604E.i,%if.else1603E.i,%if.else1602E.i,%if.else1601E.i,%if.else1600E.i,%if.else1599E.i,%if.else1598E.i,%if.else1597E.i,%if.else1596E.i,%if.else1595E.i,%if.else1594E.i,%if.then1594E.i,%if.then1595E.i,%if.then1596E.i,%if.then1597E.i,%if.then1598E.i,%if.then1599E.i,%if.then1600E.i,%if.then1601E.i,%if.then1602E.i,%if.then1603E.i,%if.then1604E.i,%if.then1605E.i,%if.then1606E.i,%if.then1607E.i,%if.then1608E.i,%if.end1608E.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopDeletionPass on Loop at depth 1 containing: %while.body1620E.i<header>,%if.else1608E.i,%if.else1607E.i,%if.else1606E.i,%if.else1605E.i,%if.else1604E.i,%if.else1603E.i,%if.else1602E.i,%if.else1601E.i,%if.else1600E.i,%if.else1599E.i,%if.else1598E.i,%if.else1597E.i,%if.else1596E.i,%if.else1595E.i,%if.else1594E.i,%if.then1594E.i,%if.then1595E.i,%if.then1596E.i,%if.then1597E.i,%if.then1598E.i,%if.then1599E.i,%if.then1600E.i,%if.then1601E.i,%if.then1602E.i,%if.then1603E.i,%if.then1604E.i,%if.then1605E.i,%if.then1606E.i,%if.then1607E.i,%if.then1608E.i,%if.end1608E.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopFullUnrollPass on Loop at depth 1 containing: %while.body1620E.i<header>,%if.else1608E.i,%if.else1607E.i,%if.else1606E.i,%if.else1605E.i,%if.else1604E.i,%if.else1603E.i,%if.else1602E.i,%if.else1601E.i,%if.else1600E.i,%if.else1599E.i,%if.else1598E.i,%if.else1597E.i,%if.else1596E.i,%if.else1595E.i,%if.else1594E.i,%if.then1594E.i,%if.then1595E.i,%if.then1596E.i,%if.then1597E.i,%if.then1598E.i,%if.then1599E.i,%if.then1600E.i,%if.then1601E.i,%if.then1602E.i,%if.then1603E.i,%if.then1604E.i,%if.then1605E.i,%if.then1606E.i,%if.then1607E.i,%if.then1608E.i,%if.end1608E.i<latch><exiting>
 ; CHECK-O-NEXT: Running pass: SROAPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Clearing all analysis results for: <possibly invalidated loop>
-; CHECK-O-NEXT: Invalidating analysis: ScalarEvolutionAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Function
 ; CHECK-O-NEXT: Running pass: MergedLoadStoreMotionPass on _ZN7default21timeBenchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: GVNPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: MemoryDependenceAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: PhiValuesAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: PhiValuesAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: MemoryDependenceAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: SCCPPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: BDCEPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DemandedBitsAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: DemandedBitsAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: SCCPPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: BDCEPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: InstCombinePass on _ZN7default21timeBenchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: JumpThreadingPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: LazyValueAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: CorrelatedValuePropagationPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: LazyValueAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: ADCEPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: MemCpyOptPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: MemorySSAAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: DSEPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: LoopSimplifyPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: CorrelatedValuePropagationPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: ADCEPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: MemCpyOptPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: CJRSSCEPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O-NEXT: Running pass: CJObjectReuseOpt on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: DSEPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: LoopSimplifyPass on _ZN7default21timeBenchmarkIfElseD4Ev
 ; CHECK-O-NEXT: Running pass: LCSSAPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: ScalarEvolutionAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: LICMPass on Loop at depth 1
-; CHECK-O-NEXT: Invalidating analysis: PostDominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: CoroElidePass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: MemorySSAAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: ScalarEvolutionAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: ShouldNotRunFunctionPassesAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running pass: CoroSplitPass on (_ZN7default21timeBenchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Invalidating analysis: ShouldNotRunFunctionPassesAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: FunctionAnalysisManagerCGSCCProxy on (_ZN7default4mainEv)
-; CHECK-O-NEXT: Running analysis: OuterAnalysisManagerProxy<{{.*}}LazyCallGraph
-; CHECK-O-NEXT: Running pass: DevirtSCCRepeatedPass on (_ZN7default4mainEv)
-; CHECK-O-NEXT: Running pass: InlinerPass on (_ZN7default4mainEv)
-; CHECK-O-NEXT: Running pass: InlinerPass on (_ZN7default4mainEv)
-; CHECK-O-NEXT: Running analysis: BlockFrequencyAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: BranchProbabilityAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: BlockFrequencyAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: BranchProbabilityAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: PostDominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: BranchProbabilityAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: BlockFrequencyAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default4mainEv
-; CHECK-O-NEXT: Clearing all analysis results for: _ZN7default21timeBenchmarkIfElseD4Ev
-; CHECK-O-NEXT: Clearing all analysis results for: (_ZN7default21timeBenchmarkIfElseD4Ev)
-; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass on (_ZN7default4mainEv)
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: OpenMPOptCGSCCPass on (_ZN7default4mainEv)
+; CHECK-O: Running pass: LICMPass on Loop at depth 1 containing: %while.body1620E.i<header>,%if.else1608E.i,%if.else1607E.i,%if.else1606E.i,%if.else1605E.i,%if.else1604E.i,%if.else1603E.i,%if.else1602E.i,%if.else1601E.i,%if.else1600E.i,%if.else1599E.i,%if.else1598E.i,%if.else1597E.i,%if.else1596E.i,%if.else1595E.i,%if.else1594E.i,%if.then1594E.i,%if.then1595E.i,%if.then1596E.i,%if.then1597E.i,%if.then1598E.i,%if.then1599E.i,%if.then1600E.i,%if.then1601E.i,%if.then1602E.i,%if.then1603E.i,%if.then1604E.i,%if.then1605E.i,%if.then1606E.i,%if.then1607E.i,%if.then1608E.i,%if.end1608E.i<latch><exiting>
+; CHECK-O: Running pass: CoroElidePass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: SimplifyCFGPass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: InstCombinePass on _ZN7default21timeBenchmarkIfElseD4Ev
+; CHECK-O: Running pass: CoroSplitPass on (_ZN7default21timeBenchmarkIfElseD4Ev) (1 node)
+; CHECK-O: Running pass: DevirtSCCRepeatedPass on (_ZN7default4mainEv) (1 node)
+; CHECK-O-NEXT: Running pass: InlinerPass on (_ZN7default4mainEv) (1 node)
+; CHECK-O-NEXT: Running pass: InlinerPass on (_ZN7default4mainEv) (1 node)
+; CHECK-O: Running pass: PostOrderFunctionAttrsPass on (_ZN7default4mainEv) (1 node)
+; CHECK-O: Running pass: OpenMPOptCGSCCPass on (_ZN7default4mainEv) (1 node)
+; CHECK-O-NEXT: Running pass: CJDevirtualOpt on (_ZN7default4mainEv) (1 node)
 ; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: PEAPass on (_ZN7default4mainEv)
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: PartialEscapeAnalysisPass on (_ZN7default4mainEv)
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: SROAPass on _ZN7default4mainEv
+; CHECK-O: Running pass: InstCombinePass on _ZN7default4mainEv
+; CHECK-O-NEXT: Running pass: SCCPPass on _ZN7default4mainEv
+; CHECK-O: Running pass: CJPartialEscapeAnalysisPass on (_ZN7default4mainEv) (1 node)
+; CHECK-O: Running pass: CJSimpleOpt on _ZN7default4mainEv
+; CHECK-O: Running pass: SROAPass on _ZN7default4mainEv
+; CHECK-O-NEXT: Running pass: CJObjectReuseOpt on _ZN7default4mainEv
+; CHECK-O: Running pass: DCEPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: EarlyCSEPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: MemorySSAAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: SpeculativeExecutionPass on _ZN7default4mainEv
+; CHECK-O: Running pass: SpeculativeExecutionPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: JumpThreadingPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: LazyValueAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: CorrelatedValuePropagationPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: MemorySSAAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: LazyValueAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: LibCallsShrinkWrapPass on _ZN7default4mainEv
+; CHECK-O: Running pass: CorrelatedValuePropagationPass on _ZN7default4mainEv
+; CHECK-O: Running pass: CJGenericIntrinsicOpt on _ZN7default4mainEv
+; CHECK-O-NEXT: Running pass: CJSimpleRangeAnalysisPass on _ZN7default4mainEv
+; CHECK-O: Running pass: SimplifyCFGPass on _ZN7default4mainEv
+; CHECK-O: Running pass: InstCombinePass on _ZN7default4mainEv
+; CHECK-O: Running pass: LibCallsShrinkWrapPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: TailCallElimPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: ReassociatePass on _ZN7default4mainEv
+; CHECK-O: Running pass: SimplifyCFGPass on _ZN7default4mainEv
+; CHECK-O: Running pass: ReassociatePass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}Function
+; CHECK-O-NEXT: Running pass: RequireAnalysisPass<llvm::OptimizationRemarkEmitterAnalysis, llvm::Function> on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: LoopSimplifyPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: LCSSAPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: MemorySSAAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: ScalarEvolutionAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: LoopRotatePass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: IndVarSimplifyPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopDeletionPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopInstSimplifyPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopSimplifyCFGPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LICMPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopRotatePass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LICMPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: SimpleLoopUnswitchPass on Loop at depth 1
+; CHECK-O: Running pass: LCSSAPass on _ZN7default4mainEv
+; CHECK-O: Running pass: LICMPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopRotatePass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: IndVarSimplifyPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopDeletionPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopInstSimplifyPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopSimplifyCFGPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LICMPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopRotatePass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LICMPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: SimpleLoopUnswitchPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
 ; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default4mainEv
-; CHECK-O-NEXT: Clearing all analysis results for: <possibly invalidated loop>
-; CHECK-O-NEXT: Invalidating analysis: MemorySSAAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: ScalarEvolutionAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: LoopSimplifyPass on _ZN7default4mainEv
+; CHECK-O: Running pass: CJLoopFloatOpt on _ZN7default4mainEv
+; CHECK-O: Running pass: LoopSimplifyPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: LCSSAPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: ScalarEvolutionAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: LoopIdiomRecognizePass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: IndVarSimplifyPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopDeletionPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopFullUnrollPass on Loop at depth 1
+; CHECK-O: Running pass: LoopIdiomRecognizePass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: IndVarSimplifyPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopDeletionPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopFullUnrollPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
 ; CHECK-O-NEXT: Running pass: SROAPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Clearing all analysis results for: <possibly invalidated loop>
-; CHECK-O-NEXT: Invalidating analysis: ScalarEvolutionAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Function
 ; CHECK-O-NEXT: Running pass: MergedLoadStoreMotionPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: GVNPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: MemoryDependenceAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: PhiValuesAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: PhiValuesAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: MemoryDependenceAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: SCCPPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: BDCEPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: DemandedBitsAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: DemandedBitsAnalysis on _ZN7default4mainEv
+; CHECK-O: Running pass: SCCPPass on _ZN7default4mainEv
+; CHECK-O: Running pass: BDCEPass on _ZN7default4mainEv
+; CHECK-O: Running pass: InstCombinePass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: JumpThreadingPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: LazyValueAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: CorrelatedValuePropagationPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: LazyValueAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: ADCEPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: MemCpyOptPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: MemorySSAAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: DSEPass on _ZN7default4mainEv
+; CHECK-O: Running pass: CorrelatedValuePropagationPass on _ZN7default4mainEv
+; CHECK-O: Running pass: ADCEPass on _ZN7default4mainEv
+; CHECK-O: Running pass: MemCpyOptPass on _ZN7default4mainEv
+; CHECK-O: Running pass: CJRSSCEPass on _ZN7default4mainEv
+; CHECK-O-NEXT: Running pass: CJObjectReuseOpt on _ZN7default4mainEv
+; CHECK-O: Running pass: DSEPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: LoopSimplifyPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: LCSSAPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: ScalarEvolutionAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: LICMPass on Loop at depth 1
+; CHECK-O: Running pass: LICMPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
 ; CHECK-O-NEXT: Running pass: CoroElidePass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: MemorySSAAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: ScalarEvolutionAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: PostDominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: ShouldNotRunFunctionPassesAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: CoroSplitPass on (_ZN7default4mainEv)
-; CHECK-O-NEXT: Invalidating analysis: ShouldNotRunFunctionPassesAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: FunctionAnalysisManagerCGSCCProxy on (user.main)
-; CHECK-O-NEXT: Running analysis: OuterAnalysisManagerProxy<{{.*}}LazyCallGraph
-; CHECK-O-NEXT: Running pass: DevirtSCCRepeatedPass on (user.main)
-; CHECK-O-NEXT: Running pass: InlinerPass on (user.main)
-; CHECK-O-NEXT: Running pass: InlinerPass on (user.main)
-; CHECK-O-NEXT: Running analysis: BlockFrequencyAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: BranchProbabilityAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass on (user.main)
-; CHECK-O-NEXT: Running analysis: AAManager on user.main
-; CHECK-O-NEXT: Running analysis: BasicAA on user.main
-; CHECK-O-NEXT: Running pass: OpenMPOptCGSCCPass on (user.main)
+; CHECK-O: Running pass: CoroSplitPass on (_ZN7default4mainEv) (1 node)
+; CHECK-O: Running pass: DevirtSCCRepeatedPass on (user.main) (1 node)
+; CHECK-O-NEXT: Running pass: InlinerPass on (user.main) (1 node)
+; CHECK-O-NEXT: Running pass: InlinerPass on (user.main) (1 node)
+; CHECK-O: Running pass: PostOrderFunctionAttrsPass on (user.main) (1 node)
+; CHECK-O: Running pass: OpenMPOptCGSCCPass on (user.main) (1 node)
+; CHECK-O-NEXT: Running pass: CJDevirtualOpt on (user.main) (1 node)
 ; CHECK-O-NEXT: Running pass: SimplifyCFGPass on user.main
-; CHECK-O-NEXT: Running pass: PEAPass on (user.main)
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on user.main
-; CHECK-O-NEXT: Running pass: PartialEscapeAnalysisPass on (user.main)
+; CHECK-O: Running pass: InstCombinePass on user.main
+; CHECK-O-NEXT: Running pass: SCCPPass on user.main
+; CHECK-O-NEXT: Running pass: CJPartialEscapeAnalysisPass on (user.main) (1 node)
+; CHECK-O-NEXT: Running pass: CJSimpleOpt on user.main
 ; CHECK-O-NEXT: Running pass: SROAPass on user.main
+; CHECK-O-NEXT: Running pass: CJObjectReuseOpt on user.main
+; CHECK-O: Running pass: DCEPass on user.main
 ; CHECK-O-NEXT: Running pass: EarlyCSEPass on user.main
-; CHECK-O-NEXT: Running analysis: MemorySSAAnalysis on user.main
-; CHECK-O-NEXT: Running pass: SpeculativeExecutionPass on user.main
+; CHECK-O: Running pass: SpeculativeExecutionPass on user.main
 ; CHECK-O-NEXT: Running pass: JumpThreadingPass on user.main
-; CHECK-O-NEXT: Running analysis: LazyValueAnalysis on user.main
-; CHECK-O-NEXT: Running pass: CorrelatedValuePropagationPass on user.main
-; CHECK-O-NEXT: Invalidating analysis: LazyValueAnalysis on user.main
+; CHECK-O: Running pass: CorrelatedValuePropagationPass on user.main
+; CHECK-O: Running pass: CJGenericIntrinsicOpt on user.main
+; CHECK-O-NEXT: Running pass: CJSimpleRangeAnalysisPass on user.main
 ; CHECK-O-NEXT: Running pass: SimplifyCFGPass on user.main
 ; CHECK-O-NEXT: Running pass: InstCombinePass on user.main
 ; CHECK-O-NEXT: Running pass: LibCallsShrinkWrapPass on user.main
 ; CHECK-O-NEXT: Running pass: TailCallElimPass on user.main
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: BranchProbabilityAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: BlockFrequencyAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: MemorySSAAnalysis on user.main
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on user.main
-; CHECK-O-NEXT: Running pass: ReassociatePass on user.main
+; CHECK-O: Running pass: SimplifyCFGPass on user.main
+; CHECK-O: Running pass: ReassociatePass on user.main
 ; CHECK-O-NEXT: Running pass: InstCombinePass on user.main
-; CHECK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}Function
+; CHECK-O-NEXT: Running pass: RequireAnalysisPass<llvm::OptimizationRemarkEmitterAnalysis, llvm::Function> on user.main
 ; CHECK-O-NEXT: Running pass: LoopSimplifyPass on user.main
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on user.main
-; CHECK-O-NEXT: Running pass: LCSSAPass on user.main
+; CHECK-O: Running pass: LCSSAPass on user.main
 ; CHECK-O-NEXT: Running pass: SimplifyCFGPass on user.main
 ; CHECK-O-NEXT: Running pass: InstCombinePass on user.main
-; CHECK-O-NEXT: Running pass: LoopSimplifyPass on user.main
+; CHECK-O-NEXT: Running pass: CJLoopFloatOpt on user.main
+; CHECK-O: Running pass: LoopSimplifyPass on user.main
 ; CHECK-O-NEXT: Running pass: LCSSAPass on user.main
 ; CHECK-O-NEXT: Running pass: SROAPass on user.main
 ; CHECK-O-NEXT: Running pass: MergedLoadStoreMotionPass on user.main
 ; CHECK-O-NEXT: Running pass: GVNPass on user.main
-; CHECK-O-NEXT: Running analysis: MemoryDependenceAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: PhiValuesAnalysis on user.main
-; CHECK-O-NEXT: Running pass: SCCPPass on user.main
+; CHECK-O: Running pass: SCCPPass on user.main
 ; CHECK-O-NEXT: Running pass: BDCEPass on user.main
-; CHECK-O-NEXT: Running analysis: DemandedBitsAnalysis on user.main
-; CHECK-O-NEXT: Running pass: InstCombinePass on user.main
+; CHECK-O: Running pass: InstCombinePass on user.main
 ; CHECK-O-NEXT: Running pass: JumpThreadingPass on user.main
-; CHECK-O-NEXT: Running analysis: LazyValueAnalysis on user.main
-; CHECK-O-NEXT: Running pass: CorrelatedValuePropagationPass on user.main
-; CHECK-O-NEXT: Invalidating analysis: LazyValueAnalysis on user.main
-; CHECK-O-NEXT: Running pass: ADCEPass on user.main
+; CHECK-O: Running pass: CorrelatedValuePropagationPass on user.main
+; CHECK-O: Running pass: ADCEPass on user.main
 ; CHECK-O-NEXT: Running pass: MemCpyOptPass on user.main
-; CHECK-O-NEXT: Running analysis: MemorySSAAnalysis on user.main
-; CHECK-O-NEXT: Running pass: DSEPass on user.main
+; CHECK-O: Running pass: CJRSSCEPass on user.main
+; CHECK-O-NEXT: Running pass: CJObjectReuseOpt on user.main
+; CHECK-O: Running pass: DSEPass on user.main
 ; CHECK-O-NEXT: Running pass: LoopSimplifyPass on user.main
 ; CHECK-O-NEXT: Running pass: LCSSAPass on user.main
 ; CHECK-O-NEXT: Running pass: CoroElidePass on user.main
 ; CHECK-O-NEXT: Running pass: SimplifyCFGPass on user.main
 ; CHECK-O-NEXT: Running pass: InstCombinePass on user.main
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: PostDominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on user.main
-; CHECK-O-NEXT: Invalidating analysis: AAManager on user.main
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: PhiValuesAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: MemoryDependenceAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: DemandedBitsAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: MemorySSAAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: ShouldNotRunFunctionPassesAnalysis on user.main
-; CHECK-O-NEXT: Running pass: CoroSplitPass on (user.main)
-; CHECK-O-NEXT: Invalidating analysis: ShouldNotRunFunctionPassesAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: CallGraphAnalysis
-; CHECK-O-NEXT: Running pass: InvalidateAnalysisPass<llvm::ShouldNotRunFunctionPassesAnalysis> on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: InvalidateAnalysisPass<llvm::ShouldNotRunFunctionPassesAnalysis> on user.main
-; CHECK-O-NEXT: Invalidating analysis: InlineAdvisorAnalysis
-; CHECK-O-NEXT: Running pass: CJDevirtualOpt
-; CHECK-O-NEXT: Running pass: CoroCleanupPass
-; CHECK-O-NEXT: Running pass: GlobalOptPass
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$core6String1+ER_ZN11std$FS$core6StringE
-; CHECK-O-NEXT: Invalidating analysis: LazyCallGraphAnalysis
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Module
-; CHECK-O-NEXT: Running pass: GlobalDCEPass
-; CHECK-O-NEXT: Running pass: ReversePostOrderFunctionAttrsPass
-; CHECK-O-NEXT: Running analysis: CallGraphAnalysis
-; CHECK-O-NEXT: Running pass: RecomputeGlobalsAAPass
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Module
-; CHECK-O-NEXT: Running analysis: LazyCallGraphAnalysis
-; CHECK-O-NEXT: Running analysis: FunctionAnalysisManagerCGSCCProxy on (_ZN7default4mainEv)
-; CHECK-O-NEXT: Running analysis: OuterAnalysisManagerProxy<{{.*}}LazyCallGraph
-; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass on (_ZN7default4mainEv) (1 node)
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: FunctionAnalysisManagerCGSCCProxy on (user.main)
-; CHECK-O-NEXT: Running analysis: OuterAnalysisManagerProxy<{{.*}}LazyCallGraph
-; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass on (user.main)
-; CHECK-O-NEXT: Running analysis: AAManager on user.main
-; CHECK-O-NEXT: Running analysis: BasicAA on user.main
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Running pass: LoopSimplifyPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default4mainEv
+; CHECK-O: Running pass: CoroSplitPass on (user.main) (1 node)
+; CHECK-O: Running pass: InvalidateAnalysisPass<llvm::ShouldNotRunFunctionPassesAnalysis> on _ZN7default4mainEv
+; CHECK-O: Running pass: InvalidateAnalysisPass<llvm::ShouldNotRunFunctionPassesAnalysis> on user.main
+; CHECK-O: Running pass: CoroCleanupPass on [module]
+; CHECK-O-NEXT: Running pass: GlobalOptPass on [module]
+; CHECK-O: Running pass: GlobalDCEPass on [module]
+; CHECK-O-NEXT: Running pass: ReversePostOrderFunctionAttrsPass on [module]
+; CHECK-O: Running pass: RecomputeGlobalsAAPass on [module]
+; CHECK-O: Running pass: PostOrderFunctionAttrsPass on (_ZN7default4mainEv) (1 node)
+; CHECK-O: Running pass: PostOrderFunctionAttrsPass on (user.main) (1 node)
+; CHECK-O: Running pass: IRCEPass on _ZN7default4mainEv
+; CHECK-O: Running pass: SimplifyCFGPass on _ZN7default4mainEv
+; CHECK-O: Running pass: LoopSimplifyPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: LCSSAPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: MemorySSAAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: ScalarEvolutionAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: LICMPass
+; CHECK-O: Running pass: SimpleLoopUnswitchPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopSimplifyPass on _ZN7default4mainEv
+; CHECK-O-NEXT: Running pass: LCSSAPass on _ZN7default4mainEv
+; CHECK-O: Running pass: LICMPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
 ; CHECK-O-NEXT: Running pass: GVNPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: MemoryDependenceAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: PhiValuesAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: ScalarEvolutionAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Invalidating analysis: PhiValuesAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: MemoryDependenceAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: MemCpyOptPass on _ZN7default4mainEv
+; CHECK-O: Running pass: MemCpyOptPass on _ZN7default4mainEv
+; CHECK-O: Running pass: CJRSSCEPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: DSEPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: MergedLoadStoreMotionPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: MemorySSAAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: PostDominatorTreeAnalysis on _ZN7default4mainEv
+; CHECK-O: Running pass: MergedLoadStoreMotionPass on _ZN7default4mainEv
+; CHECK-O: Running pass: IRCEPass on user.main
+; CHECK-O: Running pass: SimplifyCFGPass on user.main
 ; CHECK-O-NEXT: Running pass: LoopSimplifyPass on user.main
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on user.main
+; CHECK-O-NEXT: Running pass: LCSSAPass on user.main
+; CHECK-O-NEXT: Running pass: LoopSimplifyPass on user.main
 ; CHECK-O-NEXT: Running pass: LCSSAPass on user.main
 ; CHECK-O-NEXT: Running pass: GVNPass on user.main
-; CHECK-O-NEXT: Running analysis: MemoryDependenceAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: PhiValuesAnalysis on user.main
-; CHECK-O-NEXT: Running pass: MemCpyOptPass on user.main
-; CHECK-O-NEXT: Running analysis: MemorySSAAnalysis on user.main
+; CHECK-O: Running pass: MemCpyOptPass on user.main
+; CHECK-O: Running pass: CJRSSCEPass on user.main
 ; CHECK-O-NEXT: Running pass: DSEPass on user.main
-; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Running pass: MergedLoadStoreMotionPass on user.main
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on user.main
-; CHECK-O-NEXT: Invalidating analysis: AAManager on user.main
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: PhiValuesAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: MemoryDependenceAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: MemorySSAAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: PostDominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: CallGraphAnalysis
-; CHECK-O-NEXT: Invalidating analysis: LazyCallGraphAnalysis
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Module
-; CHECK-O-NEXT: Running pass: Float2IntPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: LowerConstantIntrinsicsPass on _ZN7default4mainEv
+; CHECK-O: Running pass: MergedLoadStoreMotionPass on user.main
+; CHECK-O: Running pass: Float2IntPass on _ZN7default4mainEv
+; CHECK-O: Running pass: LowerConstantIntrinsicsPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: LoopSimplifyPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: LCSSAPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: AAManager on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: BasicAA on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: ScalarEvolutionAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: LoopRotatePass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopDeletionPass on Loop at depth 1
+; CHECK-O: Running pass: LCSSAPass on _ZN7default4mainEv
+; CHECK-O: Running pass: LoopRotatePass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
+; CHECK-O-NEXT: Running pass: LoopDeletionPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i<latch><exiting>
 ; CHECK-O-NEXT: Running pass: LoopDistributePass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: InjectTLIMappings on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: LoopVectorizePass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: BlockFrequencyAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: BranchProbabilityAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: DemandedBitsAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: LoopLoadEliminationPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: LoopAccessAnalysis on Loop at depth 1
-; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default4mainEv
-; CHECK-O-NEXT: Clearing all analysis results for: <possibly invalidated loop>
-; CHECK-O-NEXT: Invalidating analysis: ScalarEvolutionAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Invalidating analysis: DemandedBitsAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: VectorCombinePass on _ZN7default4mainEv
+; CHECK-O: Running pass: LoopLoadEliminationPass on _ZN7default4mainEv
+; CHECK-O: Running pass: InstCombinePass on _ZN7default4mainEv
+; CHECK-O: Running pass: SimplifyCFGPass on _ZN7default4mainEv
+; CHECK-O-NEXT: Running pass: SLPVectorizerPass on _ZN7default4mainEv
+; CHECK-O: Running pass: VectorCombinePass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: LoopUnrollPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: ScalarEvolutionAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: PostDominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: BranchProbabilityAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: BlockFrequencyAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: WarnMissedTransformationsPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: InstCombinePass on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: ScalarEvolutionAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}Function
+; CHECK-O: Running pass: WarnMissedTransformationsPass on _ZN7default4mainEv
+; CHECK-O: Running pass: InstCombinePass on _ZN7default4mainEv
+; CHECK-O: Running pass: RequireAnalysisPass<llvm::OptimizationRemarkEmitterAnalysis, llvm::Function> on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: LoopSimplifyPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: LCSSAPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: MemorySSAAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: ScalarEvolutionAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: LICMPass on Loop at depth 1
+; CHECK-O: Running pass: LICMPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i,%if.else1608E.i.i.1,%if.else1607E.i.i.1,%if.else1606E.i.i.1,%if.else1605E.i.i.1,%if.else1604E.i.i.1,%if.else1603E.i.i.1,%if.else1602E.i.i.1,%if.else1601E.i.i.1,%if.else1600E.i.i.1,%if.else1599E.i.i.1,%if.else1598E.i.i.1,%if.else1597E.i.i.1,%if.else1596E.i.i.1,%if.else1595E.i.i.1,%if.end1608E.i.i.1,%if.else1608E.i.i.2,%if.else1607E.i.i.2,%if.else1606E.i.i.2,%if.else1605E.i.i.2,%if.else1604E.i.i.2,%if.else1603E.i.i.2,%if.else1602E.i.i.2,%if.else1601E.i.i.2,%if.else1600E.i.i.2,%if.else1599E.i.i.2,%if.else1598E.i.i.2,%if.else1597E.i.i.2,%if.else1596E.i.i.2,%if.else1595E.i.i.2,%if.end1608E.i.i.2,%if.else1608E.i.i.3,%if.else1607E.i.i.3,%if.else1606E.i.i.3,%if.else1605E.i.i.3,%if.else1604E.i.i.3,%if.else1603E.i.i.3,%if.else1602E.i.i.3,%if.else1601E.i.i.3,%if.else1600E.i.i.3,%if.else1599E.i.i.3,%if.else1598E.i.i.3,%if.else1597E.i.i.3,%if.else1596E.i.i.3,%if.else1595E.i.i.3,%if.end1608E.i.i.3<latch><exiting>
 ; CHECK-O-NEXT: Running pass: AlignmentFromAssumptionsPass on _ZN7default4mainEv
+; CHECK-O-NEXT: Running pass: CJAfterInlineSimpleOpt on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: LoopSimplifyPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: LCSSAPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: IndVarSimplifyPass on Loop at depth 1
-; CHECK-O-NEXT: Running pass: LoopSinkPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: BlockFrequencyAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: BranchProbabilityAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: InstSimplifyPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: MemorySSAAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: ScalarEvolutionAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Function
+; CHECK-O-NEXT: Running pass: IndVarSimplifyPass on Loop at depth 1 containing: %while.body1620E.i.i<header>,%if.else1608E.i.i,%if.else1607E.i.i,%if.else1606E.i.i,%if.else1605E.i.i,%if.else1604E.i.i,%if.else1603E.i.i,%if.else1602E.i.i,%if.else1601E.i.i,%if.else1600E.i.i,%if.else1599E.i.i,%if.else1598E.i.i,%if.else1597E.i.i,%if.else1596E.i.i,%if.else1595E.i.i,%if.end1608E.i.i,%if.else1608E.i.i.1,%if.else1607E.i.i.1,%if.else1606E.i.i.1,%if.else1605E.i.i.1,%if.else1604E.i.i.1,%if.else1603E.i.i.1,%if.else1602E.i.i.1,%if.else1601E.i.i.1,%if.else1600E.i.i.1,%if.else1599E.i.i.1,%if.else1598E.i.i.1,%if.else1597E.i.i.1,%if.else1596E.i.i.1,%if.else1595E.i.i.1,%if.end1608E.i.i.1,%if.else1608E.i.i.2,%if.else1607E.i.i.2,%if.else1606E.i.i.2,%if.else1605E.i.i.2,%if.else1604E.i.i.2,%if.else1603E.i.i.2,%if.else1602E.i.i.2,%if.else1601E.i.i.2,%if.else1600E.i.i.2,%if.else1599E.i.i.2,%if.else1598E.i.i.2,%if.else1597E.i.i.2,%if.else1596E.i.i.2,%if.else1595E.i.i.2,%if.end1608E.i.i.2,%if.else1608E.i.i.3,%if.else1607E.i.i.3,%if.else1606E.i.i.3,%if.else1605E.i.i.3,%if.else1604E.i.i.3,%if.else1603E.i.i.3,%if.else1602E.i.i.3,%if.else1601E.i.i.3,%if.else1600E.i.i.3,%if.else1599E.i.i.3,%if.else1598E.i.i.3,%if.else1597E.i.i.3,%if.else1596E.i.i.3,%if.else1595E.i.i.3,%if.end1608E.i.i.3<latch><exiting>
+; CHECK-O-NEXT: Running pass: EarlyCSEPass on _ZN7default4mainEv
+; CHECK-O: Running pass: LoopSinkPass on _ZN7default4mainEv
+; CHECK-O: Running pass: InstSimplifyPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: DivRemPairsPass on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running pass: TailCallElimPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: AAManager on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: PostDominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: BranchProbabilityAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Invalidating analysis: BlockFrequencyAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: Float2IntPass on user.main
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Running pass: LowerConstantIntrinsicsPass on user.main
+; CHECK-O: Running pass: SimplifyCFGPass on _ZN7default4mainEv
+; CHECK-O: Running pass: Float2IntPass on user.main
+; CHECK-O: Running pass: LowerConstantIntrinsicsPass on user.main
 ; CHECK-O-NEXT: Running pass: LoopSimplifyPass on user.main
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on user.main
-; CHECK-O-NEXT: Running pass: LCSSAPass on user.main
+; CHECK-O: Running pass: LCSSAPass on user.main
 ; CHECK-O-NEXT: Running pass: LoopDistributePass on user.main
-; CHECK-O-NEXT: Running analysis: ScalarEvolutionAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: AAManager on user.main
-; CHECK-O-NEXT: Running analysis: BasicAA on user.main
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: InjectTLIMappings on user.main
+; CHECK-O: Running pass: InjectTLIMappings on user.main
 ; CHECK-O-NEXT: Running pass: LoopVectorizePass on user.main
 ; CHECK-O-NEXT: Running pass: LoopLoadEliminationPass on user.main
 ; CHECK-O-NEXT: Running pass: InstCombinePass on user.main
 ; CHECK-O-NEXT: Running pass: SimplifyCFGPass on user.main
-; CHECK-O-NEXT: Running pass: VectorCombinePass on user.main
+; CHECK-O-NEXT: Running pass: SLPVectorizerPass on user.main
+; CHECK-O: Running pass: VectorCombinePass on user.main
 ; CHECK-O-NEXT: Running pass: InstCombinePass on user.main
 ; CHECK-O-NEXT: Running pass: LoopUnrollPass on user.main
 ; CHECK-O-NEXT: Running pass: WarnMissedTransformationsPass on user.main
 ; CHECK-O-NEXT: Running pass: InstCombinePass on user.main
-; CHECK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}Function
+; CHECK-O-NEXT: Running pass: RequireAnalysisPass<llvm::OptimizationRemarkEmitterAnalysis, llvm::Function> on user.main
 ; CHECK-O-NEXT: Running pass: LoopSimplifyPass on user.main
 ; CHECK-O-NEXT: Running pass: LCSSAPass on user.main
 ; CHECK-O-NEXT: Running pass: AlignmentFromAssumptionsPass on user.main
+; CHECK-O-NEXT: Running pass: CJAfterInlineSimpleOpt on user.main
 ; CHECK-O-NEXT: Running pass: LoopSimplifyPass on user.main
 ; CHECK-O-NEXT: Running pass: LCSSAPass on user.main
+; CHECK-O-NEXT: Running pass: EarlyCSEPass on user.main
 ; CHECK-O-NEXT: Running pass: LoopSinkPass on user.main
 ; CHECK-O-NEXT: Running pass: InstSimplifyPass on user.main
 ; CHECK-O-NEXT: Running pass: DivRemPairsPass on user.main
 ; CHECK-O-NEXT: Running pass: TailCallElimPass on user.main
-; CHECK-O-NEXT: Running pass: SimplifyCFGPass on user.main
-; CHECK-O-NEXT: Invalidating analysis: DominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: LoopAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: ScalarEvolutionAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: BasicAA on user.main
-; CHECK-O-NEXT: Invalidating analysis: AAManager on user.main
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Function
-; CHECK-O-NEXT: Running pass: EliminateAvailableExternallyPass
-; CHECK-O-NEXT: Running pass: GlobalDCEPass
-; CHECK-O-NEXT: Running pass: ConstantMergePass
-; CHECK-O-NEXT: Running pass: CGProfilePass
-; CHECK-O-NEXT: Running analysis: BlockFrequencyAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: BranchProbabilityAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on _ZN7default4mainEv
-; CHECK-O-NEXT: Running analysis: BlockFrequencyAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: BranchProbabilityAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Running pass: RelLookupTableConverterPass
+; CHECK-O: Running pass: SimplifyCFGPass on user.main
+; CHECK-O: Running pass: EliminateAvailableExternallyPass on [module]
+; CHECK-O-NEXT: Running pass: GlobalDCEPass on [module]
+; CHECK-O-NEXT: Running pass: ConstantMergePass on [module]
+; CHECK-O-NEXT: Running pass: CGProfilePass on [module]
+; CHECK-O: Running pass: RelLookupTableConverterPass on [module]
 ; CHECK-O-NEXT: Running pass: AnnotationRemarksPass on _ZN7default4mainEv
-; CHECK-O-NEXT: Running pass: AnnotationRemarksPass on user.main
-; CHECK-O-NEXT: Running pass: CJSpecificOpt
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Module
-; CHECK-O-NEXT: Running pass: PlaceSafepoints
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Module
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$core6String1+ER_ZN11std$FS$core6StringE
+; CHECK-O: Running pass: AnnotationRemarksPass on user.main
+; CHECK-O: Running pass: CJSpecificOpt on [module]
+; CHECK-O: Running pass: PlaceSafepoints on [module]
+; CHECK-O: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$core6String1+ER_ZN11std$FS$core6StringE
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$core6String23createStringFromLiteralE
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$core7printlnER_ZN11std$FS$core6StringE
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$time8DateTime1-ER_ZN11std$FS$time8DateTimeE
@@ -892,7 +475,6 @@
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN11std$FS$time8Duration13toNanosecondsEv
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN13std$FS$format6Extend7Float646formatER_ZN11std$FS$core6StringE
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on llvm.cj.memset.p0i8
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on llvm.memcpy.p0i8.p0i8.i64
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on user.main
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_C2NStub
@@ -902,26 +484,22 @@
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on llvm.lifetime.end.p0i8
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on llvm.memset.p0i8.i64
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_StackCheck
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on MCC_SafepointStub
+; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on CJ_MCC_HandleSafepoint
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on gc.safepoint_poll
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Module
-; CHECK-O-NEXT: Running pass: CJBarrierOpt
-; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Module
-; CHECK-O-NEXT: Running analysis: LoopAnalysis on _ZN7default4mainEv
+; CHECK-O: Running pass: CJBarrierOpt on [module]
+; CHECK-O: Running analysis: LoopAnalysis on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running analysis: LoopAnalysis on user.main
 ; CHECK-O-NEXT: Running analysis: DominatorTreeAnalysis on user.main
-; CHECK-O-NEXT: Running pass: CJFastBarrier
-; CHECK-O-NEXT: Running pass: RewriteStatepointsForCangjieGC
+; CHECK-O-NEXT: Running pass: CJRewriteStatepoint on [module]
 ; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running analysis: TargetIRAnalysis on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on _ZN7default4mainEv
 ; CHECK-O-NEXT: Running analysis: PostDominatorTreeAnalysis on user.main
 ; CHECK-O-NEXT: Running analysis: TargetIRAnalysis on user.main
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on user.main
-; CHECK-O-NEXT: Invalidating analysis: InnerAnalysisManagerProxy<{{.*}}Module
-; CHECK-O-NEXT: Running pass: VerifierPass
-; CHECK-O-NEXT: Running analysis: VerifierAnalysis
+; CHECK-O: Running pass: VerifierPass on [module]
+; CHECK-O-NEXT: Running analysis: VerifierAnalysis on [module]
 
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
