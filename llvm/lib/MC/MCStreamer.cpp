@@ -1200,6 +1200,11 @@ void MCStreamer::emitTBSSSymbol(MCSection *Section, MCSymbol *Symbol,
 void MCStreamer::changeSection(MCSection *, const MCExpr *) {}
 void MCStreamer::emitWeakReference(MCSymbol *Alias, const MCSymbol *Symbol) {}
 void MCStreamer::emitBytes(StringRef Data) {}
+
+void MCStreamer::emitCangjieQualification(const MCCangjieQualification &) {
+  getContext().reportError(SMLoc(),
+                          "streamer cannot emit Cangjie AOT qualification");
+}
 void MCStreamer::emitBinaryData(StringRef Data) { emitBytes(Data); }
 void MCStreamer::emitValueImpl(const MCExpr *Value, unsigned Size, SMLoc Loc) {
   visitUsedExpr(*Value);

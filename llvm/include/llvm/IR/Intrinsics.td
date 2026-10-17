@@ -531,7 +531,7 @@ def int_cj_get_exception_typeid                : Intrinsic<[llvm_i32_ty],
 def int_cj_pre_initialize_package              : Intrinsic<[],
                                                            [llvm_ptr_ty]>;
 def int_cj_fill_in_stack_trace                 : Intrinsic<[llvm_gcptr_ty],
-                                                           [llvm_ptr_ty, llvm_gcptr_ty]>;
+                                                           [llvm_ptr_ty, llvm_ptr_ty, llvm_ptr_ty, llvm_gcptr_ty]>;
 def int_cj_string_dedup_canonical              : Intrinsic<[llvm_gcptr_ty],
                                                            [llvm_ptr_ty, llvm_gcptr_ty]>;
 def int_cj_get_real_heap_size                  : Intrinsic<[llvm_anyint_ty],

@@ -744,6 +744,17 @@ void ObjFile::parseRelocations(ArrayRef<SectionHeader> sectionHeaders,
 
     if (isSubtrahend) {
       relocation_info minuendInfo = relInfos[++i];
+      if (section.segname == "__CJ_METADATA" &&
+          section.name == "__cjmethodinfo" && subsec->data.size() % 56 == 0 &&
+          r.offset % 56 == 40 && uint64_t(r.offset) + 16 <= subsec->data.size() &&
+          read32le(subsec->data.data() + r.offset + 12) == 0x31514a43 &&
+          (minuendInfo.r_length != 3 || minuendInfo.r_pcrel ||
+           relInfo.r_length != 3 || relInfo.r_pcrel ||
+           minuendInfo.r_address != relInfo.r_address ||
+           !target->hasAttr(minuendInfo.r_type, RelocAttrBits::UNSIGNED))) {
+        error(toString(this) + ": invalid CJ entry relocation pair");
+        continue;
+      }
       // SUBTRACTOR relocations should always be followed by an UNSIGNED one
       // attached to the same address.
       assert(target->hasAttr(minuendInfo.r_type, RelocAttrBits::UNSIGNED) &&

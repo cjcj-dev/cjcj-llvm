@@ -90,6 +90,13 @@ static bool isColdBlock(const MachineBasicBlock &MBB,
 }
 
 bool MachineFunctionSplitter::runOnMachineFunction(MachineFunction &MF) {
+  // CJ metadata and compressed stackmaps use one FuncBegin/FuncEnd extent.
+  // A cold text fragment cannot be represented in that coordinate system.
+  // Keep this restriction at the layout producer; native functions retain
+  // the normal profile-guided splitting decision.
+  if (MF.getFunction().hasCangjieGC())
+    return false;
+
   // TODO: We only target functions with profile data. Static information may
   // also be considered but we don't see performance improvements yet.
   if (!MF.getFunction().hasProfileData())

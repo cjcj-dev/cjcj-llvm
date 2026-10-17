@@ -1784,7 +1784,9 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
         if (CangjieFunc) {
           // Use PUSHPC64 to store method info to stack slot.
           // see PUSHPC64 in X86InstrCompiler.td.
-          BuildMI(MBB, MBBI, DL, TII.get(X86::PUSHPC64)).addImm(0);
+          BuildMI(MBB, MBBI, DL, TII.get(X86::PUSHPC64))
+              .addImm(0)
+              .setMIExtFlag(MachineInstr::CJAOTSlotReady);
         }
       }
     }
@@ -2140,6 +2142,20 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
   if (Fn.getCallingConv() == CallingConv::X86_INTR)
     BuildMI(MBB, MBBI, DL, TII.get(X86::CLD))
         .setMIFlag(MachineInstr::FrameSetup);
+
+  // All target frame allocation, register saves, alignment and FP/BP setup
+  // are complete here. Attach the event to the last emitted instruction,
+  // excluding CFI/debug records which do not advance the machine PC.
+  if (CangjieFunc && HasFP) {
+    auto Last = MBBI;
+    while (Last != MBB.begin()) {
+      --Last;
+      if (!Last->isMetaInstruction()) {
+        Last->setExtFlag(MachineInstr::CJAOTFrameReady);
+        break;
+      }
+    }
+  }
 
   // At this point we know if the function has WinCFI or not.
   MF.setHasWinCFI(HasWinCFI);

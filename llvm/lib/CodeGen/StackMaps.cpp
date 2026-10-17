@@ -7,6 +7,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/StackMaps.h"
+#include "llvm/BinaryFormat/COFF.h"
+#include "llvm/BinaryFormat/ELF.h"
+#include "llvm/BinaryFormat/MachO.h"
 #include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
@@ -28,6 +31,8 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Statepoint.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCSectionCOFF.h"
+#include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
@@ -1042,10 +1047,13 @@ void StackMaps::recordStatepoint(const MCSymbol &L, const MachineInstr &MI,
     OpersInfo.MOE = MI.operands_end();
   }
 
+  // Qualification is owned by the actual saving event, independently of
+  // whether this map has no roots, register roots, or spilled roots.
   recordStackMapOpers(L, MI, OpersInfo, false, RecordAllRefInReg);
 }
 
 void StackMaps::recordCJReturnMap(const MCSymbol &PC) {
+  AP.CJQualification.Sites.push_back({&PC, 3, 0});
   auto &Ctx = AP.OutStreamer->getContext();
   CallsiteInfo Info;
   Info.CSOffsetExpr = MCBinaryExpr::createSub(
@@ -1067,8 +1075,14 @@ void StackMaps::recordCJStackMap(const MachineInstr &MI,
                                  bool RecordAllRefInReg) {
   const Triple TT(AP.MMI->getModule()->getTargetTriple());
   OffsetStepSize = TT.isARM() ? 4 : 8;
-  MCSymbol *MILabel = AP.OutStreamer->getContext().createTempSymbol();
-  AP.OutStreamer->emitLabel(MILabel);
+  const MCSymbol *MILabel = AP.getCangjieCallPC(MI);
+  if (!MILabel) {
+    // Preserve existing non-call map semantics (e.g. tail adaptations); a map
+    // alone must not manufacture a caller saving event.
+    auto *Label = AP.OutStreamer->getContext().createTempSymbol();
+    AP.OutStreamer->emitLabel(Label);
+    MILabel = Label;
+  }
   recordStatepoint(*MILabel, MI, RecordAllRefInReg);
 }
 
@@ -1278,7 +1292,30 @@ void StackMaps::emitCangjieCompressedStackMaps(MCStreamer &OS) {
   bool IsWindows = TT.isOSWindows();
   OffsetStepSize = TT.isARM() ? 4 : 8;
   FuncPtrSize = TT.isARM() ? 4 : 8;
+  MCSection *DefaultSection = OS.getCurrentSectionOnly();
   for (auto const &FR : FnInfos) {
+    MCSection *FunctionSection = DefaultSection;
+    const Function *F = FR.second.CJFunction;
+    if (F && F->hasComdat()) {
+      StringRef Group = F->getComdat()->getName();
+      if (TT.isOSBinFormatELF()) {
+        FunctionSection = OutContext.getELFSection(
+            ".cjmetadata.stackmap." + Group, ELF::SHT_PROGBITS,
+            ELF::SHF_ALLOC | ELF::SHF_WRITE | ELF::SHF_GROUP, 0, Group,
+          F->getComdat()->getSelectionKind() == Comdat::Any);
+      } else if (TT.isOSBinFormatCOFF()) {
+        auto *Base = OutContext.getCOFFSection(
+            (".cjsm$" + Group).str(),
+            COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
+                COFF::IMAGE_SCN_MEM_WRITE,
+            SectionKind::getReadOnly());
+        FunctionSection =
+            OutContext.getAssociativeCOFFSection(Base, FR.first);
+      }
+    }
+    OS.switchSection(FunctionSection);
+    if (TT.isOSBinFormatMachO())
+      OS.emitLabel(OutContext.createLinkerPrivateTempSymbol());
     MCSymbol *StackmapFunction =
         OutContext.getOrCreateSymbol(".Lstack_map." + FR.first->getName());
     OS.emitLabel(StackmapFunction);
@@ -1289,6 +1326,13 @@ void StackMaps::emitCangjieCompressedStackMaps(MCStreamer &OS) {
             : isAArch64() ? AArch64CalleeSavedReg : ARMCalleeSavedReg);
     prepareCompressedData(Data, FR.second, CSIdxStart, CSIdxEnd);
     emitCangjieCompressedData(OS, Data);
+    if (FR.second.CJFunction) {
+      OS.emitValueToAlignment(4);
+      auto *Qualification = OutContext.getOrCreateSymbol(
+          ".Lcj_qualification." + FR.first->getName());
+      OS.emitLabel(Qualification);
+      OS.emitCangjieQualification(FR.second.CJQualification);
+    }
     CSIdxStart = CSIdxEnd;
   }
   OS.addBlankLine();

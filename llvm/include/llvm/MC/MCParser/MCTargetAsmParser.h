@@ -17,6 +17,7 @@
 #include "llvm/MC/SubtargetFeature.h"
 #include "llvm/Support/SMLoc.h"
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 namespace llvm {
@@ -348,6 +349,12 @@ protected: // Can only create subclasses.
 
   const MCInstrInfo &MII;
 
+  // Installed only for function-owned inline assembly. Standalone/module
+  // assembly retains the target parser's ordinary streamer path.
+  std::function<void(const MCInst &, MCStreamer &, const MCSubtargetInfo &)>
+      InlineAsmInstructionEmitter;
+  void emitInlineAsmInstruction(const MCInst &Inst, MCStreamer &Out);
+
 public:
   MCTargetAsmParser(const MCTargetAsmParser &) = delete;
   MCTargetAsmParser &operator=(const MCTargetAsmParser &) = delete;
@@ -370,6 +377,11 @@ public:
 
   void setSemaCallback(MCAsmParserSemaCallback *Callback) {
     SemaCallback = Callback;
+  }
+
+  void setInlineAsmInstructionEmitter(
+      std::function<void(const MCInst &, MCStreamer &, const MCSubtargetInfo &)> Emit) {
+    InlineAsmInstructionEmitter = std::move(Emit);
   }
 
   // Target-specific parsing of expression.
