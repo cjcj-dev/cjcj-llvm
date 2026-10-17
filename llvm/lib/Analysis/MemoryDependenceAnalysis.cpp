@@ -473,15 +473,6 @@ MemDepResult MemoryDependenceResults::getSimplePointerDependencyFrom(
       case Intrinsic::cj_gcwrite_ref: {
         if (!GVNDisableBarrier) {
           MemoryLocation Loc = MemoryLocation::get(II);
-
-          // Avoid optimizing finalizer obj
-          if (const CallBase *CB =
-                  dyn_cast<CallBase>(getUnderlyingObject(Loc.Ptr))) {
-            Function *F = CB->getCalledFunction();
-            if (F && F->getName() == "CJ_MCC_OnFinalizerCreated")
-              continue;
-          }
-
           AliasResult R = BatchAA.alias(Loc, MemLoc);
           if (R == AliasResult::NoAlias)
             continue;
