@@ -27,6 +27,7 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalAlias.h"
+#include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/InstVisitor.h"
@@ -625,6 +626,20 @@ public:
       }
       if (auto *Copy = dyn_cast<MemTransferInst>(&Call))
         if (isNoAS1FieldCarrierMemTransfer(*Copy)) {
+          // The cast's Plain pointee cannot overrule an independently known
+          // allocation layout. Keep this check local to this admission family.
+          KnownCarrierRange Range = classifyKnownFieldCarrierRange(*Copy);
+          if (Range == KnownCarrierRange::ContainsReference) {
+            checkFailed("Bare memcpy/memmove of reference payload must use "
+                        "cj_array_copy_ref or another typed GC barrier.",
+                        &Call);
+            break;
+          }
+          if (Range == KnownCarrierRange::Invalid) {
+            checkFailed("Bare memcpy/memmove has an invalid known allocation "
+                        "payload range or size.", &Call);
+            break;
+          }
           const char *Silent = silentUnknownAdmitTag(Src);
           if (!Silent)
             Silent = silentUnknownAdmitTag(Dst);
@@ -2244,6 +2259,134 @@ private:
         isa<IntToPtrInst>(TypedPtr))
       return false;
     return true;
+  }
+
+  enum class KnownCarrierRange {
+    Unknown, NoReference, ContainsReference, Invalid
+  };
+
+  // Begin/End are payload-relative and already bounded by Ty's allocsize.
+  // Compare byte intervals, including copies that start inside a GC slot.
+  KnownCarrierRange classifyKnownLayoutRange(Type *Ty, uint64_t Begin,
+                                            uint64_t End) {
+    if (!containsGCPtrType(Ty))
+      return KnownCarrierRange::NoReference;
+    if (isa<PointerType>(Ty))
+      return KnownCarrierRange::ContainsReference;
+    auto Visit = [&](Type *Element, uint64_t Offset) {
+      TypeSize Size = DL.getTypeAllocSize(Element);
+      if (Size.isScalable())
+        return KnownCarrierRange::Unknown;
+      uint64_t Limit = Offset + Size.getFixedSize();
+      if (Begin >= Limit || End <= Offset)
+        return KnownCarrierRange::NoReference;
+      return classifyKnownLayoutRange(Element,
+                                      Begin > Offset ? Begin - Offset : 0,
+                                      std::min(End, Limit) - Offset);
+    };
+    if (auto *ST = dyn_cast<StructType>(Ty)) {
+      const StructLayout *Layout = DL.getStructLayout(ST);
+      bool Unknown = false;
+      for (unsigned I = 0; I != ST->getNumElements(); ++I) {
+        KnownCarrierRange R =
+            Visit(ST->getElementType(I), Layout->getElementOffset(I));
+        if (R == KnownCarrierRange::ContainsReference)
+          return R;
+        Unknown |= R == KnownCarrierRange::Unknown;
+      }
+      return Unknown ? KnownCarrierRange::Unknown
+                     : KnownCarrierRange::NoReference;
+    }
+    if (auto *AT = dyn_cast<ArrayType>(Ty)) {
+      TypeSize Stride = DL.getTypeAllocSize(AT->getElementType());
+      if (Stride.isScalable())
+        return KnownCarrierRange::Unknown;
+      uint64_t Step = Stride.getFixedSize();
+      if (!Step)
+        return KnownCarrierRange::NoReference;
+      bool Unknown = false;
+      for (uint64_t I = Begin / Step; I <= (End - 1) / Step; ++I) {
+        KnownCarrierRange R = Visit(AT->getElementType(), I * Step);
+        if (R == KnownCarrierRange::ContainsReference)
+          return R;
+        Unknown |= R == KnownCarrierRange::Unknown;
+      }
+      return Unknown ? KnownCarrierRange::Unknown
+                     : KnownCarrierRange::NoReference;
+    }
+    // No byte-slot model for reference vectors here. Do not invent one or
+    // change the existing policy for unsupported provenance/layouts.
+    return KnownCarrierRange::Unknown;
+  }
+
+  KnownCarrierRange
+  classifyKnownFieldCarrierRange(const MemTransferInst &Copy) {
+    Value *Root = Copy.getRawSource();
+    unsigned Bits = DL.getIndexSizeInBits(1);
+    APInt Offset(Bits, 0);
+    bool Invalid = false;
+    while (true) {
+      if (auto *Cast = dyn_cast<BitCastOperator>(Root)) {
+        Root = Cast->getOperand(0);
+        continue;
+      }
+      auto *GEP = dyn_cast<GEPOperator>(Root);
+      if (!GEP)
+        break;
+      for (auto I = gep_type_begin(GEP), E = gep_type_end(GEP); I != E; ++I) {
+        auto *Index = dyn_cast<ConstantInt>(I.getOperand());
+        if (!Index)
+          return KnownCarrierRange::Unknown;
+        APInt Delta(Bits, 0);
+        if (StructType *ST = I.getStructTypeOrNull()) {
+          uint64_t FieldOffset =
+              DL.getStructLayout(ST)->getElementOffset(Index->getZExtValue());
+          Invalid |= !APInt(65, FieldOffset).isSignedIntN(Bits);
+          Delta = APInt(Bits, FieldOffset);
+        } else {
+          TypeSize Stride = DL.getTypeAllocSize(I.getIndexedType());
+          if (Stride.isScalable())
+            return KnownCarrierRange::Unknown;
+          Invalid |= !Index->getValue().isSignedIntN(Bits) ||
+                     !APInt(65, Stride.getFixedSize()).isSignedIntN(Bits);
+          bool Overflow = false;
+          Delta = Index->getValue().sextOrTrunc(Bits).smul_ov(
+              APInt(Bits, Stride.getFixedSize()), Overflow);
+          Invalid |= Overflow;
+        }
+        bool Overflow = false;
+        Offset = Offset.sadd_ov(Delta, Overflow);
+        Invalid |= Overflow;
+      }
+      Root = GEP->getPointerOperand();
+    }
+    StructType *Layout = nullptr;
+    IntrinsicInst *Allocation = getKnownHeapAllocation(Root, Layout);
+    if (!Allocation ||
+        Allocation->getIntrinsicID() != Intrinsic::cj_malloc_object ||
+        !Layout->isSized())
+      return KnownCarrierRange::Unknown;
+    auto *AllocationSize =
+        dyn_cast<ConstantInt>(Allocation->getArgOperand(1));
+    if (!AllocationSize)
+      return KnownCarrierRange::Unknown;
+    TypeSize LayoutSize = DL.getTypeAllocSize(Layout);
+    if (LayoutSize.isScalable())
+      return KnownCarrierRange::Unknown;
+    uint64_t PayloadSize = LayoutSize.getFixedSize();
+    uint64_t HeaderSize = DL.getPointerSize(0);
+    // malloc.object's i32 size is a byte count, consumed unsigned by
+    // CJRuntimeLowering. Its high bit alone does not invalidate the layout.
+    if (Invalid || Offset.isNegative() || Offset.getActiveBits() > 64 ||
+        Offset.getZExtValue() < HeaderSize ||
+        AllocationSize->getValue().getActiveBits() > 64 ||
+        AllocationSize->getZExtValue() != PayloadSize)
+      return KnownCarrierRange::Invalid;
+    uint64_t Begin = Offset.getZExtValue() - HeaderSize;
+    uint64_t Size = cast<ConstantInt>(Copy.getLength())->getZExtValue();
+    if (Begin > PayloadSize || Size > PayloadSize - Begin)
+      return KnownCarrierRange::Invalid;
+    return classifyKnownLayoutRange(Layout, Begin, Begin + Size);
   }
 
   bool isNoReferenceMemTransfer(Value *Dst, Value *Src, Value *SizeValue) {
