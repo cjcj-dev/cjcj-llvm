@@ -16,12 +16,14 @@
 #define LLVM_CODEGEN_ASMPRINTER_H
 
 #include "llvm/ADT/MapVector.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/CodeGen/AsmPrinterHandler.h"
 #include "llvm/CodeGen/DwarfStringPoolEntry.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/MC/MCCangjieQualification.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cstdint>
 #include <memory>
@@ -99,6 +101,28 @@ public:
 
   /// The current machine function.
   MachineFunction *MF = nullptr;
+
+  MCCangjieQualification CJQualification;
+  uint32_t CJLayoutBits = 0;
+  DenseMap<const MachineInstr *, uint32_t> CJInstructionLayout;
+  const MachineInstr *CJEmittingInstruction = nullptr;
+  const MCSymbol *CJEmittedCallPC = nullptr;
+  uint16_t CJEmittedCallKind = 1;
+  uint16_t CJEmittedCallBits = 0;
+
+  // Instruction emission owns qualification. Root-map recording only consumes
+  // this PC; it must not register the same saved event a second time.
+  void beginCangjieInstruction(const MachineInstr &MI);
+  void endCangjieInstruction();
+  void recordCangjieCall(MCStreamer &S, const MCInst &Inst);
+  const MCSymbol *getCangjieCallPC(const MachineInstr &MI) const;
+  void recordCangjieReservedCall(const MCSymbol &PC, const MachineInstr &MI);
+
+  // Target physical register effects clear qualification before execution.
+  virtual uint32_t getCangjieLayoutClearBits(const MachineInstr &MI) const;
+  virtual uint32_t getCangjieInlineAsmClearBits(const MCInst &Inst) const;
+  void emitCangjieLayoutState(uint32_t Bits);
+
 
   /// This is a pointer to the current MachineModuleInfo.
   MachineModuleInfo *MMI = nullptr;
@@ -868,11 +892,11 @@ private:
   emitInlineAsm(StringRef Str, const MCSubtargetInfo &STI,
                 const MCTargetOptions &MCOptions,
                 const MDNode *LocMDNode = nullptr,
-                InlineAsm::AsmDialect AsmDialect = InlineAsm::AD_ATT) const;
+                InlineAsm::AsmDialect AsmDialect = InlineAsm::AD_ATT);
 
   /// This method formats and emits the specified machine instruction that is an
   /// inline asm.
-  void emitInlineAsm(const MachineInstr *MI) const;
+  void emitInlineAsm(const MachineInstr *MI);
 
   /// Add inline assembly info to the diagnostics machinery, so we can
   /// emit file and position info. Returns SrcMgr memory buffer position.

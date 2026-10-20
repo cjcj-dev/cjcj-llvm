@@ -219,6 +219,7 @@ public:
   void emitBinaryData(StringRef Data) override;
 
   void emitBytes(StringRef Data) override;
+  void emitCangjieQualification(const MCCangjieQualification &Info) override;
 
   void emitValueImpl(const MCExpr *Value, unsigned Size,
                      SMLoc Loc = SMLoc()) override;
@@ -1232,6 +1233,27 @@ void MCAsmStreamer::emitIntValueInHex(uint64_t Value, unsigned Size) {
 void MCAsmStreamer::emitIntValueInHexWithPadding(uint64_t Value,
                                                  unsigned Size) {
   emitValue(MCConstantExpr::create(Value, getContext(), true, Size), Size);
+}
+
+void MCAsmStreamer::emitCangjieQualification(
+    const MCCangjieQualification &Info) {
+  // Counts here describe symbolic input events, not serialized ABI rows.
+  OS << "\t.cj_aot_qualification\t";
+  Info.Entry->print(OS, MAI);
+  OS << ", ";
+  Info.End->print(OS, MAI);
+  OS << ", " << Info.Events.size() << ", " << Info.Sites.size();
+  for (const auto &Event : Info.Events) {
+    OS << ", ";
+    Event.PC->print(OS, MAI);
+    OS << ", " << Event.Bits;
+  }
+  for (const auto &Site : Info.Sites) {
+    OS << ", ";
+    Site.PC->print(OS, MAI);
+    OS << ", " << Site.Kind << ", " << Site.Bits;
+  }
+  EmitEOL();
 }
 
 void MCAsmStreamer::emitValueImpl(const MCExpr *Value, unsigned Size,

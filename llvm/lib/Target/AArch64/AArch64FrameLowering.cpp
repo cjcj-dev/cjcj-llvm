@@ -286,7 +286,8 @@ static void storeFunctionAddress(MachineFunction &MF,
         .addReg(AArch64::X9)
         .addReg(AArch64::FP)
         .addImm(-2)
-        .setMIFlag(MachineInstr::FrameSetup);
+        .setMIFlag(MachineInstr::FrameSetup)
+        .setMIExtFlag(MachineInstr::CJAOTSlotReady);
     return;
   }
   // Use X9 store func_begin
@@ -298,7 +299,8 @@ static void storeFunctionAddress(MachineFunction &MF,
       .addReg(AArch64::X9)
       .addReg(AArch64::FP)
       .addImm(-8)
-      .setMIFlag(MachineInstr::FrameSetup);
+      .setMIFlag(MachineInstr::FrameSetup)
+      .setMIExtFlag(MachineInstr::CJAOTSlotReady);
 }
 
 /// Returns how much of the incoming argument stack area (in bytes) we should
@@ -1928,6 +1930,19 @@ void AArch64FrameLowering::emitPrologue(MachineFunction &MF,
           .addReg(AArch64::X1)
           .setMIFlag(MachineInstr::FrameSetup);
       MBB.addLiveIn(AArch64::X1);
+    }
+  }
+
+  // Record target completion after all saves, allocation, realignment and
+  // final FP/BP setup. A frameless leaf does not gain FA-read permission.
+  if (F.hasCangjieGC() && HasFP) {
+    auto Last = MBBI;
+    while (Last != MBB.begin()) {
+      --Last;
+      if (!Last->isMetaInstruction()) {
+        Last->setExtFlag(MachineInstr::CJAOTFrameReady);
+        break;
+      }
     }
   }
 }

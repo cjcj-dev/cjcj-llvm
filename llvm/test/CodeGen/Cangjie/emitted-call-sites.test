@@ -1,0 +1,2 @@
+# RUN: %python %S/Inputs/emitted-call-sites.py --llc %llvm_tools_dir/llc --objdump %llvm_tools_dir/llvm-objdump --target x86_64-linux-gnu --out %t.x86
+# RUN: %python %S/Inputs/emitted-call-sites.py --llc %llvm_tools_dir/llc --objdump %llvm_tools_dir/llvm-objdump --target aarch64-linux-gnu --out %t.a64

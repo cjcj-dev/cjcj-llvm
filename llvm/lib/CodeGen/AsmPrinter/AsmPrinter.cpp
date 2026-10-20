@@ -91,6 +91,7 @@
 #include "llvm/MC/MCDirectives.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCSectionCOFF.h"
 #include "llvm/MC/MCSectionELF.h"
@@ -427,6 +428,56 @@ const MCSubtargetInfo &AsmPrinter::getSubtargetInfo() const {
 
 void AsmPrinter::EmitToStreamer(MCStreamer &S, const MCInst &Inst) {
   S.emitInstruction(Inst, getSubtargetInfo());
+  recordCangjieCall(S, Inst);
+}
+
+void AsmPrinter::beginCangjieInstruction(const MachineInstr &MI) {
+  CJEmittingInstruction = &MI;
+  CJEmittedCallPC = nullptr;
+  CJEmittedCallKind = 1;
+  CJEmittedCallBits = uint16_t(CJInstructionLayout.lookup(&MI));
+  if (isStatepointOpcode(MI.getOpcode())) {
+    uint64_t ID = StatepointOpers(&MI).getID();
+    if (ID == Cangjie::CJStatepointID::Safepoint ||
+        ID == Cangjie::CJStatepointID::SafepointStub ||
+        (ID == Cangjie::CJStatepointID::StackCheck && EnableStackGrow))
+      CJEmittedCallKind = 2;
+  }
+}
+
+void AsmPrinter::endCangjieInstruction() {
+  CJEmittingInstruction = nullptr;
+  CJEmittedCallPC = nullptr;
+}
+
+void AsmPrinter::recordCangjieCall(MCStreamer &S, const MCInst &Inst) {
+  // Every real call is an event, including calls inside statepoint and
+  // generated-pseudo expansions. Jumps and zero-instruction markers are not.
+  if (CJEmittingInstruction && MF->getFunction().hasCangjieGC() &&
+      CJQualification.Entry->isInSection() &&
+      &CJQualification.Entry->getSection() == S.getCurrentSectionOnly() &&
+      TM.getMCInstrInfo()->get(Inst.getOpcode()).isCall()) {
+    auto *ReturnPC = createTempSymbol("cj_call_return");
+    S.emitLabel(ReturnPC);
+    CJEmittedCallPC = ReturnPC;
+    CJQualification.Sites.push_back(
+        {ReturnPC, CJEmittedCallKind, CJEmittedCallBits});
+  }
+}
+
+const MCSymbol *AsmPrinter::getCangjieCallPC(const MachineInstr &MI) const {
+  return MF->getFunction().hasCangjieGC() && CJEmittingInstruction == &MI
+             ? CJEmittedCallPC
+             : nullptr;
+}
+
+void AsmPrinter::recordCangjieReservedCall(const MCSymbol &PC,
+                                          const MachineInstr &MI) {
+  // Nonzero statepoint patches retain their original reserved completion PC.
+  // This is encoding support, not proof that an unpatched NOP region can run.
+  if (MF->getFunction().hasCangjieGC())
+    CJQualification.Sites.push_back(
+        {&PC, CJEmittedCallKind, uint16_t(CJInstructionLayout.lookup(&MI))});
 }
 
 void AsmPrinter::emitInitialRawDwarfLocDirective(const MachineFunction &MF) {
@@ -1489,6 +1540,21 @@ static bool needFuncLabelsForEHOrDebugInfo(const MachineFunction &MF) {
 
 /// EmitFunctionBody - This method emits the body and trailer for a
 /// function.
+uint32_t AsmPrinter::getCangjieLayoutClearBits(const MachineInstr &) const {
+  report_fatal_error("Cangjie AOT layout is unavailable for this target");
+}
+
+uint32_t AsmPrinter::getCangjieInlineAsmClearBits(const MCInst &) const {
+  report_fatal_error("Cangjie inline assembly layout is unavailable for this target");
+}
+
+void AsmPrinter::emitCangjieLayoutState(uint32_t Bits) {
+  CJLayoutBits = Bits;
+  auto *PC = createTempSymbol("cj_layout");
+  OutStreamer->emitLabel(PC);
+  CJQualification.Events.push_back({PC, Bits});
+}
+
 void AsmPrinter::emitFunctionBody() {
   int NumInstsInFunction = 0;
   emitFunctionHeader();
@@ -1519,13 +1585,68 @@ void AsmPrinter::emitFunctionBody() {
   bool HasAnyRealCode = false;
 
   bool CangjieSrc = MF->getFunction().hasCangjieGC();
+  DenseMap<const MachineBasicBlock *, uint32_t> CJBlockIn, CJBlockOut;
+  SmallPtrSet<const MachineBasicBlock *, 32> CJReachable;
+  auto CJTransfer = [&](const MachineInstr &MI, uint32_t Bits) {
+    Bits &= ~getCangjieLayoutClearBits(MI);
+    if (MI.getExtFlag(MachineInstr::CJAOTSlotReady))
+      Bits |= 1;
+    if (MI.getExtFlag(MachineInstr::CJAOTFrameReady))
+      Bits |= 2;
+    return Bits;
+  };
   if (CangjieSrc) {
+    CJQualification = MCCangjieQualification();
+    CJQualification.Entry = getFunctionBegin();
+    CJInstructionLayout.clear();
+    SmallVector<const MachineBasicBlock *, 16> Work;
+    Work.push_back(&MF->front());
+    for (const auto &BB : *MF)
+      if (BB.isEHFuncletEntry())
+        Work.push_back(&BB);
+    while (!Work.empty()) {
+      const auto *BB = Work.pop_back_val();
+      if (!CJReachable.insert(BB).second)
+        continue;
+      for (const auto *Succ : BB->successors())
+        Work.push_back(Succ);
+    }
+    // Greatest fixed point of the must-state meet. External entry and
+    // independently entered funclets have no established layout.
+    for (const auto &BB : *MF)
+      CJBlockIn[&BB] = CJBlockOut[&BB] = 3;
+    bool Changed;
+    do {
+      Changed = false;
+      for (const auto &BB : *MF) {
+        uint32_t In = 3;
+        if (!CJReachable.count(&BB) || BB.isEntryBlock() ||
+            BB.isEHFuncletEntry() || BB.pred_empty())
+          In = 0;
+        else
+          for (const auto *Pred : BB.predecessors())
+            In &= CJBlockOut[Pred];
+        uint32_t Out = In;
+        for (const auto &MI : BB)
+          Out = CJTransfer(MI, Out);
+        Changed |= CJBlockIn[&BB] != In || CJBlockOut[&BB] != Out;
+        CJBlockIn[&BB] = In;
+        CJBlockOut[&BB] = Out;
+      }
+    } while (Changed);
+    CJQualification.Events.push_back({getFunctionBegin(), 0});
+    emitCangjieLayoutState(0);
     MF->setEpilogueLabel(nullptr);
   }
   bool CanDoExtraAnalysis = ORE->allowExtraAnalysis(DEBUG_TYPE);
   for (auto &MBB : *MF) {
-    // Print a label for the basic block.
+    // Alignment bytes between blocks have no instruction layout. A zero-size
+    // alignment collapses these symbols and MC retains the following state.
+    if (CangjieSrc)
+      emitCangjieLayoutState(0);
     emitBasicBlockStart(MBB);
+    if (CangjieSrc)
+      emitCangjieLayoutState(CJBlockIn[&MBB]);
     DenseMap<StringRef, unsigned> MnemonicCounts;
     for (auto &MI : MBB) {
       // Print the assembly for the instruction.
@@ -1533,6 +1654,13 @@ void AsmPrinter::emitFunctionBody() {
           !MI.isDebugInstr()) {
         HasAnyRealCode = true;
         ++NumInstsInFunction;
+      }
+
+      if (CangjieSrc) {
+        uint32_t Before = CJLayoutBits & ~getCangjieLayoutClearBits(MI);
+        if (Before != CJLayoutBits)
+          emitCangjieLayoutState(Before);
+        CJInstructionLayout[&MI] = Before;
       }
 
       // If there is a pre-instruction symbol, emit a label for it here.
@@ -1585,7 +1713,9 @@ void AsmPrinter::emitFunctionBody() {
         break;
       case TargetOpcode::INLINEASM:
       case TargetOpcode::INLINEASM_BR:
+        beginCangjieInstruction(MI);
         emitInlineAsm(&MI);
+        endCangjieInstruction();
         break;
       case TargetOpcode::DBG_VALUE:
       case TargetOpcode::DBG_VALUE_LIST:
@@ -1623,7 +1753,9 @@ void AsmPrinter::emitFunctionBody() {
           OutStreamer->emitRawComment("ARITH_FENCE");
         break;
       default:
+        beginCangjieInstruction(MI);
         emitInstruction(&MI);
+        endCangjieInstruction();
         if (CanDoExtraAnalysis) {
           MCInst MCI;
           MCI.setOpcode(MI.getOpcode());
@@ -1632,6 +1764,12 @@ void AsmPrinter::emitFunctionBody() {
           I.first->second++;
         }
         break;
+      }
+
+      if (CangjieSrc) {
+        uint32_t After = CJTransfer(MI, CJLayoutBits);
+        if (After != CJLayoutBits)
+          emitCangjieLayoutState(After);
       }
 
       // If there is a post-instruction symbol, emit a label for it here.
@@ -1702,8 +1840,11 @@ void AsmPrinter::emitFunctionBody() {
   }
 
   if (CangjieSrc) {
+    emitCangjieLayoutState(0);
     // emit stackgrow or stack_overflow_error
     for (auto SC: StackCheckMap) {
+      beginCangjieInstruction(*SC.first);
+      emitCangjieLayoutState(CJInstructionLayout.lookup(SC.first));
       for (const HandlerInfo &HI : Handlers) {
         HI.Handler->beginInstruction(SC.first);
       }
@@ -1715,18 +1856,25 @@ void AsmPrinter::emitFunctionBody() {
       for (const HandlerInfo &HI : Handlers) {
         HI.Handler->endInstruction();
       }
+      endCangjieInstruction();
+      emitCangjieLayoutState(0);
     }
     StackCheckMap.clear();
     if (!EnableSafepointOutline) {
       // emit safepoint
       for (unsigned SafeIndex = 0; SafeIndex < SafepointStackMap.size();
            ++SafeIndex) {
+        const MachineInstr &Source = *std::get<0>(SafepointStackMap[SafeIndex]);
+        beginCangjieInstruction(Source);
+        emitCangjieLayoutState(CJInstructionLayout.lookup(&Source));
         for (const HandlerInfo &HI : Handlers)
           HI.Handler->beginInstruction(
               std::get<0>(SafepointStackMap[SafeIndex]));
         NumInstsInFunction += emitCJSafepointInlineCall(SafeIndex);
         for (const HandlerInfo &HI : Handlers)
           HI.Handler->endInstruction();
+        endCangjieInstruction();
+        emitCangjieLayoutState(0);
       }
       SafepointStackMap.clear();
     }
@@ -1783,6 +1931,8 @@ void AsmPrinter::emitFunctionBody() {
     // Create a symbol for the end of function.
     CurrentFnEnd = createTempSymbol("func_end");
     OutStreamer->emitLabel(CurrentFnEnd);
+    if (CangjieSrc)
+      CJQualification.End = CurrentFnEnd;
   }
 
   // If the target wants a .size directive for the size of the function, emit

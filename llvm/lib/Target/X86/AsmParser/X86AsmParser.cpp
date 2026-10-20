@@ -4032,7 +4032,7 @@ void X86AsmParser::emitInstruction(MCInst &Inst, OperandVector &Operands,
       getSTI().getFeatureBits()[X86::FeatureLVIControlFlowIntegrity])
     applyLVICFIMitigation(Inst, Out);
 
-  Out.emitInstruction(Inst, getSTI());
+  emitInlineAsmInstruction(Inst, Out);
 
   if (LVIInlineAsmHardening &&
       getSTI().getFeatureBits()[X86::FeatureLVILoadHardening])

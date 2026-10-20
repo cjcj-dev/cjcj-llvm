@@ -116,6 +116,10 @@ public:
 
   enum MIExtFlag {
     NoExtFlags   = 0,
+    // Target-produced semantic completion events. AsmPrinter observes these
+    // after the complete MC expansion, never by estimating pseudo sizes.
+    CJAOTSlotReady = 1 << 1,
+    CJAOTFrameReady = 1 << 2,
     EpilogueIns  = 1,                   // Set to mark certain RSP recovery
                                         // instruction as part of epilogue
                                         // instructions for Cangjie function.

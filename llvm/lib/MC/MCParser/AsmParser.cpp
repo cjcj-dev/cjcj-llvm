@@ -25,6 +25,7 @@
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/DebugInfo/CodeView/SymbolRecord.h"
 #include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCCangjieQualification.h"
 #include "llvm/MC/MCCodeView.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDirectives.h"
@@ -535,6 +536,7 @@ private:
     DK_ERROR,
     DK_WARNING,
     DK_PRINT,
+    DK_CJ_AOT_QUALIFICATION,
     DK_ADDRSIG,
     DK_ADDRSIG_SYM,
     DK_PSEUDO_PROBE,
@@ -712,6 +714,7 @@ private:
   bool parseDirectiveLTODiscard();
 
   // Directives to support address-significance tables.
+  bool parseDirectiveCangjieQualification();
   bool parseDirectiveAddrsig();
   bool parseDirectiveAddrsigSym();
 
@@ -2290,6 +2293,8 @@ bool AsmParser::parseStatement(ParseStatementInfo &Info,
       return parseDirectiveDS(IDVal, 12);
     case DK_PRINT:
       return parseDirectivePrint(IDLoc);
+    case DK_CJ_AOT_QUALIFICATION:
+      return parseDirectiveCangjieQualification();
     case DK_ADDRSIG:
       return parseDirectiveAddrsig();
     case DK_ADDRSIG_SYM:
@@ -5595,6 +5600,7 @@ void AsmParser::initializeDirectiveKindMap() {
   DirectiveKindMap[".ds.w"] = DK_DS_W;
   DirectiveKindMap[".ds.x"] = DK_DS_X;
   DirectiveKindMap[".print"] = DK_PRINT;
+  DirectiveKindMap[".cj_aot_qualification"] = DK_CJ_AOT_QUALIFICATION;
   DirectiveKindMap[".addrsig"] = DK_ADDRSIG;
   DirectiveKindMap[".addrsig_sym"] = DK_ADDRSIG_SYM;
   DirectiveKindMap[".pseudoprobe"] = DK_PSEUDO_PROBE;
@@ -5830,6 +5836,49 @@ bool AsmParser::parseDirectivePrint(SMLoc DirectiveLoc) {
   if (parseEOL())
     return true;
   llvm::outs() << StrTok.getStringContents() << '\n';
+  return false;
+}
+
+bool AsmParser::parseDirectiveCangjieQualification() {
+  if (checkForValidSection())
+    return true;
+  MCCangjieQualification Info;
+  auto Symbol = [&](const MCSymbol *&Result) {
+    StringRef Name;
+    if (check(parseIdentifier(Name), "expected CJ qualification symbol"))
+      return true;
+    Result = getContext().getOrCreateSymbol(Name);
+    return false;
+  };
+  auto Integer = [&](int64_t &Result, uint64_t Max) {
+    return parseAbsoluteExpression(Result) ||
+           check(Result < 0 || uint64_t(Result) > Max,
+                 "CJ qualification integer out of range");
+  };
+  int64_t EventCount, SiteCount;
+  if (Symbol(Info.Entry) || parseComma() || Symbol(Info.End) ||
+      parseComma() || Integer(EventCount, UINT32_MAX) ||
+      parseComma() || Integer(SiteCount, UINT32_MAX))
+    return true;
+  for (int64_t I = 0; I < EventCount; ++I) {
+    const MCSymbol *PC;
+    int64_t Bits;
+    if (parseComma() || Symbol(PC) || parseComma() || Integer(Bits, 3))
+      return true;
+    Info.Events.push_back({PC, uint32_t(Bits)});
+  }
+  for (int64_t I = 0; I < SiteCount; ++I) {
+    const MCSymbol *PC;
+    int64_t Kind, Bits;
+    if (parseComma() || Symbol(PC) || parseComma() || Integer(Kind, 3) ||
+        check(Kind == 0, "invalid CJ saved site kind") ||
+        parseComma() || Integer(Bits, 3))
+      return true;
+    Info.Sites.push_back({PC, uint16_t(Kind), uint16_t(Bits)});
+  }
+  if (parseEOL())
+    return true;
+  getStreamer().emitCangjieQualification(Info);
   return false;
 }
 

@@ -5804,7 +5804,7 @@ bool AArch64AsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
       return true;
 
     Inst.setLoc(IDLoc);
-    Out.emitInstruction(Inst, getSTI());
+    emitInlineAsmInstruction(Inst, Out);
     return false;
   }
   case Match_MissingFeature: {

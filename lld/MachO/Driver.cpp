@@ -1749,6 +1749,7 @@ bool macho::link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
     // foldIdenticalLiterals before foldIdenticalSections.
     foldIdenticalLiterals();
     if (config->icfLevel != ICFLevel::none) {
+      markCangjieDescriptorEntries();
       if (config->icfLevel == ICFLevel::safe)
         markAddrSigSymbols();
       foldIdenticalSections(/*onlyCfStrings=*/false);

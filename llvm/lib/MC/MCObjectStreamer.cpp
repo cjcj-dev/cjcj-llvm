@@ -231,6 +231,23 @@ MCObjectStreamer::getOrCreateDataFragment(const MCSubtargetInfo *STI) {
   return F;
 }
 
+void MCObjectStreamer::emitCangjieQualification(
+    const MCCangjieQualification &Info) {
+  auto *Fragment = new MCDataFragment();
+  insert(Fragment);
+  flushPendingLabels(Fragment, 0);
+  Fragment->getContents().resize(16, 0);
+  Assembler->addCangjieQualification(Fragment, Info);
+  visitUsedSymbol(*Info.Entry);
+  visitUsedSymbol(*Info.End);
+  for (const auto &Event : Info.Events)
+    visitUsedSymbol(*Event.PC);
+  for (const auto &Site : Info.Sites)
+    visitUsedSymbol(*Site.PC);
+  // Never append ordinary bytes/fixups to the variable-size CJ fragment.
+  insert(new MCDataFragment());
+}
+
 void MCObjectStreamer::visitUsedSymbol(const MCSymbol &Sym) {
   Assembler->registerSymbol(Sym);
 }

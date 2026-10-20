@@ -7,9 +7,18 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/MC/MCParser/MCTargetAsmParser.h"
+#include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCContext.h"
 
 using namespace llvm;
+
+void MCTargetAsmParser::emitInlineAsmInstruction(const MCInst &Inst,
+                                                MCStreamer &Out) {
+  if (InlineAsmInstructionEmitter)
+    InlineAsmInstructionEmitter(Inst, Out, getSTI());
+  else
+    Out.emitInstruction(Inst, getSTI());
+}
 
 MCTargetAsmParser::MCTargetAsmParser(MCTargetOptions const &MCOptions,
                                      const MCSubtargetInfo &STI,

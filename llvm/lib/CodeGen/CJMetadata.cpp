@@ -286,6 +286,9 @@ void CJMetadataInfo::recordCurrentFunc() {
   if (CJPipeline) {
     StackMaps::CallsiteInfo CSInfo;
     SM.updateOrInsertFnInfo(AP.CurrentFnSym, CSInfo);
+    auto &Info = SM.getFnInfos()[AP.CurrentFnSym];
+    Info.CJFunction = &F;
+    Info.CJQualification = AP.CJQualification;
   }
 
   // pc + methodinfo. stackmap symbol
@@ -529,25 +532,14 @@ void CJMetadataInfo::emitDatas(const MCSymbol *FuncName,
                                            FuncName->getName());
     OS.emitSymbolAttribute(DescSymbol, MCSA_Global);
 
-    // A return poll has already removed the frame containing the descriptor.
-    // Publish the same startPC used by the poll, without an entry prefix.
-    // The image loader sorts these relocated pairs to build its PC index;
-    // source order is not address order after linking multiple objects.
-    OS.pushSection();
-    OS.switchSection(Context.getMachOSection(
-        "__CJ_METADATA", "__cjfuncmap", MachO::S_ATTR_LIVE_SUPPORT,
-        SectionKind::getReadOnly()));
-    OS.emitValueToAlignment(8);
-    // A linker-visible local label makes each pair its own dead-strip atom.
-    // Live code keeps its pair, which in turn keeps the matching descriptor.
-    OS.emitLabel(Context.createLinkerPrivateTempSymbol());
-    OS.emitSymbolValue(FuncBegin, 8);
-    OS.emitSymbolValue(DescSymbol, 8);
-    OS.popSection();
+    // The descriptor tail supplies the single entry association on all ABIs.
+
   } else {
     DescSymbol =
         Context.getOrCreateSymbol(".Lmethod_desc." + FuncName->getName());
   }
+  if (IsMachO)
+    OS.emitLabel(Context.createLinkerPrivateTempSymbol());
   OS.emitLabel(DescSymbol);
   // Emit StackMap offset
   MCSymbol *SMSymbol =
@@ -592,7 +584,34 @@ void CJMetadataInfo::emitDatas(const MCSymbol *FuncName,
                                            : FuncName->getName());
   OS.emitIntValue(F && needsCJReturnPoll(*F, TT) ? 1 : 0, 4);
   if (IsMachO)
-    OS.emitIntValue(0, 4); // Keep the next descriptor's ehTable 8-byte aligned.
+    OS.emitIntValue(0, 4); // Preserve the complete old 40-byte prefix.
+  auto PadTo = [&](unsigned Offset) {
+    OS.emitValueToOffset(
+        MCBinaryExpr::createAdd(MCSymbolRefExpr::create(DescSymbol, Context),
+                               MCConstantExpr::create(Offset, Context), Context),
+        0, SMLoc());
+  };
+  PadTo(IsMachO ? CangjieRuntimeLayout::FuncDescEntryOffsetMachO
+                : CangjieRuntimeLayout::FuncDescEntryOffsetELF);
+  auto EmitRelative = [&](const MCSymbol *Target, unsigned Bytes) {
+    auto *Base = Context.createTempSymbol("cj_desc_field");
+    OS.emitLabel(Base);
+    OS.emitValue(MCBinaryExpr::createSub(
+                     MCSymbolRefExpr::create(Target, Context),
+                     MCSymbolRefExpr::create(Base, Context), Context),
+                 Bytes);
+  };
+  EmitRelative(FuncBegin, IsMachO ? 8 : 4);
+  auto *Qualification = Context.getOrCreateSymbol(
+      ".Lcj_qualification." + FuncName->getName());
+  EmitRelative(Qualification, 4);
+  PadTo(IsMachO ? CangjieRuntimeLayout::FuncDescQualificationTagOffsetMachO
+                : CangjieRuntimeLayout::FuncDescQualificationTagOffsetELF);
+  OS.emitIntValue(0x31514a43, 4);
+  if (!IsMachO)
+    OS.emitIntValue(0, 4);
+  PadTo(IsMachO ? CangjieRuntimeLayout::FuncDescStrideMachO
+                : CangjieRuntimeLayout::FuncDescStrideELF);
 }
 
 void CJMetadataInfo::emitMethodInfoTable() {
@@ -632,16 +651,20 @@ void CJMetadataInfo::emitMethodInfoTable() {
     if (TT.isOSBinFormatELF()) {
       CJComdatMethodInfoSection = Context.getELFSection(
           ".cjmetadata.methodinfo." + Group, ELF::SHT_PROGBITS,
-          ELF::SHF_ALLOC | ELF::SHF_WRITE | ELF::SHF_GROUP, 0, Group, false);
+          ELF::SHF_ALLOC | ELF::SHF_WRITE | ELF::SHF_GROUP, 0, Group,
+          F->getComdat()->getSelectionKind() == Comdat::Any);
     } else if (TT.isOSBinFormatCOFF()) {
-      CJComdatMethodInfoSection = Context.getCOFFSection(
-          ".cjmthd.",
+      auto *Base = Context.getCOFFSection(
+          (".cjmthd$" + Group).str(),
           COFF::IMAGE_SCN_CNT_INITIALIZED_DATA | COFF::IMAGE_SCN_MEM_READ |
               COFF::IMAGE_SCN_MEM_WRITE,
           SectionKind::getReadOnly());
+      CJComdatMethodInfoSection =
+          Context.getAssociativeCOFFSection(Base, std::get<0>(Method));
     } else if (TT.isOSBinFormatMachO()) {
       CJComdatMethodInfoSection = Context.getMachOSection(
-          "__CJ_METADATA", "__cjmethodinfo_", 0, SectionKind::getReadOnly());
+          "__CJ_METADATA", "__cjmethodinfo", MachO::S_ATTR_LIVE_SUPPORT,
+          SectionKind::getReadOnly());
     } else {
       report_fatal_error("unsupport object format!");
     }

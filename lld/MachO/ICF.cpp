@@ -12,10 +12,13 @@
 #include "InputSection.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
+#include "Target.h"
 #include "UnwindInfoSection.h"
 
 #include "lld/Common/CommonLinkerContext.h"
 #include "llvm/Support/LEB128.h"
+#include "llvm/Support/Endian.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/xxhash.h"
@@ -391,6 +394,83 @@ void macho::markAddrSigSymbols() {
         markSymAsAddrSig(sym);
       else
         error(toString(isec) + ": unexpected section relocation");
+    }
+  }
+}
+
+void macho::markCangjieDescriptorEntries() {
+  // A CJ descriptor's entry relation makes its code identity significant even
+  // for a leaf with no physical descriptor slot. This is not the ordinary
+  // addrsig policy: the CJ contract applies to both safe and all ICF.
+  auto Resolve = [](const Reloc &R, InputSection *&Section, uint64_t &Value) {
+    Value = 0;
+    if (auto *Sym = R.referent.dyn_cast<Symbol *>()) {
+      auto *D = dyn_cast<Defined>(Sym);
+      if (!D || !D->isec)
+        return false;
+      Section = D->isec;
+      Value = D->value;
+    } else {
+      Section = R.referent.get<InputSection *>();
+    }
+    return Section != nullptr;
+  };
+  for (ConcatInputSection *Metadata : inputSections) {
+    if (Metadata->shouldOmitFromOutput() ||
+        Metadata->getSegName() != "__CJ_METADATA" ||
+        Metadata->getName() != "__cjmethodinfo")
+      continue;
+    constexpr uint64_t Stride = 56, EntryOffset = 40, TagOffset = 52;
+    if (Metadata->data.size() % Stride != 0)
+      continue; // Legacy records have no v1 qualification claim.
+    for (uint64_t Base = 0; Base < Metadata->data.size(); Base += Stride) {
+      if (support::endian::read32le(Metadata->data.data() + Base + TagOffset) !=
+          0x31514a43)
+        continue;
+      uint64_t Field = Base + EntryOffset;
+      const Reloc *Minus = nullptr, *Plus = nullptr;
+      for (size_t I = 0; I < Metadata->relocs.size(); ++I) {
+        const Reloc &R = Metadata->relocs[I];
+        if (R.offset != Field || R.length != 3 || R.pcrel ||
+            !target->hasAttr(R.type, RelocAttrBits::SUBTRAHEND))
+          continue;
+        if (Minus)
+          error(toString(Metadata) + ": duplicate CJ entry subtractor");
+        Minus = &R;
+        // InputFiles stores the UNSIGNED operand immediately after its
+        // SUBTRACTOR; the paired operand has no independent offset/length.
+        if (I + 1 < Metadata->relocs.size() &&
+            target->hasAttr(Metadata->relocs[I + 1].type,
+                            RelocAttrBits::UNSIGNED))
+          Plus = &Metadata->relocs[I + 1];
+      }
+      InputSection *From = nullptr, *To = nullptr;
+      uint64_t FromValue = 0, ToValue = 0;
+      if (!Minus || !Plus || !Resolve(*Minus, From, FromValue) ||
+          !Resolve(*Plus, To, ToValue) || From != Metadata ||
+          !isCodeSection(To)) {
+        error(toString(Metadata) + ": invalid CJ descriptor entry relation");
+        continue;
+      }
+      // The embedded addend belongs to the minuend. Recover the actual text
+      // offset from (text + addend - subtrahend), based at this entry field.
+      int64_t Offset;
+      if (FromValue > INT64_MAX || ToValue > INT64_MAX || Field > INT64_MAX ||
+          AddOverflow(int64_t(ToValue), Plus->addend, Offset) ||
+          AddOverflow(Offset, int64_t(Field), Offset) ||
+          SubOverflow(Offset, int64_t(FromValue), Offset) || Offset < 0 ||
+          uint64_t(Offset) >= To->data.size()) {
+        error(toString(Metadata) + ": CJ entry is outside its text atom");
+        continue;
+      }
+      // Follow weak/alias coalescing to the real winning atom. Marking unique
+      // never sets liveness and cannot retain a dead CJ function or metadata.
+      auto *Code = dyn_cast<ConcatInputSection>(To->canonical());
+      if (!Code) {
+        error(toString(Metadata) + ": CJ entry is not a code atom");
+        continue;
+      }
+      const_cast<ConcatInputSection *>(Code)->keepUnique = true;
     }
   }
 }

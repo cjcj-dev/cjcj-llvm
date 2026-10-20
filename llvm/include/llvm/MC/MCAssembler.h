@@ -16,6 +16,7 @@
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/MC/MCDirectives.h"
+#include "llvm/MC/MCCangjieQualification.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/MCLinkerOptimizationHint.h"
 #include "llvm/MC/MCSymbol.h"
@@ -50,6 +51,7 @@ class MCAsmLayout;
 class MCContext;
 class MCCodeEmitter;
 class MCFragment;
+class MCDataFragment;
 class MCObjectWriter;
 class MCSection;
 class MCValue;
@@ -127,6 +129,11 @@ private:
   std::vector<IndirectSymbolData> IndirectSymbols;
 
   std::vector<DataRegionData> DataRegions;
+
+  // CJ-only data fragments are resized from final text symbol positions.
+  std::vector<std::pair<MCDataFragment *, MCCangjieQualification>> CJQualifications;
+  bool updateCangjieQualifications(const MCAsmLayout &Layout, bool VerifyOnly);
+
 
   /// The list of linker options to propagate into the object file.
   std::vector<std::vector<std::string>> LinkerOptions;
@@ -317,6 +324,11 @@ public:
   /// Reuse an assembler instance
   ///
   void reset();
+
+  void addCangjieQualification(MCDataFragment *Fragment,
+                               const MCCangjieQualification &Info) {
+    CJQualifications.emplace_back(Fragment, Info);
+  }
 
   MCContext &getContext() const { return Context; }
 
