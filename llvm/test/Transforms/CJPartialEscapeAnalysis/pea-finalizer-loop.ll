@@ -16,7 +16,7 @@
 
 @W.ti = weak_odr global %TypeInfo {
   i8* getelementptr inbounds ([12 x i8], [12 x i8]* @"default$W.name", i32 0, i32 0),
-  i8 -128, i8 0, i16 2, i32 16, %BitMap* null, i32 0, i8 8, i8 0,
+  i8 -128, i8 2, i16 2, i32 16, %BitMap* null, i32 0, i8 8, i8 0,
   i32* getelementptr inbounds ([1 x i32], [1 x i32]* @"default$W.ti.offsets", i32 0, i32 0),
   i8* null,
   i8* bitcast (void (i8 addrspace(1)*, %TypeInfo*)* @w_dtor to i8*),
@@ -27,7 +27,7 @@
 
 @Throw.ti = weak_odr global %TypeInfo {
   i8* getelementptr inbounds ([12 x i8], [12 x i8]* @"default$W.name", i32 0, i32 0),
-  i8 -128, i8 0, i16 2, i32 16, %BitMap* null, i32 0, i8 8, i8 0,
+  i8 -128, i8 2, i16 2, i32 16, %BitMap* null, i32 0, i8 8, i8 0,
   i32* getelementptr inbounds ([1 x i32], [1 x i32]* @"default$W.ti.offsets", i32 0, i32 0),
   i8* null,
   i8* bitcast (void (i8 addrspace(1)*, %TypeInfo*)* @throwing_dtor to i8*),
@@ -36,7 +36,7 @@
   i8* bitcast ([1 x i8*]* @"default$W.fieldNames" to i8*)
 }, !RelatedType !0
 
-declare i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8*, i32)
+declare i8 addrspace(1)* @CJ_MCC_NewObject(i8*, i32)
 declare i8* @opaque_get()
 declare i64 @opaque_call(i8*, i64) nounwind
 declare i64 @may_throw_call(i8*, i64)
@@ -98,7 +98,7 @@ define void @throwing_dtor(i8 addrspace(1)* %this, %TypeInfo* %ti) gc "cangjie" 
 
 
 ; CHECK-LABEL: @loop_body_alloc(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_body_alloc() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -112,7 +112,7 @@ header:
 
 body:
   %handle = call i8* @opaque_get()
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   call void @llvm.memset.p1i8.i64(i8 addrspace(1)* %obj, i8 0, i64 16, i1 false)
   %p = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %hslot = bitcast i8 addrspace(1)* %p to i8* addrspace(1)*
@@ -131,7 +131,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_then_invoke(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: invoke {{.*}}@may_throw(
 ; CHECK: }
 define i64 @loop_then_invoke() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
@@ -146,7 +146,7 @@ header:
 
 body:
   %handle = call i8* @opaque_get()
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %p = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %hslot = bitcast i8 addrspace(1)* %p to i8* addrspace(1)*
   store i8* %handle, i8* addrspace(1)* %hslot, align 8
@@ -171,7 +171,7 @@ lpad:
 }
 
 ; CHECK-LABEL: @loop_latch_alloc(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_latch_alloc() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -185,7 +185,7 @@ header:
 
 latch:
   %handle = call i8* @opaque_get()
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %p = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %hslot = bitcast i8 addrspace(1)* %p to i8* addrspace(1)*
   store i8* %handle, i8* addrspace(1)* %hslot, align 8
@@ -200,7 +200,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_phi(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_phi() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -213,7 +213,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %p = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %slot = bitcast i8 addrspace(1)* %p to i64 addrspace(1)*
   store i64 1, i64 addrspace(1)* %slot, align 8
@@ -228,7 +228,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_store_escape(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_store_escape() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -240,7 +240,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   store i8 addrspace(1)* %obj, i8 addrspace(1)** @g
   br label %latch
 
@@ -253,7 +253,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_body_unreachable(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_body_unreachable() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -265,7 +265,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %p = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %slot = bitcast i8 addrspace(1)* %p to i64 addrspace(1)*
   store i64 1, i64 addrspace(1)* %slot, align 8
@@ -284,7 +284,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_throwing_dtor(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_throwing_dtor() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -296,7 +296,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @Throw.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @Throw.ti to i8*), i32 16)
   %p = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %slot = bitcast i8 addrspace(1)* %p to i64 addrspace(1)*
   store i64 1, i64 addrspace(1)* %slot, align 8
@@ -311,7 +311,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_body_break(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_body_break() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -323,7 +323,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %p = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %slot = bitcast i8 addrspace(1)* %p to i64 addrspace(1)*
   store i64 1, i64 addrspace(1)* %slot, align 8
@@ -339,7 +339,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_invoke_unwind_skip(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: invoke {{.*}}@may_throw(
 ; CHECK: }
 define i64 @loop_invoke_unwind_skip() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
@@ -352,7 +352,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %p = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %slot = bitcast i8 addrspace(1)* %p to i64 addrspace(1)*
   store i64 1, i64 addrspace(1)* %slot, align 8
@@ -371,7 +371,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_nested_inner(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_nested_inner() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -384,7 +384,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %p = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %slot = bitcast i8 addrspace(1)* %p to i64 addrspace(1)*
   store i64 1, i64 addrspace(1)* %slot, align 8
@@ -415,7 +415,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_maythrow_call(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: call {{.*}}@may_throw_call(
 ; CHECK: }
 define i64 @loop_maythrow_call() gc "cangjie" {
@@ -431,7 +431,7 @@ header:
 latch:
   %handle = call i8* @opaque_get()
   ; 16 = 8-byte object head + 8-byte payload (ObjLayout {i64}).
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %p = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %hslot = bitcast i8 addrspace(1)* %p to i8* addrspace(1)*
   store i8* %handle, i8* addrspace(1)* %hslot, align 8
@@ -446,7 +446,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_gcread_ref(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_gcread_ref() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -458,7 +458,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %p = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %slot = bitcast i8 addrspace(1)* %p to i8 addrspace(1)* addrspace(1)*
   %f = call i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)* %obj, i8 addrspace(1)* addrspace(1)* %slot)
@@ -474,7 +474,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_gcwrite_ref(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_gcwrite_ref() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -486,7 +486,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %p = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %slot = bitcast i8 addrspace(1)* %p to i8 addrspace(1)* addrspace(1)*
   call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* null, i8 addrspace(1)* %obj, i8 addrspace(1)* addrspace(1)* %slot)
@@ -501,7 +501,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_call_use_obj(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_call_use_obj() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -513,7 +513,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   call void @llvm.memset.p1i8.i64(i8 addrspace(1)* %obj, i8 0, i64 16, i1 false)
   %v = call i64 @use_obj(i8 addrspace(1)* %obj)
   br label %latch
@@ -527,7 +527,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_maythrow_call_personality(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: call {{.*}}@may_throw_call(
 ; CHECK: }
 define i64 @loop_maythrow_call_personality() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
@@ -543,7 +543,7 @@ header:
 latch:
   %handle = call i8* @opaque_get()
   ; 16 = 8-byte object head + 8-byte payload (ObjLayout {i64}).
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %p = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %hslot = bitcast i8 addrspace(1)* %p to i8* addrspace(1)*
   store i8* %handle, i8* addrspace(1)* %hslot, align 8
@@ -558,7 +558,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_call_ret_alias(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_call_ret_alias() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -571,7 +571,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %p = call i8 addrspace(1)* @id(i8 addrspace(1)* %obj)
   br label %latch
 
@@ -585,7 +585,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_cond_alloc(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_cond_alloc() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -602,7 +602,7 @@ body:
   br i1 %c, label %then, label %latch
 
 then:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %v = call i64 @use_obj(i8 addrspace(1)* %obj)
   br label %latch
 
@@ -616,7 +616,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_diamond_uses(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_diamond_uses() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -629,7 +629,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %c = icmp eq i64 %i, 3
   br i1 %c, label %then, label %else
 
@@ -652,7 +652,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_store_self_alias(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_store_self_alias() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -665,7 +665,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %p = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %hslot = bitcast i8 addrspace(1)* %p to i8* addrspace(1)*
   %as0 = addrspacecast i8 addrspace(1)* %obj to i8*
@@ -683,7 +683,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_call_ret_store_alias(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_call_ret_store_alias() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -696,7 +696,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %p1 = call i8 addrspace(1)* @id(i8 addrspace(1)* %obj)
   %f = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %hslot = bitcast i8 addrspace(1)* %f to i8* addrspace(1)*
@@ -715,7 +715,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_call_callee_plants_alias(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_call_callee_plants_alias() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -728,7 +728,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   call void @store_self(i8 addrspace(1)* %obj)
   %f = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %hslot = bitcast i8 addrspace(1)* %f to i8* addrspace(1)*
@@ -745,7 +745,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_call_method_readonly(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_call_method_readonly() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -758,7 +758,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %hp = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %hslot = bitcast i8 addrspace(1)* %hp to i8* addrspace(1)*
   %h = call i8* @opaque_get()
@@ -776,7 +776,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_call_method_maywrite(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_call_method_maywrite() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -789,7 +789,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %hp = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %hslot = bitcast i8 addrspace(1)* %hp to i8* addrspace(1)*
   %h = call i8* @opaque_get()
@@ -807,7 +807,7 @@ exit:
 }
 
 ; CHECK-LABEL: @loop_gcwrite_ref_value(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_gcwrite_ref_value() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -819,7 +819,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %p = getelementptr inbounds i8, i8 addrspace(1)* %obj, i64 8
   %slot = bitcast i8 addrspace(1)* %p to i8 addrspace(1)* addrspace(1)*
   call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %obj, i8 addrspace(1)* null, i8 addrspace(1)* addrspace(1)* %slot)
@@ -836,7 +836,7 @@ exit:
 declare void @llvm.prefetch.p0i8(i8* nocapture readonly, i32 immarg, i32 immarg, i32 immarg)
 
 ; CHECK-LABEL: @loop_unmodeled_intrinsic(
-; CHECK: call {{.*}}@CJ_MCC_NewFinalizer(
+; CHECK: call {{.*}}@CJ_MCC_NewObject(
 ; CHECK: }
 define i64 @loop_unmodeled_intrinsic() gc "cangjie" personality i32 (...)* @__cj_personality_v0 {
 entry:
@@ -848,7 +848,7 @@ header:
   br i1 %cmp, label %body, label %exit
 
 body:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewFinalizer(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
+  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* bitcast (%TypeInfo* @W.ti to i8*), i32 16)
   %as0 = addrspacecast i8 addrspace(1)* %obj to i8*
   call void @llvm.prefetch.p0i8(i8* %as0, i32 0, i32 3, i32 1)
   br label %latch

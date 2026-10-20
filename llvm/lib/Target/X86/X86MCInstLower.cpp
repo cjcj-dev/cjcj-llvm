@@ -3285,10 +3285,6 @@ void X86AsmPrinter::reloadSPForEpilogue(MachineFunction &MF) {
 //   jg    LNewObjSlowPath
 //   movq  %rdi       (%rax)  allocPtr->KlassInfo = Klass
 //   movq  %r8        (%rdx)  AllocBuffer.tlab.top = allocPtr + size
-// <<<<  hasFinalizer
-//   movq  %rax       %rdi    arg0 = allocPtr
-//   callq MCC_OnFinalizerCreated
-// >>>>>
 //   jmp   LNewObjFin
 // LNewObjSlowPath
 //   callq   MCC_NewObjectStub@PLT
@@ -3303,16 +3299,13 @@ void X86AsmPrinter::reloadSPForEpilogue(MachineFunction &MF) {
 //   jg    LNewObjSlowPath
 //   movq  %rcx       (%rax)  allocPtr->KlassInfo = Klass
 //   movq  %r8        (%r9)   AllocBuffer.tlab.top = allocPtr + size
-// <<<<  hasFinalizer
-//   movq  %rax       %rcx    arg0 = allocPtr
-//   callq MCC_OnFinalizerCreated
-// >>>>>
 //   jmp   LNewObjFin
 // LNewObjSlowPath
 //   callq   MCC_NewObjectStub
 // LNewObjFin
 // endif
-void X86AsmPrinter::emitMccNewObjectForCopyGC(ParamForEmitNewObj &Param) {
+void X86AsmPrinter::emitMccNewObjectForCopyGC(
+    MCInst &CallNewObjSlowPath) {
   unsigned AllocBufferReg;
   unsigned AllocPtrReg;
   unsigned LimitReg;
@@ -3388,42 +3381,19 @@ void X86AsmPrinter::emitMccNewObjectForCopyGC(ParamForEmitNewObj &Param) {
   EmitAndCountInstruction(GetLimit);
   EmitAndCountInstruction(CalNewAllocPtr);
   EmitAndCountInstruction(CmpNewAllocPtrWithLimit);
-  EmitAndCountInstruction(Param.CallNewObjSlowPath);
+  EmitAndCountInstruction(CallNewObjSlowPath);
   EmitAndCountInstruction(SetKlass);
   EmitAndCountInstruction(StoreNewAllocPtr);
-  if (Param.FastFuncName.equals("CJ_MCC_NewFinalizerFast")) {
-    MCInst CopyAllocPtrToArg0 =
-        MCInstBuilder(X86::MOV64rr).addReg(ArgReg0).addReg(AllocPtrReg);
-    MachineOperand FinalizerFunc(Param.MOSym);
-    auto *FinalizerGV = Param.MI->getMF()->getFunction().getParent()->
-        getFunction("CJ_MCC_OnFinalizerCreated");
-    FinalizerFunc.ChangeToGA(FinalizerGV, 0);
-    MCInst CallOnFinalizer =
-        MCInstBuilder(X86::JMP_1)
-            .addOperand(
-                Param.MCInstLowering.LowerMachineOperand(Param.MI, FinalizerFunc)
-                    .getValue());
-    EmitAndCountInstruction(CopyAllocPtrToArg0);
-    EmitAndCountInstruction(CallOnFinalizer);
-  }
 }
 
 void X86AsmPrinter::emitMccNewObjectFastPath(const MachineInstr *MI,
                                              const MachineOperand &MOSym,
                                              unsigned int Opcode) {
-  StringRef FastFuncName =
-      (MOSym.getGlobal()->getName().find("Object") != StringRef::npos)
-          ? "CJ_MCC_NewObjectFast"
-          : "CJ_MCC_NewFinalizerFast";
-
   X86MCInstLower MCInstLowering(*MF, *this);
   MCInst CallNewObjSlowPath = MCInstBuilder(X86::JCC_1)
       .addOperand(MCInstLowering.LowerMachineOperand(MI, MOSym).getValue())
       .addImm(X86::COND_G);
-  ParamForEmitNewObj Param(MI, MOSym, Opcode, MCInstLowering,
-                           CallNewObjSlowPath, FastFuncName);
-
-  emitMccNewObjectForCopyGC(Param);
+  emitMccNewObjectForCopyGC(CallNewObjSlowPath);
   SM.recordCJStackMap(*MI);
 }
 

@@ -2054,10 +2054,6 @@ static void patchAndReplaceAllUsesWith(Instruction *I, Value *Repl) {
 /// Attempt to eliminate a load, first by eliminating it
 /// locally, and then attempting non-local elimination if that fails.
 bool GVNPass::processLoad(LoadInst *L) {
-  if (CJPipeline) {
-    if (maybeCJFinalizerObj(L->getPointerOperand()))
-      return false;
-  }
   if (!MD)
     return false;
 
