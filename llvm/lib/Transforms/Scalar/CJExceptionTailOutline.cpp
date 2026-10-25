@@ -109,6 +109,30 @@ public:
   }
 
 private:
+  // Helpers use the ordinary C ABI. FunctionType does not encode a calling
+  // convention or parameter/return attributes, so matching types alone cannot
+  // justify replacing a call with a new indirect call in a shared helper.
+  static bool hasOrdinaryCallABI(const CallInst *CI) {
+    const Function *Callee = CI->getCalledFunction();
+    if (!Callee || CI->getCallingConv() != CallingConv::C ||
+        Callee->getCallingConv() != CallingConv::C ||
+        CI->getFunctionType()->isVarArg() || CI->hasOperandBundles() ||
+        CI->isMustTailCall() || CI->isConvergent() ||
+        CI->hasFnAttr(Attribute::NoDuplicate) ||
+        CI->hasFnAttr(Attribute::ReturnsTwice))
+      return false;
+    auto HasArgumentABI = [CI](AttributeList Attrs) {
+      if (Attrs.getRetAttrs().hasAttributes())
+        return true;
+      for (unsigned I = 0, E = CI->arg_size(); I < E; ++I)
+        if (Attrs.getParamAttrs(I).hasAttributes())
+          return true;
+      return false;
+    };
+    return !HasArgumentABI(CI->getAttributes()) &&
+           !HasArgumentABI(Callee->getAttributes());
+  }
+
   bool isLTOModule() const {
     if (M.getModuleIdentifier() == "ld-temp.o")
       return true;
@@ -336,7 +360,8 @@ private:
   bool tryExtractFactoryTail(CallInst *ThrowCI, CallInst *FactoryCall) {
     // The object must feed the throw and nothing else, otherwise erasing the
     // call would drop the value another instruction still needs.
-    if (FactoryCall->getNumUses() != 1)
+    if (FactoryCall->getNumUses() != 1 ||
+        !hasOrdinaryCallABI(FactoryCall))
       return false;
     // The helper moves the factory call next to the throw, so the tail has to
     // be one self contained cold block.
@@ -394,6 +419,8 @@ private:
     //
     // Replacing the tail with a helper call keeps the hot path small and lets
     // the backend see one shared cold sequence instead of N duplicated blocks.
+    if (!hasOrdinaryCallABI(ThrowCI))
+      return false;
     StringRef FuncName = ThrowCI->getFunction()->getName();
     if (FuncName.equals(ExceptionCtor0MangleStr) ||
         FuncName.equals(ExceptionCtorStringMangleStr) ||
@@ -427,7 +454,8 @@ private:
         break;
       }
     }
-    if (CtorCall == nullptr || CtorCall->arg_empty() ||
+    if (CtorCall == nullptr || !hasOrdinaryCallABI(CtorCall) ||
+        !hasOrdinaryCallABI(NewObjCall) || CtorCall->arg_empty() ||
         CtorCall->getArgOperand(0)->stripPointerCasts() != NewObjCall)
       return false;
 
