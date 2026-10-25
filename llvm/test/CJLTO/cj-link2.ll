@@ -163,7 +163,7 @@ define void @foo1() unnamed_addr gc "cangjie" {
 ; CHECK-NEXT:    store i8 addrspace(1)* [[TMP10]], i8 addrspace(1)* addrspace(1)* [[TMP11]], align 8
 ; CHECK-NEXT:    [[TMP12:%.*]] = getelementptr inbounds %"record._ZN11std$FS$core11std$FS$core5ArrayIlE", %"record._ZN11std$FS$core11std$FS$core5ArrayIlE" addrspace(1)* [[TMP8]], i64 0, i32 2
 ; CHECK-NEXT:    store i64 0, i64 addrspace(1)* [[TMP12]], align 4
-; CHECK-NEXT:    call void @llvm.cj.gcwrite.static.struct(i8* bitcast (%"record._ZN11std$FS$core11std$FS$core5ArrayIlE"* @"_ZN11std$FS$core17EMPTY_UINT8_ARRAYE" to i8*), i8* nonnull [[TMP7]], i64 24), !AggType !6
+; CHECK-NEXT:    call void @llvm.cj.gcwrite.static.struct.i64(i8* bitcast (%"record._ZN11std$FS$core11std$FS$core5ArrayIlE"* @"_ZN11std$FS$core17EMPTY_UINT8_ARRAYE" to i8*), i8* nonnull [[TMP7]], i64 24), !AggType !6
 ; CHECK-NEXT:    [[TMP13:%.*]] = call noalias i8 addrspace(1)* @CJ_MCC_NewArray8Stub(i64 0, i8* bitcast (%KlassInfo.0* @UInt8.arrayKlass to i8*))
 ; CHECK-NEXT:    call void @llvm.cj.gcwrite.static(i8 addrspace(1)* [[TMP13]], i8 addrspace(1)** nonnull @"_ZN11std$FS$core21EMPTY_UINT8_RAW_ARRAYE")
 ; CHECK-NEXT:    call void @llvm.memcpy.p0i8.p0i8.i64(i8* noundef nonnull align 8 dereferenceable(24) [[TMP6]], i8* noundef nonnull align 8 dereferenceable(24) [[DOT0_SROA_CAST1]], i64 24, i1 false)
@@ -175,7 +175,7 @@ define void @foo1() unnamed_addr gc "cangjie" {
 ; CHECK-NEXT:    store i8 addrspace(1)* [[TMP16]], i8 addrspace(1)* addrspace(1)* [[TMP17]], align 8
 ; CHECK-NEXT:    [[TMP18:%.*]] = getelementptr inbounds %"record._ZN11std$FS$core11std$FS$core5ArrayIlE", %"record._ZN11std$FS$core11std$FS$core5ArrayIlE" addrspace(1)* [[TMP14]], i64 0, i32 2
 ; CHECK-NEXT:    store i64 0, i64 addrspace(1)* [[TMP18]], align 4
-; CHECK-NEXT:    call void @llvm.cj.gcwrite.static.struct(i8* bitcast (%"record._ZN11std$FS$core11std$FS$core5ArrayIlE"* @"_ZN11std$FS$core17EMPTY_INT64_ARRAYE" to i8*), i8* nonnull [[TMP6]], i64 24), !AggType !7
+; CHECK-NEXT:    call void @llvm.cj.gcwrite.static.struct.i64(i8* bitcast (%"record._ZN11std$FS$core11std$FS$core5ArrayIlE"* @"_ZN11std$FS$core17EMPTY_INT64_ARRAYE" to i8*), i8* nonnull [[TMP6]], i64 24), !AggType !7
 ; CHECK-NEXT:    call void @llvm.memcpy.p0i8.p0i8.i64(i8* noundef nonnull align 8 dereferenceable(24) [[TMP5]], i8* noundef nonnull align 8 dereferenceable(24) [[DOT0_SROA_CAST2]], i64 24, i1 false)
 ; CHECK-NEXT:    [[TMP19:%.*]] = addrspacecast %"record._ZN11std$FS$core11std$FS$core5ArrayIlE"* [[TMP13032E]] to %"record._ZN11std$FS$core11std$FS$core5ArrayIlE" addrspace(1)*
 ; CHECK-NEXT:    [[TMP20:%.*]] = getelementptr inbounds %"record._ZN11std$FS$core11std$FS$core5ArrayIlE", %"record._ZN11std$FS$core11std$FS$core5ArrayIlE" addrspace(1)* [[TMP19]], i64 0, i32 1
@@ -185,14 +185,14 @@ define void @foo1() unnamed_addr gc "cangjie" {
 ; CHECK-NEXT:    store i8 addrspace(1)* [[TMP21]], i8 addrspace(1)* addrspace(1)* [[TMP22]], align 8
 ; CHECK-NEXT:    [[TMP23:%.*]] = getelementptr inbounds %"record._ZN11std$FS$core11std$FS$core5ArrayIlE", %"record._ZN11std$FS$core11std$FS$core5ArrayIlE" addrspace(1)* [[TMP19]], i64 0, i32 2
 ; CHECK-NEXT:    store i64 0, i64 addrspace(1)* [[TMP23]], align 4
-; CHECK-NEXT:    call void @llvm.cj.gcwrite.static.struct(i8* bitcast (%"record._ZN11std$FS$core11std$FS$core5ArrayIlE"* @"_ZN11std$FS$core18EMPTY_STRING_ARRAYE" to i8*), i8* nonnull [[TMP5]], i64 24), !AggType !8
+; CHECK-NEXT:    call void @llvm.cj.gcwrite.static.struct.i64(i8* bitcast (%"record._ZN11std$FS$core11std$FS$core5ArrayIlE"* @"_ZN11std$FS$core18EMPTY_STRING_ARRAYE" to i8*), i8* nonnull [[TMP5]], i64 24), !AggType !8
 ; CHECK-NEXT:    [[TMP24:%.*]] = addrspacecast %"record._ZN11std$FS$core6StringE"* [[TMP13877E]] to %"record._ZN11std$FS$core6StringE" addrspace(1)*
 ; CHECK-NEXT:    [[TMP25:%.*]] = load i8 addrspace(1)*, i8 addrspace(1)** @"_ZN11std$FS$core21EMPTY_UINT8_RAW_ARRAYE", align 8
 ; CHECK-NEXT:    [[TMP26:%.*]] = getelementptr inbounds %"record._ZN11std$FS$core6StringE", %"record._ZN11std$FS$core6StringE" addrspace(1)* [[TMP24]], i64 0, i32 0
 ; CHECK-NEXT:    store i8 addrspace(1)* [[TMP25]], i8 addrspace(1)* addrspace(1)* [[TMP26]], align 8
 ; CHECK-NEXT:    [[TMP27:%.*]] = getelementptr inbounds %"record._ZN11std$FS$core6StringE", %"record._ZN11std$FS$core6StringE" addrspace(1)* [[TMP24]], i64 0, i32 1
 ; CHECK-NEXT:    store i64 0, i64 addrspace(1)* [[TMP27]], align 4
-; CHECK-NEXT:    call void @llvm.cj.gcwrite.static.struct(i8* bitcast (%"record._ZN11std$FS$core6StringE"* @"_ZN11std$FS$core6String5emptyE" to i8*), i8* nonnull [[TMP4]], i64 16), !AggType !9
+; CHECK-NEXT:    call void @llvm.cj.gcwrite.static.struct.i64(i8* bitcast (%"record._ZN11std$FS$core6StringE"* @"_ZN11std$FS$core6String5emptyE" to i8*), i8* nonnull [[TMP4]], i64 16), !AggType !9
 ; CHECK-NEXT:    ret void
 ;
 entry:
@@ -387,7 +387,7 @@ entry:
 ; CHECK-NEXT:    store double 0.000000e+00, double* [[TMP9]], align 8
 ; CHECK-NEXT:    [[TMP10:%.*]] = getelementptr inbounds i8, i8 addrspace(1)* [[THIS]], i64 40
 ; CHECK-NEXT:    [[TMP11:%.*]] = bitcast %"record._ZN13std$FS$random11std$FS$core6OptionIdE"* [[ENUM_VAL]] to i8*
-; CHECK-NEXT:    call void @llvm.cj.gcwrite.struct.p0i8(i8 addrspace(1)* [[THIS]], i8 addrspace(1)* [[TMP10]], i8* nonnull [[TMP11]], i64 16)
+; CHECK-NEXT:    call void @llvm.cj.gcwrite.struct.p0i8.i64(i8 addrspace(1)* [[THIS]], i8 addrspace(1)* [[TMP10]], i8* nonnull [[TMP11]], i64 16)
 ; CHECK-NEXT:    call void @llvm.memcpy.p0i8.p0i8.i64(i8* noundef nonnull align 8 dereferenceable(24) [[TMP5]], i8* noundef nonnull align 8 dereferenceable(24) [[DOT0_SROA_CAST]], i64 24, i1 false)
 ; CHECK-NEXT:    [[TMP12:%.*]] = getelementptr inbounds %"record._ZN11std$FS$core11std$FS$core5ArrayIlE", %"record._ZN11std$FS$core11std$FS$core5ArrayIlE"* [[ATOM_5655E]], i64 0, i32 1
 ; CHECK-NEXT:    store i64 0, i64* [[TMP12]], align 4
@@ -397,7 +397,7 @@ entry:
 ; CHECK-NEXT:    [[TMP15:%.*]] = getelementptr inbounds %"record._ZN11std$FS$core11std$FS$core5ArrayIlE", %"record._ZN11std$FS$core11std$FS$core5ArrayIlE"* [[ATOM_5655E]], i64 0, i32 2
 ; CHECK-NEXT:    store i64 312, i64* [[TMP15]], align 4
 ; CHECK-NEXT:    [[TMP16:%.*]] = getelementptr inbounds i8, i8 addrspace(1)* [[THIS]], i64 8
-; CHECK-NEXT:    call void @llvm.cj.gcwrite.struct.p0i8(i8 addrspace(1)* [[THIS]], i8 addrspace(1)* [[TMP16]], i8* nonnull [[TMP5]], i64 24)
+; CHECK-NEXT:    call void @llvm.cj.gcwrite.struct.p0i8.i64(i8 addrspace(1)* [[THIS]], i8 addrspace(1)* [[TMP16]], i8* nonnull [[TMP5]], i64 24)
 ; CHECK-NEXT:    [[TMP17:%.*]] = getelementptr inbounds i8, i8 addrspace(1)* [[THIS]], i64 24
 ; CHECK-NEXT:    [[TMP18:%.*]] = bitcast i8 addrspace(1)* [[TMP17]] to i64 addrspace(1)*
 ; CHECK-NEXT:    [[TMP19:%.*]] = load i64, i64 addrspace(1)* [[TMP18]], align 4
@@ -840,7 +840,7 @@ entry:
 ; CHECK-NEXT:    [[ITERATOR_0:%.*]] = phi i64 [ 0, [[ARR_ALLOC_BODY0E]] ], [ [[TMP25:%.*]], [[ARR_INIT_BODY0E]] ]
 ; CHECK-NEXT:    [[TMP23:%.*]] = getelementptr inbounds %"record._ZN11std$FS$core6StringE", %"record._ZN11std$FS$core6StringE" addrspace(1)* [[TMP22]], i64 [[ITERATOR_0]]
 ; CHECK-NEXT:    [[TMP24:%.*]] = bitcast %"record._ZN11std$FS$core6StringE" addrspace(1)* [[TMP23]] to i8 addrspace(1)*
-; CHECK-NEXT:    call void @llvm.cj.gcwrite.struct.p0i8(i8 addrspace(1)* [[TMP20]], i8 addrspace(1)* [[TMP24]], i8* bitcast (%"record._ZN11std$FS$core6StringE"* @"_ZN11std$FS$core6String5emptyE" to i8*), i64 16)
+; CHECK-NEXT:    call void @llvm.cj.gcwrite.struct.p0i8.i64(i8 addrspace(1)* [[TMP20]], i8 addrspace(1)* [[TMP24]], i8* bitcast (%"record._ZN11std$FS$core6StringE"* @"_ZN11std$FS$core6String5emptyE" to i8*), i64 16)
 ; CHECK-NEXT:    [[TMP25]] = add nuw nsw i64 [[ITERATOR_0]], 1
 ; CHECK-NEXT:    [[EXITCOND_NOT:%.*]] = icmp eq i64 [[TMP25]], [[TMP16]]
 ; CHECK-NEXT:    br i1 [[EXITCOND_NOT]], label [[ARR_INIT_OPT0E:%.*]], label [[ARR_INIT_BODY0E]]
@@ -851,7 +851,7 @@ entry:
 ; CHECK-NEXT:    store i64 0, i64* [[ATOM_17657E_SROA_4_0__SROA_IDX14]], align 4
 ; CHECK-NEXT:    [[ATOM_17657E_SROA_5_0__SROA_IDX17:%.*]] = getelementptr inbounds %"record._ZN11std$FS$core11std$FS$core5ArrayIlE", %"record._ZN11std$FS$core11std$FS$core5ArrayIlE"* [[STRINGARRAY]], i64 0, i32 2
 ; CHECK-NEXT:    store i64 [[TMP16]], i64* [[ATOM_17657E_SROA_5_0__SROA_IDX17]], align 4
-; CHECK-NEXT:    call void @llvm.cj.gcwrite.struct.p0i8(i8 addrspace(1)* [[TMP20]], i8 addrspace(1)* [[TMP21]], i8* bitcast (%"record._ZN11std$FS$core6StringE"* @"_ZN15std$$collection22$__STRING_LITERAL__$23E" to i8*), i64 16)
+; CHECK-NEXT:    call void @llvm.cj.gcwrite.struct.p0i8.i64(i8 addrspace(1)* [[TMP20]], i8 addrspace(1)* [[TMP21]], i8* bitcast (%"record._ZN11std$FS$core6StringE"* @"_ZN15std$$collection22$__STRING_LITERAL__$23E" to i8*), i64 16)
 ; CHECK-NEXT:    [[TMP26:%.*]] = call i8* @CJ_MCC_GetObjClass(i8 addrspace(1)* [[IT]])
 ; CHECK-NEXT:    [[TMP27:%.*]] = getelementptr i8, i8* [[TMP26]], i64 32
 ; CHECK-NEXT:    [[TMP28:%.*]] = bitcast i8* [[TMP27]] to i64**
@@ -889,7 +889,7 @@ entry:
 ; CHECK-NEXT:    [[TMP45:%.*]] = bitcast i8 addrspace(1)* [[TMP44]] to %"ArrayLayout._ZN11std$FS$core6StringE" addrspace(1)*
 ; CHECK-NEXT:    [[ARR_IDX_SET_GEP11:%.*]] = getelementptr inbounds %"ArrayLayout._ZN11std$FS$core6StringE", %"ArrayLayout._ZN11std$FS$core6StringE" addrspace(1)* [[TMP45]], i64 0, i32 1, i64 [[ATOM_17659E_0]]
 ; CHECK-NEXT:    [[TMP46:%.*]] = bitcast %"record._ZN11std$FS$core6StringE" addrspace(1)* [[ARR_IDX_SET_GEP11]] to i8 addrspace(1)*
-; CHECK-NEXT:    call void @llvm.cj.gcwrite.struct.p0i8(i8 addrspace(1)* [[TMP44]], i8 addrspace(1)* [[TMP46]], i8* nonnull [[TMP3]], i64 16)
+; CHECK-NEXT:    call void @llvm.cj.gcwrite.struct.p0i8.i64(i8 addrspace(1)* [[TMP44]], i8 addrspace(1)* [[TMP46]], i8* nonnull [[TMP3]], i64 16)
 ; CHECK-NEXT:    [[TMP47:%.*]] = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 [[ATOM_17659E_0]], i64 1)
 ; CHECK-NEXT:    [[DOTFCA_0_EXTRACT24:%.*]] = extractvalue { i64, i1 } [[TMP47]], 0
 ; CHECK-NEXT:    [[DOTFCA_1_EXTRACT25:%.*]] = extractvalue { i64, i1 } [[TMP47]], 1
@@ -913,7 +913,7 @@ entry:
 ; CHECK-NEXT:    [[TMP52:%.*]] = bitcast i8 addrspace(1)* [[TMP51]] to %"ArrayLayout._ZN11std$FS$core6StringE" addrspace(1)*
 ; CHECK-NEXT:    [[ARR_IDX_SET_GEP20:%.*]] = getelementptr inbounds %"ArrayLayout._ZN11std$FS$core6StringE", %"ArrayLayout._ZN11std$FS$core6StringE" addrspace(1)* [[TMP52]], i64 0, i32 1, i64 [[DOTFCA_0_EXTRACT24]]
 ; CHECK-NEXT:    [[TMP53:%.*]] = bitcast %"record._ZN11std$FS$core6StringE" addrspace(1)* [[ARR_IDX_SET_GEP20]] to i8 addrspace(1)*
-; CHECK-NEXT:    call void @llvm.cj.gcwrite.struct.p0i8(i8 addrspace(1)* [[TMP51]], i8 addrspace(1)* [[TMP53]], i8* bitcast (%"record._ZN11std$FS$core6StringE"* @"_ZN15std$$collection22$__STRING_LITERAL__$24E" to i8*), i64 16)
+; CHECK-NEXT:    call void @llvm.cj.gcwrite.struct.p0i8.i64(i8 addrspace(1)* [[TMP51]], i8 addrspace(1)* [[TMP53]], i8* bitcast (%"record._ZN11std$FS$core6StringE"* @"_ZN15std$$collection22$__STRING_LITERAL__$24E" to i8*), i64 16)
 ; CHECK-NEXT:    [[DOTFCA_0_EXTRACT29]] = add nuw i64 [[ATOM_17659E_0]], 2
 ; CHECK-NEXT:    br label [[BLOCK_BODY16122E]]
 ; CHECK:       normal0E30:
@@ -929,7 +929,7 @@ entry:
 ; CHECK-NEXT:    [[TMP56:%.*]] = bitcast i8 addrspace(1)* [[TMP55]] to %"ArrayLayout._ZN11std$FS$core6StringE" addrspace(1)*
 ; CHECK-NEXT:    [[ARR_IDX_SET_GEP35:%.*]] = getelementptr inbounds %"ArrayLayout._ZN11std$FS$core6StringE", %"ArrayLayout._ZN11std$FS$core6StringE" addrspace(1)* [[TMP56]], i64 0, i32 1, i64 [[DOTFCA_0_EXTRACT]]
 ; CHECK-NEXT:    [[TMP57:%.*]] = bitcast %"record._ZN11std$FS$core6StringE" addrspace(1)* [[ARR_IDX_SET_GEP35]] to i8 addrspace(1)*
-; CHECK-NEXT:    call void @llvm.cj.gcwrite.struct.p0i8(i8 addrspace(1)* [[TMP55]], i8 addrspace(1)* [[TMP57]], i8* bitcast (%"record._ZN11std$FS$core6StringE"* @"_ZN15std$$collection22$__STRING_LITERAL__$25E" to i8*), i64 16)
+; CHECK-NEXT:    call void @llvm.cj.gcwrite.struct.p0i8.i64(i8 addrspace(1)* [[TMP55]], i8 addrspace(1)* [[TMP57]], i8* bitcast (%"record._ZN11std$FS$core6StringE"* @"_ZN15std$$collection22$__STRING_LITERAL__$25E" to i8*), i64 16)
 ; CHECK-NEXT:    [[TMP58:%.*]] = addrspacecast %"record._ZN11std$FS$core11std$FS$core5ArrayIlE"* [[STRINGARRAY]] to %"record._ZN11std$FS$core11std$FS$core5ArrayIlE" addrspace(1)*
 ; CHECK-NEXT:    call void @"_ZN11std$FS$core6String4joinER_ZN11std$FS$core5ArrayIR_ZN11std$FS$core6StringEER_ZN11std$FS$core6StringE"(%"record._ZN11std$FS$core6StringE"* noalias nonnull sret(%"record._ZN11std$FS$core6StringE") [[CALLRET36]], i8 addrspace(1)* null, %"record._ZN11std$FS$core11std$FS$core5ArrayIlE" addrspace(1)* [[TMP58]], i8 addrspace(1)* null, %"record._ZN11std$FS$core6StringE" addrspace(1)* addrspacecast (%"record._ZN11std$FS$core6StringE"* @"_ZN11std$FS$core6String5emptyE" to %"record._ZN11std$FS$core6StringE" addrspace(1)*))
 ; CHECK-NEXT:    br label [[COMMON_RET]]
