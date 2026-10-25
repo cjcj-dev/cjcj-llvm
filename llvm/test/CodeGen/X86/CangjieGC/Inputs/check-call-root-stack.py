@@ -117,14 +117,40 @@ else:
         if sec == section and start <= pos < start + size and callee[0] == "checkpoint":
             call_returns.append(pos + 4 - start)
 if name == "no_root_stack":
-    # Upstream StackMaps.cpp:774-778 excludes an ordinary empty callsite.
-    # The independent return-poll map does not qualify the call-return PC.
-    okay = bool(call_returns) and all(not any(row[0] == pc for row in rows)
-                                      for pc in call_returns)
+    # This fixture contains a real gc.statepoint, not a plain call or a
+    # return-statepoint. StackMaps::recordStackMapOpers preserves its exact PC
+    # even with no roots (OopMapSet::add_gc_map, oopMap.cpp:367-386).
+    # R65ab StackMapTable::GetLookupResult distinguishes FOUND from PC_MISS;
+    # a zero-root entry therefore cannot be replaced by an absent entry.
+    matches = [row for row in rows if row[0] in call_returns]
+    checks = {
+        "EMPTY_STATEPOINT_PC_RETAINED": len(call_returns) == 1 and len(matches) == 1
+            and not any(matches[0][1:]),
+        "EMPTY_STATEPOINT_NEIGHBOR_EXCLUDED": len(call_returns) == 1
+            and not any(row[0] == call_returns[0] + 1 for row in rows),
+    }
+    return_pcs = []
+    if len(sys.argv) > 3 and sys.argv[3] == "--return-labels":
+        # The assembler retains the actual label emitted by emitCJReturnPoll.
+        # Do not infer that an arbitrary second empty row belongs to the poll.
+        return_pcs = [pc - start for table in symbols.values()
+                      for label, sec, pc, symbol_size in table
+                      if sec == section and start <= pc < start + size
+                      and re.search(r"cj_return_pc[0-9]+$", label)]
+        checks["EMPTY_RETURN_POLL_DISTINCT_PC"] = (len(return_pcs) == 1
+            and len(call_returns) == 1 and return_pcs[0] != call_returns[0])
+        checks["EMPTY_RETURN_POLL_EXACT_MAP"] = (len(return_pcs) == 1
+            and len(rows) == 2
+            and {row[0] for row in rows} == set(call_returns + return_pcs)
+            and all(not any(row[1:]) for row in rows))
+        checks["EMPTY_RETURN_POLL_NEIGHBOR_EXCLUDED"] = (len(return_pcs) == 1
+            and not any(row[0] == return_pcs[0] + 1 for row in rows))
     print(json.dumps({"sha256": hashlib.sha256(raw).hexdigest(), "function": name,
-                      "call_returns": call_returns, "rows": rows}, sort_keys=True))
-    print("EMPTY_CALL_RETURN_EXCLUDED=" + str(okay), flush=True)
-    sys.exit(0 if okay else 1)
+                      "call_returns": call_returns, "return_pcs": return_pcs,
+                      "rows": rows}, sort_keys=True))
+    for target, okay in checks.items():
+        print(target + "=" + str(okay), flush=True)
+    sys.exit(0 if all(checks.values()) else 1)
 calls = []
 for pc in call_returns:
     matches = [row for row in rows if row[0] == pc]

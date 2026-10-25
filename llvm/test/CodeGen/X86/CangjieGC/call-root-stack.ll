@@ -16,6 +16,12 @@
 ; RUN: %python %S/Inputs/check-call-root-stack.py %t.a64.o no_root_stack
 ; RUN: llvm-objdump -d --no-show-raw-insn --disassemble-symbols=indirect_root_stack %t.a64.o > %t.a64.dis
 ; RUN: %python %S/Inputs/check-call-root-stack.py %t.a64.o indirect_root_stack %t.a64.dis
+; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnu -O2 -filetype=asm %s -o %t.labels.s
+; RUN: llvm-mc -triple=x86_64-unknown-linux-gnu -filetype=obj --save-temp-labels %t.labels.s -o %t.labels.o
+; RUN: %python %S/Inputs/check-call-root-stack.py %t.labels.o no_root_stack --return-labels
+; RUN: llc --cangjie-pipeline -mtriple=aarch64-unknown-linux-gnu -O2 -filetype=asm %s -o %t.labels.a64.s
+; RUN: llvm-mc -triple=aarch64-unknown-linux-gnu -filetype=obj --save-temp-labels %t.labels.a64.s -o %t.labels.a64.o
+; RUN: %python %S/Inputs/check-call-root-stack.py %t.labels.a64.o no_root_stack --return-labels
 ;
 ; HotSpot cpu/x86/x86.ad:43-49: save live references at the call site.
 ; frame_x86.inline.hpp:455-464: compiled-frame roots do not depend on a
@@ -59,7 +65,10 @@ entry:
 
 declare i32 @__gxx_personality_v0(...)
 
-; A normal call with no live GC values needs no root slot.
+; A genuine statepoint with no live GC values retains its exact PC and has no
+; root slot. Its independent epilogue return poll has a separate exact-PC map;
+; no return-statepoint is introduced. Plain calls/nonstatepoint empty records
+; remain excluded by the independent empty-callsite-domain.ll controls.
 define void @no_root_stack() gc "cangjie" {
 entry:
   %token = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, void ()* @checkpoint, i32 0, i32 0)
