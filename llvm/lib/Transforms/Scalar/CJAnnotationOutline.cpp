@@ -83,7 +83,7 @@ static bool isStaticRefRead(const Instruction &I) {
 // copy/stack allocation of these parameter ABIs by merely passing Argument
 // values to another call. In particular, equal byval attributes are not enough:
 // a second byval call would introduce a new copy with a different address.
-static bool canForwardArgumentsToHelper(const Function &F) {
+static bool canOutlineFunction(const Function &F) {
   if (F.isVarArg() || F.hasFnAttribute(Attribute::Naked))
     return false;
   for (unsigned I = 0; I < F.arg_size(); ++I) {
@@ -93,6 +93,14 @@ static bool canForwardArgumentsToHelper(const Function &F) {
         Attrs.hasAttribute(Attribute::Preallocated))
       return false;
   }
+  // The helper has additional static-slot parameters. A musttail call cloned
+  // from the original body would no longer match its enclosing prototype.
+  // Dropping musttail is not legal: the caller may rely on bounded stack use.
+  for (const BasicBlock &BB : F)
+    for (const Instruction &I : BB)
+      if (const auto *CI = dyn_cast<CallInst>(&I))
+        if (CI->isMustTailCall())
+          return false;
   return true;
 }
 
@@ -120,7 +128,7 @@ static bool haveSameFunctionContract(const Function &LHS, const Function &RHS) {
 static bool matchAnnotationInit(Function &F,
                                 AnnotationInitCandidate &Candidate) {
   if (!F.hasCangjieGC() || F.isDeclaration() || !F.hasInternalLinkage() ||
-      !canForwardArgumentsToHelper(F) ||
+      !canOutlineFunction(F) ||
       !F.arg_empty() || !F.getReturnType()->isVoidTy() ||
       !isAnnotationInitName(F.getName()) ||
       F.getName().endswith(AnnotationInitHelperSuffix) || F.size() != 1) {
@@ -152,7 +160,7 @@ static bool matchAnnotationInit(Function &F,
 static bool matchAnnotationFactory(Function &F,
                                    AnnotationFactoryCandidate &Candidate) {
   if (!F.hasCangjieGC() || F.isDeclaration() ||
-      !canForwardArgumentsToHelper(F) || !F.getReturnType()->isVoidTy() ||
+      !canOutlineFunction(F) || !F.getReturnType()->isVoidTy() ||
       !isAnnotationFactoryName(F.getName()) ||
       F.getName().endswith(AnnotationInitHelperSuffix) || F.size() != 1) {
     return false;
