@@ -96,11 +96,37 @@ static bool canOutlineFunction(const Function &F) {
   // The helper has additional static-slot parameters. A musttail call cloned
   // from the original body would no longer match its enclosing prototype.
   // Dropping musttail is not legal: the caller may rely on bounded stack use.
-  for (const BasicBlock &BB : F)
-    for (const Instruction &I : BB)
-      if (const auto *CI = dyn_cast<CallInst>(&I))
-        if (CI->isMustTailCall())
-          return false;
+  for (const BasicBlock &BB : F) {
+    for (const Instruction &I : BB) {
+      const auto *CI = dyn_cast<CallInst>(&I);
+      if (!CI)
+        continue;
+      if (CI->isMustTailCall())
+        return false;
+      const auto *II = dyn_cast<IntrinsicInst>(CI);
+      if (!II)
+        continue;
+      // These operations name or observe their enclosing function/frame.
+      // In particular, moving localescape would leave external localrecover
+      // users referring to an escape table removed from the original wrapper.
+      // Equal bodies and attributes do not make such operations relocatable.
+      switch (II->getIntrinsicID()) {
+      case Intrinsic::localescape:
+      case Intrinsic::localrecover:
+      case Intrinsic::localaddress:
+      case Intrinsic::frameaddress:
+      case Intrinsic::returnaddress:
+      case Intrinsic::addressofreturnaddress:
+      case Intrinsic::sponentry:
+      case Intrinsic::eh_recoverfp:
+      case Intrinsic::eh_dwarf_cfa:
+      case Intrinsic::eh_typeid_for:
+        return false;
+      default:
+        break;
+      }
+    }
+  }
   return true;
 }
 
