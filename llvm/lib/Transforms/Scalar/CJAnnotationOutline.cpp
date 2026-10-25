@@ -452,7 +452,8 @@ createSharedFactoryHelper(const AnnotationFactoryCandidate &Candidate) {
                          Original.getAttributes().getRetAttrs(), ParamAttrs));
 
   // The helper takes the factory's own arguments first, then one %slotN per
-  // static read; a read is remapped by its slot global (operand 0).
+  // static read. Globals cannot be VMap keys here: repeated reads of one
+  // global still have distinct positional parameters at other group members.
   ValueToValueMapTy VMap;
   auto HelperArgIt = Helper->arg_begin();
   for (Argument &OriginalArg : Original.args()) {
@@ -463,11 +464,16 @@ createSharedFactoryHelper(const AnnotationFactoryCandidate &Candidate) {
   for (unsigned SlotIndex = 0; SlotIndex < Candidate.StaticReads.size();
        ++SlotIndex) {
     HelperArgIt->setName("slot" + std::to_string(SlotIndex));
-    VMap[Candidate.StaticReads[SlotIndex]->getArgOperand(0)] = &*HelperArgIt;
     ++HelperArgIt;
   }
 
   cloneHelperBody(Candidate.BB, VMap, Helper);
+  for (unsigned SlotIndex = 0; SlotIndex < Candidate.StaticReads.size();
+       ++SlotIndex) {
+    auto *ClonedRead = cast<CallInst>(VMap[Candidate.StaticReads[SlotIndex]]);
+    ClonedRead->setArgOperand(
+        0, Helper->getArg(Original.arg_size() + SlotIndex));
+  }
   return *Helper;
 }
 
