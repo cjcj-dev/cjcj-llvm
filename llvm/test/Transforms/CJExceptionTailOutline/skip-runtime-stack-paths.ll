@@ -32,7 +32,7 @@ r:
 }
 
 ; CHECK-LABEL: define void @control(
-; CHECK:         call void @"__cj$exception_tail_helper0"(%TypeInfo* @TI, void (i8 addrspace(1)*, %TypeInfo*)* @_CExCtor)
+; CHECK:         call void @"__cj$exception_tail_helper0"(i8* bitcast (%TypeInfo* @TI to i8*), i32 56, void (i8 addrspace(1)*, %TypeInfo*)* @_CExCtor, %TypeInfo* @TI)
 ; CHECK-NEXT:    unreachable
 define void @control(i1 %c) gc "cangjie" {
 entry:

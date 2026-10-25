@@ -15,7 +15,7 @@
 //   unreachable
 // and every site carries its own copy of it. This pass rewrites the sequence to
 // a call of one helper shared by every site that uses the same
-// (TypeInfo, ctor) pair, so the hot path keeps a single call and the sequence
+// constructor signature, so the hot path keeps a single call and the sequence
 // is emitted once.
 //
 // Sites that build the exception through a runtime factory
@@ -47,7 +47,6 @@
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Transforms/Scalar/CJFillMetadata.h"
 #include "llvm/Transforms/Utils/Local.h"
 
 using namespace llvm;
@@ -154,18 +153,16 @@ private:
   /// there instead, and treating it as a type info builds a helper with the
   /// wrong ABI.
   ///
-  /// The element count matters as well: the helper reads the instance size
-  /// field out of the struct, and a same-named struct that is too small would
-  /// make the GEP below index past its end.
+  /// Only the canonical address-space-zero TypeInfo shape is supported. The
+  /// helper forwards this constructor operand without interpreting its value.
   bool isTypeInfoPtr(Type *Ty) const {
     auto *PtrTy = dyn_cast<PointerType>(Ty);
-    if (!PtrTy)
+    if (!PtrTy || PtrTy->getAddressSpace() != 0)
       return false;
     auto *StructTy =
         dyn_cast<StructType>(PtrTy->getNonOpaquePointerElementType());
     return StructTy != nullptr && StructTy->hasName() &&
-           StructTy->getName().equals("TypeInfo") &&
-           StructTy->getNumElements() > CIT_SIZE;
+           StructTy->getName().equals("TypeInfo");
   }
 
   bool isStdCoreStringPtr(Type *Ty) const {
@@ -234,16 +231,18 @@ private:
                                     ExceptionTailHelperKind Kind,
                                     PointerType *TypeInfoTy, Type *MsgTy) {
     auto *RefTy = Type::getInt8PtrTy(C, 1);
-    auto *TypeInfoStructTy =
-        cast<StructType>(TypeInfoTy->getNonOpaquePointerElementType());
     Function *NewObjFunc = getOrInsertNewObjectFunc();
     Function *ThrowFunc = getOrInsertThrowExceptionFunc();
 
     auto ArgIt = Func.arg_begin();
-    Argument *TypeInfo = &*ArgIt++;
-    TypeInfo->setName("ti");
+    Argument *AllocTypeInfo = &*ArgIt++;
+    AllocTypeInfo->setName("alloc_ti");
+    Argument *AllocSize = &*ArgIt++;
+    AllocSize->setName("alloc_size");
     Argument *Ctor = &*ArgIt++;
     Ctor->setName("ctor");
+    Argument *TypeInfo = &*ArgIt++;
+    TypeInfo->setName("ctor_ti");
     Argument *Msg = nullptr;
     if (Kind == ExceptionTailHelperKind::CtorString) {
       Msg = &*ArgIt++;
@@ -252,15 +251,12 @@ private:
 
     BasicBlock *Entry = BasicBlock::Create(C, "entry", &Func);
     IRBuilder<> IRB(Entry);
-    Value *SizePtr = IRB.CreateStructGEP(TypeInfoStructTy, TypeInfo, CIT_SIZE);
-    Value *Size = IRB.CreateLoad(Type::getInt32Ty(C), SizePtr);
-    // Keep the helper's allocation math identical to setHeapMallocSizeAlign():
-    // add the object header, then round up to the runtime's 8-byte alignment.
-    Value *SizeAdd = IRB.CreateAdd(Size, IRB.getInt32(ObjectHeadSize + 7));
-    Value *AlignedSize = IRB.CreateAnd(SizeAdd, IRB.getInt32(~7));
-    Value *Obj = IRB.CreateCall(
-        NewObjFunc,
-        {IRB.CreateBitCast(TypeInfo, Type::getInt8PtrTy(C)), AlignedSize});
+    // Allocation and construction have independent inputs. In particular the
+    // constructor may ignore a null/poison TypeInfo, and its TypeInfo need not
+    // describe this allocation. Preserve the actual allocation size too; do
+    // not introduce a load or recompute it from constructor metadata.
+    Value *Obj =
+        IRB.CreateCall(NewObjFunc, {AllocTypeInfo, AllocSize}, "obj");
     if (Kind == ExceptionTailHelperKind::Ctor0) {
       auto *CtorTy =
           FunctionType::get(Type::getVoidTy(C), {RefTy, TypeInfoTy}, false);
@@ -284,10 +280,12 @@ private:
     CtorArgTys.push_back(TypeInfoTy);
     auto *CtorTy = FunctionType::get(Type::getVoidTy(C), CtorArgTys, false);
     // Helper ABI:
-    //   helper0(TypeInfo*, void (ref, TypeInfo*)*)
-    //   helper_string(TypeInfo*, void (ref, String*, TypeInfo*)*, String*)
-    SmallVector<Type *, 3> HelperArgTys{TypeInfoTy,
-                                        PointerType::getUnqual(CtorTy)};
+    //   helper0(i8* allocTI, i32 size, void (ref, TypeInfo*)*, TypeInfo*)
+    //   helper_string(i8* allocTI, i32 size,
+    //                 void (ref, String*, TypeInfo*)*, TypeInfo*, String*)
+    SmallVector<Type *, 5> HelperArgTys{Type::getInt8PtrTy(C),
+                                       Type::getInt32Ty(C),
+                                       PointerType::getUnqual(CtorTy), TypeInfoTy};
     if (Kind == ExceptionTailHelperKind::CtorString)
       HelperArgTys.push_back(MsgTy);
     auto *FT = FunctionType::get(Type::getVoidTy(C), HelperArgTys, false);
@@ -466,28 +464,6 @@ private:
         CtorCall->getArgOperand(0)->stripPointerCasts() != NewObjCall)
       return false;
 
-    auto IsConcreteTypeInfo = [](Value *V) {
-      return !isa<PoisonValue>(V) && !isa<UndefValue>(V);
-    };
-
-    // The helper dereferences the type info to read the allocation size, so it
-    // has to be a real one. DeadArgumentElimination rewrites the constructor's
-    // trailing TypeInfo operand to poison whenever the constructor is defined
-    // in this module and never reads it, which is the common case for the
-    // stdlib's own exceptions. The allocation still carries the object's real
-    // type info, and the frontend derived the size it passes to NewObject from
-    // exactly that type info, so borrowing it from there both keeps the helper
-    // well defined and reproduces the original allocation size.
-    auto ResolveTypeInfo = [&](Value *CtorTypeInfo) -> Value * {
-      if (IsConcreteTypeInfo(CtorTypeInfo))
-        return CtorTypeInfo;
-      Value *AllocTypeInfo = NewObjCall->getArgOperand(0)->stripPointerCasts();
-      if (!isTypeInfoPtr(AllocTypeInfo->getType()) ||
-          !IsConcreteTypeInfo(AllocTypeInfo))
-        return nullptr;
-      return AllocTypeInfo;
-    };
-
     // Allocation and construction can read memory, throw or synchronize. Moving
     // either past another instruction is not justified by being in one block.
     // Only outline an adjacent sequence; debug records have no runtime effect.
@@ -499,15 +475,13 @@ private:
 
     Value *TypeInfo = nullptr;
     Function *Helper = nullptr;
-    SmallVector<Value *, 3> HelperArgs;
+    SmallVector<Value *, 5> HelperArgs;
     IRBuilder<> IRB(ThrowCI);
     Value *CtorPtr = CtorCall->getCalledOperand();
 
     if (CtorCall->arg_size() == 2 &&
         isTypeInfoPtr(CtorCall->getArgOperand(1)->getType())) {
-      TypeInfo = ResolveTypeInfo(CtorCall->getArgOperand(1));
-      if (TypeInfo == nullptr)
-        return false;
+      TypeInfo = CtorCall->getArgOperand(1);
       // The helper accepts a pointer to this exact constructor type. Merely
       // matching argument count and the trailing TypeInfo does not establish
       // its return type or receiver type, even for ordinary C calls.
@@ -519,13 +493,12 @@ private:
           getOrInsertExceptionTailFunc(ExceptionTailHelperKind::Ctor0,
                                        cast<PointerType>(TypeInfo->getType()),
                                        nullptr, *ThrowCI->getFunction());
-      HelperArgs = {TypeInfo, CtorPtr};
+      HelperArgs = {NewObjCall->getArgOperand(0), NewObjCall->getArgOperand(1),
+                    CtorPtr, TypeInfo};
     } else if (CtorCall->arg_size() == 3 &&
                isStdCoreStringPtr(CtorCall->getArgOperand(1)->getType()) &&
                isTypeInfoPtr(CtorCall->getArgOperand(2)->getType())) {
-      TypeInfo = ResolveTypeInfo(CtorCall->getArgOperand(2));
-      if (TypeInfo == nullptr)
-        return false;
+      TypeInfo = CtorCall->getArgOperand(2);
       if (CtorCall->getFunctionType() !=
           FunctionType::get(Type::getVoidTy(C),
                             {RefTy, CtorCall->getArgOperand(1)->getType(),
@@ -536,7 +509,8 @@ private:
           ExceptionTailHelperKind::CtorString,
           cast<PointerType>(TypeInfo->getType()),
           CtorCall->getArgOperand(1)->getType(), *ThrowCI->getFunction());
-      HelperArgs = {TypeInfo, CtorPtr, CtorCall->getArgOperand(1)};
+      HelperArgs = {NewObjCall->getArgOperand(0), NewObjCall->getArgOperand(1),
+                    CtorPtr, TypeInfo, CtorCall->getArgOperand(1)};
     } else {
       return false;
     }

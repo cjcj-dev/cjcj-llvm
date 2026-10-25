@@ -15,41 +15,6 @@ declare void @_CExCtor(i8 addrspace(1)*, %TypeInfo*)
 declare void @_CExCtorMsg(i8 addrspace(1)*, %"record.std.core:String"*, %TypeInfo*)
 declare void @_CNat6Ctor0(i8 addrspace(1)*, %TypeInfo*)
 
-; The constructor never reads the type info, so the frontend passes poison,
-; and the allocation does not carry a usable one either. There is nothing left
-; to give the helper, which dereferences the type info to read the object size.
-; CHECK-LABEL: define void @poison_ti(
-; CHECK:         %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* poison, i32 32)
-; CHECK-NEXT:    call void @_CNat6Ctor0(i8 addrspace(1)* %obj, %TypeInfo* poison)
-define void @poison_ti(i1 %c) gc "cangjie" {
-entry:
-  br i1 %c, label %t, label %r
-t:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* poison, i32 32)
-  call void @_CNat6Ctor0(i8 addrspace(1)* %obj, %TypeInfo* poison)
-  call void @CJ_MCC_ThrowException(i8 addrspace(1)* %obj)
-  unreachable
-r:
-  ret void
-}
-
-; The allocation's type info operand is not a type info, so it cannot stand in
-; for the poisoned one.
-; CHECK-LABEL: define void @poison_ti_raw_alloc(
-; CHECK:         %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* %raw, i32 32)
-; CHECK-NEXT:    call void @_CNat6Ctor0(i8 addrspace(1)* %obj, %TypeInfo* poison)
-define void @poison_ti_raw_alloc(i1 %c, i8* %raw) gc "cangjie" {
-entry:
-  br i1 %c, label %t, label %r
-t:
-  %obj = call i8 addrspace(1)* @CJ_MCC_NewObject(i8* %raw, i32 32)
-  call void @_CNat6Ctor0(i8 addrspace(1)* %obj, %TypeInfo* poison)
-  call void @CJ_MCC_ThrowException(i8 addrspace(1)* %obj)
-  unreachable
-r:
-  ret void
-}
-
 ; The factory result has a second user, so the call cannot be erased.
 ; CHECK-LABEL: define void @factory_extra_use(
 ; CHECK:         call void @_CNat6Sink(i8 addrspace(1)* %obj)
