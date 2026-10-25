@@ -340,7 +340,8 @@ private:
       return false;
     // The helper moves the factory call next to the throw, so the tail has to
     // be one self contained cold block.
-    if (FactoryCall->getParent() != ThrowCI->getParent())
+    if (FactoryCall->getParent() != ThrowCI->getParent() ||
+        FactoryCall->getNextNonDebugInstruction() != ThrowCI)
       return false;
     if (ThrowCI->getArgOperand(0) != FactoryCall)
       return false;
@@ -452,8 +453,13 @@ private:
       return AllocTypeInfo;
     };
 
+    // Allocation and construction can read memory, throw or synchronize. Moving
+    // either past another instruction is not justified by being in one block.
+    // Only outline an adjacent sequence; debug records have no runtime effect.
     if (NewObjCall->getParent() != CtorCall->getParent() ||
-        CtorCall->getParent() != ThrowCI->getParent())
+        CtorCall->getParent() != ThrowCI->getParent() ||
+        NewObjCall->getNextNonDebugInstruction() != CtorCall ||
+        CtorCall->getNextNonDebugInstruction() != ThrowCI)
       return false;
 
     Value *TypeInfo = nullptr;
