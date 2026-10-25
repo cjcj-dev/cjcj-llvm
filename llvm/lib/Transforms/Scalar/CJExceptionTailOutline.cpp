@@ -419,7 +419,10 @@ private:
     //
     // Replacing the tail with a helper call keeps the hot path small and lets
     // the backend see one shared cold sequence instead of N duplicated blocks.
-    if (!hasOrdinaryCallABI(ThrowCI))
+    auto *RefTy = Type::getInt8PtrTy(C, 1);
+    auto *ThrowTy = FunctionType::get(Type::getVoidTy(C), {RefTy}, false);
+    if (!hasOrdinaryCallABI(ThrowCI) ||
+        ThrowCI->getFunctionType() != ThrowTy)
       return false;
     StringRef FuncName = ThrowCI->getFunction()->getName();
     if (FuncName.equals(ExceptionCtor0MangleStr) ||
@@ -441,6 +444,10 @@ private:
     if (NewObjCall == nullptr || NewObjCall->getCalledFunction() == nullptr ||
         !NewObjCall->getCalledFunction()->getName().equals(
             "CJ_MCC_NewObject") ||
+        NewObjCall->getFunctionType() !=
+            FunctionType::get(RefTy,
+                              {Type::getInt8PtrTy(C), Type::getInt32Ty(C)},
+                              false) ||
         NewObjCall->getNumUses() != ExceptionTailUseCount)
       return false;
 
@@ -501,6 +508,13 @@ private:
       TypeInfo = ResolveTypeInfo(CtorCall->getArgOperand(1));
       if (TypeInfo == nullptr)
         return false;
+      // The helper accepts a pointer to this exact constructor type. Merely
+      // matching argument count and the trailing TypeInfo does not establish
+      // its return type or receiver type, even for ordinary C calls.
+      if (CtorCall->getFunctionType() !=
+          FunctionType::get(Type::getVoidTy(C),
+                            {RefTy, TypeInfo->getType()}, false))
+        return false;
       Helper =
           getOrInsertExceptionTailFunc(ExceptionTailHelperKind::Ctor0,
                                        cast<PointerType>(TypeInfo->getType()),
@@ -511,6 +525,12 @@ private:
                isTypeInfoPtr(CtorCall->getArgOperand(2)->getType())) {
       TypeInfo = ResolveTypeInfo(CtorCall->getArgOperand(2));
       if (TypeInfo == nullptr)
+        return false;
+      if (CtorCall->getFunctionType() !=
+          FunctionType::get(Type::getVoidTy(C),
+                            {RefTy, CtorCall->getArgOperand(1)->getType(),
+                             TypeInfo->getType()},
+                            false))
         return false;
       Helper = getOrInsertExceptionTailFunc(
           ExceptionTailHelperKind::CtorString,
