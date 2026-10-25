@@ -79,6 +79,35 @@ static bool isStaticRefRead(const Instruction &I) {
          II->getIntrinsicID() == Intrinsic::cj_gcread_static_ref;
 }
 
+// A wrapper cannot forward a variadic argument list or reproduce the implicit
+// copy/stack allocation of these parameter ABIs by merely passing Argument
+// values to another call. In particular, equal byval attributes are not enough:
+// a second byval call would introduce a new copy with a different address.
+static bool canForwardArgumentsToHelper(const Function &F) {
+  if (F.isVarArg() || F.hasFnAttribute(Attribute::Naked))
+    return false;
+  for (unsigned I = 0; I < F.arg_size(); ++I) {
+    AttributeSet Attrs = F.getAttributes().getParamAttrs(I);
+    if (Attrs.hasAttribute(Attribute::ByVal) ||
+        Attrs.hasAttribute(Attribute::InAlloca) ||
+        Attrs.hasAttribute(Attribute::Preallocated))
+      return false;
+  }
+  return true;
+}
+
+// FunctionType and body instructions do not describe the enclosing function's
+// ABI or optimization contracts. Never import one representative's attributes
+// (including sret, nonnull and target features) into a different member.
+static bool haveSameFunctionContract(const Function &LHS, const Function &RHS) {
+  return LHS.getFunctionType() == RHS.getFunctionType() &&
+         LHS.getCallingConv() == RHS.getCallingConv() &&
+         LHS.getAttributes() == RHS.getAttributes() &&
+         LHS.hasPersonalityFn() == RHS.hasPersonalityFn() &&
+         (!LHS.hasPersonalityFn() ||
+          LHS.getPersonalityFn() == RHS.getPersonalityFn());
+}
+
 // Match the per-instance annotation initializers emitted by the frontend
 // (see TranslateAnnotation.cpp): a single-block, argument-less internal init
 // whose last statement writes the static slot of one annotation instance, i.e.
@@ -91,6 +120,7 @@ static bool isStaticRefRead(const Instruction &I) {
 static bool matchAnnotationInit(Function &F,
                                 AnnotationInitCandidate &Candidate) {
   if (!F.hasCangjieGC() || F.isDeclaration() || !F.hasInternalLinkage() ||
+      !canForwardArgumentsToHelper(F) ||
       !F.arg_empty() || !F.getReturnType()->isVoidTy() ||
       !isAnnotationInitName(F.getName()) ||
       F.getName().endswith(AnnotationInitHelperSuffix) || F.size() != 1) {
@@ -122,7 +152,8 @@ static bool matchAnnotationInit(Function &F,
 static bool matchAnnotationFactory(Function &F,
                                    AnnotationFactoryCandidate &Candidate) {
   if (!F.hasCangjieGC() || F.isDeclaration() ||
-      !F.getReturnType()->isVoidTy() || !isAnnotationFactoryName(F.getName()) ||
+      !canForwardArgumentsToHelper(F) || !F.getReturnType()->isVoidTy() ||
+      !isAnnotationFactoryName(F.getName()) ||
       F.getName().endswith(AnnotationInitHelperSuffix) || F.size() != 1) {
     return false;
   }
@@ -211,6 +242,9 @@ hasSameOperation(const Instruction &LHS, const Instruction &RHS,
 // helper would write one init's object into another init's slot.
 static bool haveEquivalentBodies(const AnnotationInitCandidate &LHS,
                                  const AnnotationInitCandidate &RHS) {
+  if (!haveSameFunctionContract(*LHS.Fn, *RHS.Fn))
+    return false;
+
   DenseMap<const Value *, const Value *> ValueMap;
   Value *LSlot = LHS.FinalStaticWrite->getArgOperand(1);
   Value *RSlot = RHS.FinalStaticWrite->getArgOperand(1);
@@ -268,7 +302,8 @@ static bool haveEquivalentFactoryInstruction(
 
 static bool haveEquivalentFactories(const AnnotationFactoryCandidate &LHS,
                                     const AnnotationFactoryCandidate &RHS) {
-  if (LHS.StaticReads.size() != RHS.StaticReads.size() ||
+  if (!haveSameFunctionContract(*LHS.Fn, *RHS.Fn) ||
+      LHS.StaticReads.size() != RHS.StaticReads.size() ||
       LHS.Fn->arg_size() != RHS.Fn->arg_size()) {
     return false;
   }
