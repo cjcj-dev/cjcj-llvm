@@ -546,6 +546,17 @@ createSharedFactoryHelper(const AnnotationFactoryCandidate &Candidate) {
   return *Helper;
 }
 
+// Replace instructions, not the Function object or its entry contract.
+// Function::deleteBody also clears prefix/prologue data, personality and all
+// function metadata. Those still belong to the original wrapper, whose address
+// can be used by prefix readers, type tests and other external consumers.
+static void eraseBodyPreservingFunctionProperties(Function &F) {
+  for (BasicBlock &BB : F)
+    BB.dropAllReferences();
+  while (!F.empty())
+    F.begin()->eraseFromParent();
+}
+
 // Replace this member's body with a call to the group's shared helper.
 //
 //   before:
@@ -572,10 +583,7 @@ static void rewriteAsWrapper(const AnnotationInitCandidate &Candidate,
   auto *GV = cast<GlobalVariable>(Candidate.FinalStaticWrite->getArgOperand(1));
   DebugLoc DL = Candidate.FinalStaticWrite->getDebugLoc();
 
-  // deleteBody() also resets the linkage; keep the original one.
-  auto Linkage = Original.getLinkage();
-  Original.deleteBody();
-  Original.setLinkage(Linkage);
+  eraseBodyPreservingFunctionProperties(Original);
 
   BasicBlock *Entry = BasicBlock::Create(Ctx, "bb3", &Original);
   IRBuilder<> Builder(Entry);
@@ -613,10 +621,7 @@ static void rewriteFactoryAsWrapper(const AnnotationFactoryCandidate &Candidate,
     }
   }
 
-  // Same as rewriteAsWrapper: keep the original linkage.
-  auto Linkage = Original.getLinkage();
-  Original.deleteBody();
-  Original.setLinkage(Linkage);
+  eraseBodyPreservingFunctionProperties(Original);
 
   // call void @_CAF..fooE_imp(%Arr* %dst, i8 addrspace(1)** @_CAO..aE,
   //                             i8 addrspace(1)** @_CAO..bE)
