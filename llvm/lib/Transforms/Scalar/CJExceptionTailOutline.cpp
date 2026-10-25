@@ -10,8 +10,8 @@
 //
 // A cangjie throw site is a self contained cold sequence:
 //   %obj = call @CJ_MCC_NewObject(...)
-//   call @exception_ctor(%obj, [msg,] %ti)
-//   call @CJ_MCC_ThrowException(%obj)
+//   %updated = call @exception_ctor(%obj, [msg,] %ti)
+//   call @CJ_MCC_ThrowException(%updated)
 //   unreachable
 // and every site carries its own copy of it. This pass rewrites the sequence to
 // a call of one helper shared by every site that uses the same
@@ -48,6 +48,8 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Utils/Local.h"
+
+#include <string>
 
 using namespace llvm;
 
@@ -229,7 +231,8 @@ private:
 
   void buildExceptionTailHelperBody(Function &Func,
                                     ExceptionTailHelperKind Kind,
-                                    PointerType *TypeInfoTy, Type *MsgTy) {
+                                    PointerType *TypeInfoTy, Type *MsgTy,
+                                    Type *CtorRetTy) {
     auto *RefTy = Type::getInt8PtrTy(C, 1);
     Function *NewObjFunc = getOrInsertNewObjectFunc();
     Function *ThrowFunc = getOrInsertThrowExceptionFunc();
@@ -257,29 +260,33 @@ private:
     // not introduce a load or recompute it from constructor metadata.
     Value *Obj =
         IRB.CreateCall(NewObjFunc, {AllocTypeInfo, AllocSize}, "obj");
+    CallInst *Initialized;
     if (Kind == ExceptionTailHelperKind::Ctor0) {
       auto *CtorTy =
-          FunctionType::get(Type::getVoidTy(C), {RefTy, TypeInfoTy}, false);
-      IRB.CreateCall(CtorTy, Ctor, {Obj, TypeInfo});
+          FunctionType::get(CtorRetTy, {RefTy, TypeInfoTy}, false);
+      Initialized = IRB.CreateCall(CtorTy, Ctor, {Obj, TypeInfo});
     } else {
-      auto *CtorTy = FunctionType::get(Type::getVoidTy(C),
-                                       {RefTy, MsgTy, TypeInfoTy}, false);
-      IRB.CreateCall(CtorTy, Ctor, {Obj, Msg, TypeInfo});
+      auto *CtorTy = FunctionType::get(CtorRetTy,
+                                      {RefTy, MsgTy, TypeInfoTy}, false);
+      Initialized = IRB.CreateCall(CtorTy, Ctor, {Obj, Msg, TypeInfo});
     }
-    IRB.CreateCall(ThrowFunc, {Obj});
+    // Registration may relocate the receiver. The managed constructor's
+    // returned reference, not its input allocation, is the throw operand.
+    Value *Thrown = CtorRetTy->isVoidTy() ? Obj : Initialized;
+    IRB.CreateCall(ThrowFunc, {Thrown});
     IRB.CreateUnreachable();
   }
 
   Function *getOrInsertExceptionTailFunc(ExceptionTailHelperKind Kind,
                                          PointerType *TypeInfoTy, Type *MsgTy,
-                                         Function &Caller) {
+                                         Type *CtorRetTy, Function &Caller) {
     auto *RefTy = Type::getInt8PtrTy(C, 1);
     SmallVector<Type *, 3> CtorArgTys{RefTy};
     if (Kind == ExceptionTailHelperKind::CtorString)
       CtorArgTys.push_back(MsgTy);
     CtorArgTys.push_back(TypeInfoTy);
-    auto *CtorTy = FunctionType::get(Type::getVoidTy(C), CtorArgTys, false);
-    // Helper ABI:
+    auto *CtorTy = FunctionType::get(CtorRetTy, CtorArgTys, false);
+    // Helper ABI (the _ref variants use ref-returning constructor pointers):
     //   helper0(i8* allocTI, i32 size, void (ref, TypeInfo*)*, TypeInfo*)
     //   helper_string(i8* allocTI, i32 size,
     //                 void (ref, String*, TypeInfo*)*, TypeInfo*, String*)
@@ -290,12 +297,16 @@ private:
       HelperArgTys.push_back(MsgTy);
     auto *FT = FunctionType::get(Type::getVoidTy(C), HelperArgTys, false);
 
-    Function *Func = M.getFunction(getExceptionTailHelperName(Kind));
+    // Void and ref-returning constructors have different indirect-call ABIs.
+    // Keep separate helpers so module traversal order cannot suppress either.
+    std::string Name = getExceptionTailHelperName(Kind).str();
+    if (!CtorRetTy->isVoidTy())
+      Name += "_ref";
+    Function *Func = M.getFunction(Name);
     if (Func == nullptr) {
-      Func = Function::Create(FT, GlobalValue::InternalLinkage,
-                              getExceptionTailHelperName(Kind), &M);
+      Func = Function::Create(FT, GlobalValue::InternalLinkage, Name, &M);
       initializeExceptionTailHelper(*Func, Caller);
-      buildExceptionTailHelperBody(*Func, Kind, TypeInfoTy, MsgTy);
+      buildExceptionTailHelperBody(*Func, Kind, TypeInfoTy, MsgTy, CtorRetTy);
     } else if (Func->getFunctionType() != FT) {
       // One helper is shared per kind, so a call site whose types disagree with
       // the helper already built cannot use it. Leave that tail alone.
@@ -425,7 +436,9 @@ private:
     StringRef FuncName = ThrowCI->getFunction()->getName();
     if (FuncName.equals(ExceptionCtor0MangleStr) ||
         FuncName.equals(ExceptionCtorStringMangleStr) ||
-        FuncName.equals(ExceptionFactoryMangleStr))
+        FuncName.equals(ExceptionFactoryMangleStr) ||
+        FuncName.equals("__cj$exception_tail_helper0_ref") ||
+        FuncName.equals("__cj$exception_tail_helper_string_ref"))
       return false;
 
     // The factory shape has no NewObject/ctor pair to share, the throw of the
@@ -434,35 +447,33 @@ private:
       if (isExceptionFactoryCall(FactoryCall))
         return tryExtractFactoryTail(ThrowCI, FactoryCall);
 
-    Value *ThrownObj = ThrowCI->getArgOperand(0)->stripPointerCasts();
-    auto *NewObjCall = dyn_cast<CallInst>(ThrownObj);
-    // The freshly allocated object must only feed the ctor and the throw.
-    // Any extra user means the tail is not self-contained enough to erase.
-    constexpr unsigned ExceptionTailUseCount = 2;
-    if (NewObjCall == nullptr || NewObjCall->getCalledFunction() == nullptr ||
-        !NewObjCall->getCalledFunction()->getName().equals(
-            "CJ_MCC_NewObject") ||
+    // Resolve the constructor first: a managed class constructor returns the
+    // possibly updated receiver. Legacy void tails throw the allocation itself.
+    // Both forms must remain adjacent and entirely owned by this tail.
+    auto *CtorCall = dyn_cast_or_null<CallInst>(
+        ThrowCI->getPrevNonDebugInstruction());
+    if (!CtorCall || !hasOrdinaryCallABI(CtorCall) || CtorCall->arg_empty())
+      return false;
+    bool ReturnsRef = CtorCall->getType() == RefTy;
+    if (!ReturnsRef && !CtorCall->getType()->isVoidTy())
+      return false;
+    auto *NewObjCall = dyn_cast<CallInst>(CtorCall->getArgOperand(0));
+    if (!NewObjCall || !NewObjCall->getCalledFunction() ||
+        !NewObjCall->getCalledFunction()->getName().equals("CJ_MCC_NewObject") ||
         NewObjCall->getFunctionType() !=
             FunctionType::get(RefTy,
                               {Type::getInt8PtrTy(C), Type::getInt32Ty(C)},
                               false) ||
-        NewObjCall->getNumUses() != ExceptionTailUseCount)
+        !hasOrdinaryCallABI(NewObjCall))
       return false;
-
-    CallInst *CtorCall = nullptr;
-    for (Instruction *Prev = ThrowCI->getPrevNode(); Prev != nullptr;
-         Prev = Prev->getPrevNode()) {
-      if (isa<DbgInfoIntrinsic>(Prev))
-        continue;
-      if (auto *CI = dyn_cast<CallInst>(Prev)) {
-        CtorCall = CI;
-        break;
-      }
+    if (ReturnsRef) {
+      if (ThrowCI->getArgOperand(0) != CtorCall || !CtorCall->hasOneUse() ||
+          !NewObjCall->hasOneUse())
+        return false;
+    } else if (ThrowCI->getArgOperand(0)->stripPointerCasts() != NewObjCall ||
+               NewObjCall->getNumUses() != 2) {
+      return false;
     }
-    if (CtorCall == nullptr || !hasOrdinaryCallABI(CtorCall) ||
-        !hasOrdinaryCallABI(NewObjCall) || CtorCall->arg_empty() ||
-        CtorCall->getArgOperand(0)->stripPointerCasts() != NewObjCall)
-      return false;
 
     // Allocation and construction can read memory, throw or synchronize. Moving
     // either past another instruction is not justified by being in one block.
@@ -486,13 +497,14 @@ private:
       // matching argument count and the trailing TypeInfo does not establish
       // its return type or receiver type, even for ordinary C calls.
       if (CtorCall->getFunctionType() !=
-          FunctionType::get(Type::getVoidTy(C),
+          FunctionType::get(CtorCall->getType(),
                             {RefTy, TypeInfo->getType()}, false))
         return false;
       Helper =
           getOrInsertExceptionTailFunc(ExceptionTailHelperKind::Ctor0,
                                        cast<PointerType>(TypeInfo->getType()),
-                                       nullptr, *ThrowCI->getFunction());
+                                       nullptr, CtorCall->getType(),
+                                       *ThrowCI->getFunction());
       HelperArgs = {NewObjCall->getArgOperand(0), NewObjCall->getArgOperand(1),
                     CtorPtr, TypeInfo};
     } else if (CtorCall->arg_size() == 3 &&
@@ -500,7 +512,7 @@ private:
                isTypeInfoPtr(CtorCall->getArgOperand(2)->getType())) {
       TypeInfo = CtorCall->getArgOperand(2);
       if (CtorCall->getFunctionType() !=
-          FunctionType::get(Type::getVoidTy(C),
+          FunctionType::get(CtorCall->getType(),
                             {RefTy, CtorCall->getArgOperand(1)->getType(),
                              TypeInfo->getType()},
                             false))
@@ -508,7 +520,8 @@ private:
       Helper = getOrInsertExceptionTailFunc(
           ExceptionTailHelperKind::CtorString,
           cast<PointerType>(TypeInfo->getType()),
-          CtorCall->getArgOperand(1)->getType(), *ThrowCI->getFunction());
+          CtorCall->getArgOperand(1)->getType(), CtorCall->getType(),
+          *ThrowCI->getFunction());
       HelperArgs = {NewObjCall->getArgOperand(0), NewObjCall->getArgOperand(1),
                     CtorPtr, TypeInfo, CtorCall->getArgOperand(1)};
     } else {
@@ -532,6 +545,8 @@ private:
       if (auto *Inst = dyn_cast<Instruction>(Arg))
         DeadInstRoots.push_back(Inst);
     }
+    if (ThrownArgInst == CtorCall)
+      ThrownArgInst = nullptr;
     ThrowCI->eraseFromParent();
     CtorCall->eraseFromParent();
     // Delete a now-dead throw-side cast chain before checking whether the
