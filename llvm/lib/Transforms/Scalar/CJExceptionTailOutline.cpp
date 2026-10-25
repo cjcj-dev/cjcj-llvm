@@ -113,7 +113,8 @@ private:
   // Helpers use the ordinary C ABI. FunctionType does not encode a calling
   // convention or parameter/return attributes, so matching types alone cannot
   // justify replacing a call with a new indirect call in a shared helper.
-  static bool hasOrdinaryCallABI(const CallInst *CI) {
+  static bool hasOrdinaryCallABI(const CallInst *CI,
+                                 bool AllowAllocationNoAlias = false) {
     const Function *Callee = CI->getCalledFunction();
     if (!Callee || CI->getCallingConv() != CallingConv::C ||
         Callee->getCallingConv() != CallingConv::C ||
@@ -122,8 +123,15 @@ private:
         CI->hasFnAttr(Attribute::NoDuplicate) ||
         CI->hasFnAttr(Attribute::ReturnsTwice))
       return false;
-    auto HasArgumentABI = [CI](AttributeList Attrs) {
-      if (Attrs.getRetAttrs().hasAttributes())
+    auto HasArgumentABI = [CI, AllowAllocationNoAlias](AttributeList Attrs) {
+      AttributeSet RetAttrs = Attrs.getRetAttrs();
+      // Normal CJRuntimeLowering marks NewObject noalias on both call and
+      // declaration. It is not a changed return ABI. Preserve the call promise
+      // on the exact same direct allocation inside the helper; all other
+      // return/parameter attributes still require a separate ABI treatment.
+      if (AllowAllocationNoAlias)
+        RetAttrs = RetAttrs.removeAttribute(CI->getContext(), Attribute::NoAlias);
+      if (RetAttrs.hasAttributes())
         return true;
       for (unsigned I = 0, E = CI->arg_size(); I < E; ++I)
         if (Attrs.getParamAttrs(I).hasAttributes())
@@ -232,7 +240,7 @@ private:
   void buildExceptionTailHelperBody(Function &Func,
                                     ExceptionTailHelperKind Kind,
                                     PointerType *TypeInfoTy, Type *MsgTy,
-                                    Type *CtorRetTy) {
+                                    Type *CtorRetTy, bool AllocationNoAlias) {
     auto *RefTy = Type::getInt8PtrTy(C, 1);
     Function *NewObjFunc = getOrInsertNewObjectFunc();
     Function *ThrowFunc = getOrInsertThrowExceptionFunc();
@@ -258,8 +266,10 @@ private:
     // constructor may ignore a null/poison TypeInfo, and its TypeInfo need not
     // describe this allocation. Preserve the actual allocation size too; do
     // not introduce a load or recompute it from constructor metadata.
-    Value *Obj =
+    auto *Obj =
         IRB.CreateCall(NewObjFunc, {AllocTypeInfo, AllocSize}, "obj");
+    if (AllocationNoAlias)
+      Obj->addRetAttr(Attribute::NoAlias);
     CallInst *Initialized;
     if (Kind == ExceptionTailHelperKind::Ctor0) {
       auto *CtorTy =
@@ -279,7 +289,8 @@ private:
 
   Function *getOrInsertExceptionTailFunc(ExceptionTailHelperKind Kind,
                                          PointerType *TypeInfoTy, Type *MsgTy,
-                                         Type *CtorRetTy, Function &Caller) {
+                                         Type *CtorRetTy, bool AllocationNoAlias,
+                                         Function &Caller) {
     auto *RefTy = Type::getInt8PtrTy(C, 1);
     SmallVector<Type *, 3> CtorArgTys{RefTy};
     if (Kind == ExceptionTailHelperKind::CtorString)
@@ -302,11 +313,14 @@ private:
     std::string Name = getExceptionTailHelperName(Kind).str();
     if (!CtorRetTy->isVoidTy())
       Name += "_ref";
+    if (AllocationNoAlias)
+      Name += "_alloc_noalias";
     Function *Func = M.getFunction(Name);
     if (Func == nullptr) {
       Func = Function::Create(FT, GlobalValue::InternalLinkage, Name, &M);
       initializeExceptionTailHelper(*Func, Caller);
-      buildExceptionTailHelperBody(*Func, Kind, TypeInfoTy, MsgTy, CtorRetTy);
+      buildExceptionTailHelperBody(*Func, Kind, TypeInfoTy, MsgTy, CtorRetTy,
+                                   AllocationNoAlias);
     } else if (Func->getFunctionType() != FT) {
       // One helper is shared per kind, so a call site whose types disagree with
       // the helper already built cannot use it. Leave that tail alone.
@@ -434,11 +448,9 @@ private:
         ThrowCI->getFunctionType() != ThrowTy)
       return false;
     StringRef FuncName = ThrowCI->getFunction()->getName();
-    if (FuncName.equals(ExceptionCtor0MangleStr) ||
-        FuncName.equals(ExceptionCtorStringMangleStr) ||
-        FuncName.equals(ExceptionFactoryMangleStr) ||
-        FuncName.equals("__cj$exception_tail_helper0_ref") ||
-        FuncName.equals("__cj$exception_tail_helper_string_ref"))
+    if (FuncName.startswith(ExceptionCtor0MangleStr) ||
+        FuncName.startswith(ExceptionCtorStringMangleStr) ||
+        FuncName.startswith(ExceptionFactoryMangleStr))
       return false;
 
     // The factory shape has no NewObject/ctor pair to share, the throw of the
@@ -464,7 +476,7 @@ private:
             FunctionType::get(RefTy,
                               {Type::getInt8PtrTy(C), Type::getInt32Ty(C)},
                               false) ||
-        !hasOrdinaryCallABI(NewObjCall))
+        !hasOrdinaryCallABI(NewObjCall, /*AllowAllocationNoAlias=*/true))
       return false;
     if (ReturnsRef) {
       if (ThrowCI->getArgOperand(0) != CtorCall || !CtorCall->hasOneUse() ||
@@ -489,6 +501,8 @@ private:
     SmallVector<Value *, 5> HelperArgs;
     IRBuilder<> IRB(ThrowCI);
     Value *CtorPtr = CtorCall->getCalledOperand();
+    bool AllocationNoAlias = NewObjCall->getAttributes().hasRetAttr(
+        Attribute::NoAlias);
 
     if (CtorCall->arg_size() == 2 &&
         isTypeInfoPtr(CtorCall->getArgOperand(1)->getType())) {
@@ -503,7 +517,7 @@ private:
       Helper =
           getOrInsertExceptionTailFunc(ExceptionTailHelperKind::Ctor0,
                                        cast<PointerType>(TypeInfo->getType()),
-                                       nullptr, CtorCall->getType(),
+                                       nullptr, CtorCall->getType(), AllocationNoAlias,
                                        *ThrowCI->getFunction());
       HelperArgs = {NewObjCall->getArgOperand(0), NewObjCall->getArgOperand(1),
                     CtorPtr, TypeInfo};
@@ -521,7 +535,7 @@ private:
           ExceptionTailHelperKind::CtorString,
           cast<PointerType>(TypeInfo->getType()),
           CtorCall->getArgOperand(1)->getType(), CtorCall->getType(),
-          *ThrowCI->getFunction());
+          AllocationNoAlias, *ThrowCI->getFunction());
       HelperArgs = {NewObjCall->getArgOperand(0), NewObjCall->getArgOperand(1),
                     CtorPtr, TypeInfo, CtorCall->getArgOperand(1)};
     } else {
