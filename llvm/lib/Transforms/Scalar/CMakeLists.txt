@@ -4,11 +4,13 @@ add_llvm_component_library(LLVMScalarOpts
   AnnotationRemarks.cpp
   BDCE.cpp
   CJAllocationSizeCheck.cpp
+  CJAnnotationOutline.cpp
   CJIRVerifier.cpp
   CJBarrierSplit.cpp
   CJBoxedValueBarrier.cpp
   CJTypedCallReturnCopy.cpp
   CJDevirtualOpt.cpp
+  CJExceptionTailOutline.cpp
   CJRuntimeLowering.cpp
   CJTypedReadHelper.cpp
   CallSiteSplitting.cpp

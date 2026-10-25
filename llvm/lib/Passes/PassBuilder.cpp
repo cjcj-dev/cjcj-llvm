@@ -153,6 +153,7 @@
 #include "llvm/Transforms/Scalar/AlignmentFromAssumptions.h"
 #include "llvm/Transforms/Scalar/AnnotationRemarks.h"
 #include "llvm/Transforms/Scalar/BDCE.h"
+#include "llvm/Transforms/Scalar/CJAnnotationOutline.h"
 #include "llvm/Transforms/Scalar/CJBarrierOpt.h"
 #include "llvm/Transforms/Scalar/CJBarrierSplit.h"
 #include "llvm/Transforms/Scalar/CJBoxedValueBarrier.h"
@@ -166,6 +167,7 @@
 #include "llvm/Transforms/Scalar/CJGenericIntrinsicOpt.h"
 #include "llvm/Transforms/Scalar/CJLoopFloatOpt.h"
 #include "llvm/Transforms/Scalar/CJRSSCE.h"
+#include "llvm/Transforms/Scalar/CJExceptionTailOutline.h"
 #include "llvm/Transforms/Scalar/CJRuntimeLowering.h"
 #include "llvm/Transforms/Scalar/CJRewriteStatepoint.h"
 #include "llvm/Transforms/Scalar/CJSimpleRangeAnalysis.h"
@@ -1290,12 +1292,19 @@ Error PassBuilder::parseModulePass(ModulePassManager &MPM,
       }
     }
     auto addCangjiePasses = [&]() {
+      // Runs here rather than next to CJRuntimeLowering: extraction shrinks
+      // function bodies, and doing it before the inliner skews the inlining
+      // cost model. By this point inlining is done, and the throw tails it
+      // duplicated are visible too.
+      if (CJPipeline && !CangjieLTOPreOpt && L.getSpeedupLevel() > 0)
+        MPM.addPass(CJExceptionTailOutline());
       if (CJPipeline && L.getSpeedupLevel() == 2 && EnableCJGCInstrTransform) {
         MPM.addPass(createModuleToFunctionPassAdaptor(CJGCInstrRestore()));
       }
       if (CJPipeline && !CangjieLTOPreOpt) {
         MPM.addPass(ManagedABIGateVerifierPass());
         MPM.addPass(CJSpecificOpt(L.getSpeedupLevel()));
+        MPM.addPass(CJAnnotationOutline());
         MPM.addPass(PlaceSafepoints());
         MPM.addPass(CJBarrierOpt());
         MPM.addPass(CJRewriteStatepoint(L.getSpeedupLevel()));

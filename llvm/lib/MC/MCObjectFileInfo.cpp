@@ -328,7 +328,23 @@ void MCObjectFileInfo::initMachOMCObjectFileInfo(const Triple &T) {
 #include "llvm/BinaryFormat/Swift.def"
   }
 
-  // Cangjie File(CFile) specific sections
+  // Cangjie File(CFile) specific sections.
+  // S_ATTR_NO_DEAD_STRIP policy under -dead_strip: sections whose contents
+  // are consumed by the runtime walking the whole section (or that are only
+  // referenced from within the same object file, e.g. .Lmethod_desc labels
+  // referenced by function prologues and by the methodinfo entries
+  // themselves) must carry S_ATTR_NO_DEAD_STRIP, otherwise the linker is
+  // free to drop them as dead code and the runtime sees an empty or missing
+  // section. That covers __cjmethodinfo, __cjstackmap, __cjgctib,
+  // __cjstrpool, __cjstrpooldict, __cjgcroots, __cjgcflags, __cjsdkversion,
+  // __cjglobalFunc, __cjref_pkginfo, __cjstatic_gi and the type-extension
+  // tables. Sections holding whole global variables (__cjtemplate,
+  // __cjtypeinfo, __cj_fields, __cjtype_ext, __cjmtable, __cjref_gv,
+  // __cjref_gi) deliberately do not carry the flag: the runtime reaches
+  // their entries through pointers from live data (object headers,
+  // vtables, and the .packageInfo chain built by CJFillMetadata), so the
+  // linker keeps them alive via relocations, and marking them no_dead_strip
+  // would keep dead type and reflection data alive and defeat -dead_strip.
   // RW section
   CJTypeTemplateSection = Ctx->getMachOSection("__CJ_METADATA", "__cjtemplate",
                                                0, SectionKind::getReadOnly());
@@ -358,12 +374,15 @@ void MCObjectFileInfo::initMachOMCObjectFileInfo(const Triple &T) {
   CJReflectGenericTISection = Ctx->getMachOSection(
       "__CJ_METADATA", "__cjref_gi", 0, SectionKind::getReadOnly());
 
-  CJMethodInfoSection = Ctx->getMachOSection("__CJ_METADATA", "__cjmethodinfo",
-                                             0, SectionKind::getReadOnly());
-  CJStackMapSection = Ctx->getMachOSection("__CJ_METADATA", "__cjstackmap", 0,
-                                           SectionKind::getReadOnly());
-  CJGCTibSection = Ctx->getMachOSection("__CJ_METADATA", "__cjgctib", 0,
-                                        SectionKind::getReadOnly());
+  CJMethodInfoSection = Ctx->getMachOSection(
+      "__CJ_METADATA", "__cjmethodinfo", MachO::S_ATTR_NO_DEAD_STRIP,
+      SectionKind::getReadOnly());
+  CJStackMapSection = Ctx->getMachOSection(
+      "__CJ_METADATA", "__cjstackmap", MachO::S_ATTR_NO_DEAD_STRIP,
+      SectionKind::getReadOnly());
+  CJGCTibSection = Ctx->getMachOSection(
+      "__CJ_METADATA", "__cjgctib", MachO::S_ATTR_NO_DEAD_STRIP,
+      SectionKind::getReadOnly());
   CJGCRootSection = Ctx->getMachOSection("__CJ_METADATA", "__cjgcroots",
                                          MachO::S_ATTR_NO_DEAD_STRIP,
                                          SectionKind::getReadOnly());
@@ -375,9 +394,11 @@ void MCObjectFileInfo::initMachOMCObjectFileInfo(const Triple &T) {
                                              MachO::S_ATTR_NO_DEAD_STRIP,
                                              SectionKind::getReadOnly());
   CJStringPoolDictSection = Ctx->getMachOSection(
-      "__CJ_METADATA", "__cjstrpooldict", 0, SectionKind::getReadOnly());
-  CJStringPoolSection = Ctx->getMachOSection("__CJ_METADATA", "__cjstrpool", 0,
-                                             SectionKind::getReadOnly());
+      "__CJ_METADATA", "__cjstrpooldict", MachO::S_ATTR_NO_DEAD_STRIP,
+      SectionKind::getReadOnly());
+  CJStringPoolSection = Ctx->getMachOSection(
+      "__CJ_METADATA", "__cjstrpool", MachO::S_ATTR_NO_DEAD_STRIP,
+      SectionKind::getReadOnly());
   CJGlobalInitFuncSection = Ctx->getMachOSection(
       "__CJ_METADATA", "__cjglobalFunc", MachO::S_ATTR_NO_DEAD_STRIP,
       SectionKind::getReadOnly());

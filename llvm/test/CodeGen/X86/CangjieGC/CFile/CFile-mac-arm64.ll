@@ -22,6 +22,13 @@ declare void @_ZN8std.core7printlnER_ZN8std.core6StringE(%Unit.Type* sret(%Unit.
 ; ARM: adrp    x10, ".Lmethod_desc.default.__ZN7default6<main>Ev"@PAGE
 ; ARM: add     x10, x10, ".Lmethod_desc.default.__ZN7default6<main>Ev"@PAGEOFF
 ; ARM: stp     x10, x9, [x29, #-16]
+; Runtime-walked sections survive dead stripping; descriptors stay local.
+; ARM: .section __CJ_METADATA,__cjstackmap,regular,no_dead_strip
+; ARM: .section __CJ_METADATA,__cjmethodinfo,regular,no_dead_strip
+; ARM-NOT: .globl ".Lmethod_desc
+; ARM: ".Lmethod_desc.default.__ZN7default6<main>Ev":
+; ARM: .section __CJ_METADATA,__cjstrpooldict,regular,no_dead_strip
+; ARM: .section __CJ_METADATA,__cjstrpool,regular,no_dead_strip
 define i64 @"_ZN7default6<main>Ev"() gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 bb0:
   %token = call token (...) @llvm.cj.gc.statepoint(i64 4, i32 0, void ()* @CJ_MCC_StackCheck, i32 0, i32 0)

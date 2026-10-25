@@ -19,6 +19,14 @@ declare void @_ZN8std.core7printlnER_ZN8std.core6StringE(%Unit.Type* sret(%Unit.
 
 ; X86: leaq    ".Lmethod_desc.default.__ZN7default6<main>Ev"(%rip), %r10
 ; X86: pushq   %r10
+; The CJ metadata sections are runtime-walked, so they must not be stripped
+; by -dead_strip; the method descriptor itself must stay a local symbol.
+; X86: .section __CJ_METADATA,__cjstackmap,regular,no_dead_strip
+; X86: .section __CJ_METADATA,__cjmethodinfo,regular,no_dead_strip
+; X86-NOT: .globl ".Lmethod_desc
+; X86: ".Lmethod_desc.default.__ZN7default6<main>Ev":
+; X86: .section __CJ_METADATA,__cjstrpooldict,regular,no_dead_strip
+; X86: .section __CJ_METADATA,__cjstrpool,regular,no_dead_strip
 define i64 @"_ZN7default6<main>Ev"() gc "cangjie" personality i32 (...)* @"__cj_personality_v0$" {
 bb0:
   %token = call token (...) @llvm.cj.gc.statepoint(i64 4, i32 0, void ()* @CJ_MCC_StackCheck, i32 0, i32 0)

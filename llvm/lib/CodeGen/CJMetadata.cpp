@@ -527,8 +527,6 @@ void CJMetadataInfo::emitDatas(const MCSymbol *FuncName,
     StringRef PACKAGEID = dyn_cast<MDString>(MD)->getString();
     DescSymbol = Context.getOrCreateSymbol(".Lmethod_desc." + PACKAGEID + "." +
                                            FuncName->getName());
-    OS.emitSymbolAttribute(DescSymbol, MCSA_Global);
-
     // A return poll has already removed the frame containing the descriptor.
     // Publish the same startPC used by the poll, without an entry prefix.
     // The image loader sorts these relocated pairs to build its PC index;
