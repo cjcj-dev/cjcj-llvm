@@ -74,9 +74,9 @@ bb0:
 ; CHECK-NEXT: %[[VAL0:.*]] = call i8 addrspace(1)* @llvm.cj.gcread.static.ref(i8 addrspace(1)** %slot0)
 ; CHECK-NEXT: %[[GEP0:.*]] = getelementptr i8, i8 addrspace(1)* %[[BASE]], i64 16
 ; CHECK-NEXT: %[[PTR0:.*]] = bitcast i8 addrspace(1)* %[[GEP0]] to i8 addrspace(1)* addrspace(1)*
-; CHECK-NEXT: call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %[[VAL0]], i8 addrspace(1)* %[[BASE]], i8 addrspace(1)* addrspace(1)* %[[PTR0]])
+; CHECK-NEXT: call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %[[VAL0]], i8 addrspace(1)* %[[BASE]], i8 addrspace(1)* addrspace(1)* %[[PTR0]])
 ; CHECK-NEXT: %[[VAL1:.*]] = call i8 addrspace(1)* @llvm.cj.gcread.static.ref(i8 addrspace(1)** %slot1)
 ; CHECK-NEXT: %[[GEP1:.*]] = getelementptr i8, i8 addrspace(1)* %[[BASE]], i64 24
 ; CHECK-NEXT: %[[PTR1:.*]] = bitcast i8 addrspace(1)* %[[GEP1]] to i8 addrspace(1)* addrspace(1)*
-; CHECK-NEXT: call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %[[VAL1]], i8 addrspace(1)* %[[BASE]], i8 addrspace(1)* addrspace(1)* %[[PTR1]])
+; CHECK-NEXT: call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %[[VAL1]], i8 addrspace(1)* %[[BASE]], i8 addrspace(1)* addrspace(1)* %[[PTR1]])
 ; CHECK-NEXT: ret void
