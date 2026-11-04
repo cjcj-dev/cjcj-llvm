@@ -1,0 +1,55 @@
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu -run-pass=finalize-isel -verify-machineinstrs %s -o - | FileCheck %s
+# Existing narrow classes, NumDefs/ties and legal physical targets must survive.
+# CHECK-LABEL: name:            narrow
+# CHECK: class: gr64_with_sub_32bit_in_gr32_abcd_and_gr32_tc,
+# CHECK-LABEL: name:            win64_class
+# CHECK: class: gr64_tcw64,
+# CHECK-LABEL: name:            with_defs
+# CHECK: class: gr64_tc,
+# CHECK: class: gr64,
+# CHECK: dead %2:gr64 = STATEPOINT_TAIL_CALL 123, 0, 0, %0,
+# CHECK-SAME: %1(tied-def 0)
+# CHECK-LABEL: name:            physical
+# CHECK: STATEPOINT_TAIL_CALL 123, 0, 0, $rax,
+--- |
+  define void @narrow() { ret void }
+  define win64cc void @win64_class() { ret void }
+  define void @with_defs() { ret void }
+  define void @physical() { ret void }
+...
+---
+name: narrow
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $rdi
+    %0:gr64_abcd = COPY $rdi
+    STATEPOINT_TAIL_CALL 123, 0, 0, %0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, csr_64
+...
+---
+name: win64_class
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $rcx
+    %0:gr64 = COPY $rcx
+    STATEPOINT_TAIL_CALL 123, 0, 0, %0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, csr_win64
+...
+---
+name: with_defs
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $rdi, $rsi
+    %0:gr64 = COPY $rdi
+    %1:gr64 = COPY $rsi
+    dead %2:gr64 = STATEPOINT_TAIL_CALL 123, 0, 0, %0, 2, 0, 2, 0, 2, 0, 2, 1, %1(tied-def 0), 2, 0, 2, 1, 0, 0, csr_64
+...
+---
+name: physical
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $rax
+    STATEPOINT_TAIL_CALL 123, 0, 0, $rax, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, csr_64
+...

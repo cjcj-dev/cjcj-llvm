@@ -1,0 +1,56 @@
+# RUN: llc -mtriple=aarch64-unknown-linux-gnu -run-pass=finalize-isel -verify-machineinstrs %s -o - | FileCheck %s
+# Existing narrow classes, NumDefs/ties and legal physical targets must survive.
+# CHECK-LABEL: name:            narrow
+# CHECK: class: rtcgpr64,
+# CHECK-LABEL: name:            bti
+# CHECK: class: rtcgpr64,
+# CHECK-LABEL: name:            with_defs
+# CHECK: class: tcgpr64,
+# CHECK: class: gpr64,
+# CHECK: dead %2:gpr64 = STATEPOINT_TAIL_CALL 123, 0, 0, %0,
+# CHECK-SAME: %1(tied-def 0)
+# CHECK-LABEL: name:            physical
+# CHECK: STATEPOINT_TAIL_CALL 123, 0, 0, $x16,
+# CHECK-SAME: implicit-def dead early-clobber $lr
+--- |
+  define void @narrow() { ret void }
+  define void @bti() "branch-target-enforcement"="true" { ret void }
+  define void @with_defs() { ret void }
+  define void @physical() "branch-target-enforcement"="true" { ret void }
+...
+---
+name: narrow
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x0
+    %0:rtcgpr64 = COPY $x0
+    STATEPOINT_TAIL_CALL 123, 0, 0, %0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, csr_aarch64_aapcs
+...
+---
+name: bti
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x0
+    %0:tcgpr64 = COPY $x0
+    STATEPOINT_TAIL_CALL 123, 0, 0, %0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, csr_aarch64_aapcs
+...
+---
+name: with_defs
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x0, $x1
+    %0:gpr64 = COPY $x0
+    %1:gpr64 = COPY $x1
+    dead %2:gpr64 = STATEPOINT_TAIL_CALL 123, 0, 0, %0, 2, 0, 2, 0, 2, 0, 2, 1, %1(tied-def 0), 2, 0, 2, 1, 0, 0, csr_aarch64_aapcs
+...
+---
+name: physical
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x16
+    STATEPOINT_TAIL_CALL 123, 0, 0, $x16, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, csr_aarch64_aapcs
+...

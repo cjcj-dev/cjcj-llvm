@@ -45,6 +45,7 @@
 #include "llvm/CodeGen/RuntimeLibcalls.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
+#include "llvm/CodeGen/StackMaps.h"
 #include "llvm/CodeGen/TargetCallingConv.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/ValueTypes.h"
@@ -2522,6 +2523,24 @@ MachineBasicBlock *AArch64TargetLowering::EmitInstrWithCustomInserter(
 
   case TargetOpcode::STATEPOINT:
   case TargetOpcode::STATEPOINT_TAIL_CALL:
+    if (MI.getOpcode() == TargetOpcode::STATEPOINT_TAIL_CALL) {
+      // PEI restores callee-saved registers before the final jump. Constrain
+      // its real target before RA, preserving any existing narrower class.
+      MachineFunction &MF = *MI.getMF();
+      const TargetRegisterClass *RC =
+          MF.getInfo<AArch64FunctionInfo>()->branchTargetEnforcement()
+              ? &AArch64::rtcGPR64RegClass
+              : &AArch64::tcGPR64RegClass;
+      const MachineOperand &Target = StatepointOpers(&MI).getCallTarget();
+      if (Target.isReg()) {
+        Register Reg = Target.getReg();
+        if (Target.getSubReg() ||
+            (Reg.isVirtual()
+                 ? !MF.getRegInfo().constrainRegClass(Reg, RC)
+                 : !RC->contains(Reg)))
+          report_fatal_error("invalid register target for statepoint tail call");
+      }
+    }
     // STATEPOINT is a pseudo instruction which has no implicit defs/uses
     // while bl call instruction (where statepoint will be lowered at the end)
     // has implicit def. This def is early-clobber as it will be set at

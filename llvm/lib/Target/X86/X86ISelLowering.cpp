@@ -39,6 +39,7 @@
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/StackMaps.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/WinEHFuncInfo.h"
 #include "llvm/IR/CallingConv.h"
@@ -36490,6 +36491,22 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
 
   case TargetOpcode::STATEPOINT:
   case TargetOpcode::STATEPOINT_TAIL_CALL:
+    if (MI.getOpcode() == TargetOpcode::STATEPOINT_TAIL_CALL) {
+      // PEI restores callee-saved registers before the final jump. Constrain
+      // its real target before RA, preserving any existing narrower class.
+      MachineFunction &MF = *MI.getMF();
+      const TargetRegisterClass *RC =
+          Subtarget.getRegisterInfo()->getGPRsForTailCall(MF);
+      const MachineOperand &Target = StatepointOpers(&MI).getCallTarget();
+      if (Target.isReg()) {
+        Register Reg = Target.getReg();
+        if (Target.getSubReg() ||
+            (Reg.isVirtual()
+                 ? !MF.getRegInfo().constrainRegClass(Reg, RC)
+                 : !RC->contains(Reg)))
+          report_fatal_error("invalid register target for statepoint tail call");
+      }
+    }
     // As an implementation detail, STATEPOINT shares the STACKMAP format at
     // this point in the process.  We diverge later.
     return emitPatchPoint(MI, BB);
