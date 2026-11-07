@@ -1,6 +1,6 @@
 ; The fused mtable/outer-TypeInfo lookup needs a constant method index, as
 ; llvm.cj.get.mtable.func does.
-; RUN: not opt -passes=cj-ir-verifier < %s -disable-output 2>&1 | FileCheck %s
+; RUN: not --crash opt -passes=cj-ir-verifier < %s -disable-output 2>&1 | FileCheck %s
 ; CHECK: Called Function index should be constant int!
 ; CHECK-NEXT: call { i8*, i8* } @llvm.cj.get.mtable.func.outertype(i8* %ti, i8* %itf, i64 %idx)
 

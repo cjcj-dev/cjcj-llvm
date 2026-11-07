@@ -1130,10 +1130,29 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
       Lowering.replaceGetMethodOuterType(CI);
       Changed = true;
       break;
-    case Intrinsic::cj_get_mtable_func_outertype:
+    case Intrinsic::cj_get_mtable_func_outertype: {
+      SmallVector<Instruction *, 4> Doomed;
+      for (User *U : CI->users()) {
+        auto *EV = dyn_cast<ExtractValueInst>(U);
+        if (EV && EV->getNumIndices() == 1)
+          Doomed.push_back(EV);
+      }
+      while (I != inst_end(F)) {
+        Instruction *Next = &*I;
+        bool Erase = false;
+        for (Instruction *D : Doomed)
+          if (D == Next) {
+            Erase = true;
+            break;
+          }
+        if (!Erase)
+          break;
+        ++I;
+      }
       Lowering.replaceGetMTableFuncOuterType(CI);
       Changed = true;
       break;
+    }
     case Intrinsic::cj_throw_exception:
       if (Triple(F.getParent()->getTargetTriple()).isOSWindows()) {
         // For windows, throw_exception need stackmap, beacuse runtime stack
