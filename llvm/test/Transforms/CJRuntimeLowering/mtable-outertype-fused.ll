@@ -16,7 +16,7 @@ declare void @use(i8*, i8*)
 declare void @unload()
 
 ; One runtime call; method pointer is the indexed load of the returned table
-; (invariant_load + func_table + vfe wrapper as for the legacy mtable); outer
+; (invariant_load + FuncTable + vfe wrapper as for the legacy mtable); outer
 ; TypeInfo is a plain load of the entry-block slot passed as the 4th argument.
 ; LOWER-LABEL: define void @lower(
 ; LOWER: entry:
@@ -24,7 +24,7 @@ declare void @unload()
 ; LOWER: [[TBL:%.*]] = call i8* @CJ_MCC_GetMTableAndOuterTI(i8* %ti, i8* %itf, i64 3, i8** %mtable.outer.ti)
 ; LOWER-NEXT: [[BC:%.*]] = bitcast i8* [[TBL]] to i8**
 ; LOWER-NEXT: [[GEP:%.*]] = getelementptr i8*, i8** [[BC]], i64 3
-; LOWER-NEXT: [[FP:%.*]] = load i8*, i8** [[GEP]], align 8, !invariant.load !{{[0-9]+}}, !func_table ![[FT:[0-9]+]]
+; LOWER-NEXT: [[FP:%.*]] = load i8*, i8** [[GEP]], align 8, !invariant.load !{{[0-9]+}}, !FuncTable ![[FT:[0-9]+]]
 ; LOWER-NEXT: [[VFE:%.*]] = call i8* @llvm.cj.vfe.info(i8* [[FP]], metadata ![[OBJ:[0-9]+]], i64 3)
 ; LOWER-NEXT: [[OUT:%.*]] = load i8*, i8** %mtable.outer.ti
 ; LOWER-NOT: invariant.load
@@ -34,7 +34,7 @@ declare void @unload()
 ; LOWER: ret void
 define void @lower(i8* %ti, i8* %itf) {
 entry:
-  %r = call { i8*, i8* } @llvm.cj.get.mtable.func.outertype(i8* %ti, i8* %itf, i64 3), !obj_type !0
+  %r = call { i8*, i8* } @llvm.cj.get.mtable.func.outertype(i8* %ti, i8* %itf, i64 3), !objType !0
   %fp = extractvalue { i8*, i8* } %r, 0
   %outer = extractvalue { i8*, i8* } %r, 1
   call void @use(i8* %fp, i8* %outer)
