@@ -34,6 +34,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
@@ -809,6 +810,18 @@ SizeOffsetType ObjectSizeOffsetVisitor::visitAllocaInst(AllocaInst &I) {
 }
 
 SizeOffsetType ObjectSizeOffsetVisitor::visitArgument(Argument &A) {
+  // Cangjie: an addrspace(1) sret argument of a "cangjie" GC function points
+  // to a headered managed object whose size comes from its runtime TypeInfo.
+  // Typed pointers force its sret type to equal the i8 pointee, so that type
+  // is not the object size. Reporting it would let a 1-byte store look like a
+  // whole-object overwrite (DSE) or make wider accesses NoAlias (BasicAA).
+  const Function *F = A.getParent();
+  if (A.hasStructRetAttr() && isGCPointerType(A.getType()) && F->hasGC() &&
+      F->getGC() == "cangjie") {
+    ++ObjectVisitorArgument;
+    return unknown();
+  }
+
   Type *MemoryTy = A.getPointeeInMemoryValueType();
   // No interprocedural analysis is done at the moment.
   if (!MemoryTy|| !MemoryTy->isSized()) {
