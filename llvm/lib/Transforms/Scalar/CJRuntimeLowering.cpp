@@ -89,6 +89,8 @@ const static StdMap<unsigned, RuntimeLoweringInfo> RuntimeMap {
     {Intrinsic::cj_get_vtable_func, {"CJ_MCC_UpdateVMT", false}},
     {Intrinsic::cj_get_mtable_func, {"CJ_MCC_GetMTable", false}},
     {Intrinsic::cj_get_method_outertype, {"CJ_MCC_GetMethodOuterTI", false}},
+    {Intrinsic::cj_get_mtable_func_outertype,
+     {"CJ_MCC_GetMTableAndOuterTI", false}},
     // JNI critical entry can block in a saferegion; its caller needs roots.
     // HotSpot sharedRuntime_x86_64.cpp:2365-2372 publishes the native oop map.
     {Intrinsic::cj_acquire_rawdata, {"CJ_MCC_AcquireRawData", true}},
@@ -649,6 +651,66 @@ public:
     CB->eraseFromParent();
   }
 
+  // {funcPtr, outerTI} = llvm.cj.get.mtable.func.outertype(ti, itf, idx)
+  // lowers to one call of
+  //   i8* CJ_MCC_GetMTableAndOuterTI(i8* ti, i8* itf, i64 idx, i8** outerTI)
+  // The scalar pointer return plus an out-parameter avoids an aggregate return,
+  // whose C convention differs between targets (register pair vs hidden sret).
+  // The method pointer load is the same as replaceGetMTableFunc; the outer
+  // TypeInfo is a plain load of the slot written by this call.
+  void replaceGetMTableFuncOuterType(CallBase *CB) {
+    auto &C = CB->getContext();
+    auto *Int8PtrTy = Type::getInt8PtrTy(C);
+    auto *Callee = getOrInsertRuntimeFunc(
+        CB, true, false,
+        FunctionType::get(Int8PtrTy,
+                          {CB->getArgOperand(0)->getType(),
+                           CB->getArgOperand(1)->getType(),
+                           CB->getArgOperand(2)->getType(),
+                           Int8PtrTy->getPointerTo()},
+                          false));
+    Function *F = CB->getFunction();
+    IRBuilder<> EntryIRB(&*F->getEntryBlock().getFirstInsertionPt());
+    AllocaInst *OuterSlot =
+        EntryIRB.CreateAlloca(Int8PtrTy, nullptr, "mtable.outer.ti");
+    IRBuilder<> IRB(CB);
+    auto *CI = IRB.CreateCall(Callee, {CB->getArgOperand(0),
+                                       CB->getArgOperand(1),
+                                       CB->getArgOperand(2), OuterSlot});
+    auto *BC0 = IRB.CreateBitCast(CI, Int8PtrTy->getPointerTo());
+    auto *GEP = IRB.CreateGEP(Int8PtrTy, BC0, {CB->getArgOperand(2)});
+    auto *LI = IRB.CreateLoad(Int8PtrTy, GEP);
+    LI->setMetadata(LLVMContext::MD_invariant_load, MDNode::get(C, {}));
+    LI->setMetadata(LLVMContext::MD_func_table,
+                    MDNode::get(C, {ConstantAsMetadata::get(cast<ConstantInt>(
+                                       CB->getArgOperand(2)))}));
+    auto *ObjTypeMD = CB->getMetadata(LLVMContext::MD_obj_type);
+    auto *FuncOffset = cast<ConstantInt>(CB->getArgOperand(2));
+    Value *FuncPtr = LI;
+    if (ObjTypeMD) {
+      auto *VFEInfoFn = Intrinsic::getDeclaration(
+          CB->getModule(), Intrinsic::cj_vfe_info);
+      FuncPtr = IRB.CreateCall(VFEInfoFn,
+                               {LI, MetadataAsValue::get(C, ObjTypeMD),
+                                FuncOffset});
+    }
+    Value *OuterTI = IRB.CreateLoad(Int8PtrTy, OuterSlot);
+    for (User *U : make_early_inc_range(CB->users())) {
+      auto *EV = dyn_cast<ExtractValueInst>(U);
+      if (EV == nullptr || EV->getNumIndices() != 1)
+        continue;
+      EV->replaceAllUsesWith(EV->getIndices()[0] == 0 ? FuncPtr : OuterTI);
+      EV->eraseFromParent();
+    }
+    if (!CB->use_empty()) {
+      Value *Agg = UndefValue::get(CB->getType());
+      Agg = IRB.CreateInsertValue(Agg, FuncPtr, 0);
+      Agg = IRB.CreateInsertValue(Agg, OuterTI, 1);
+      CB->replaceAllUsesWith(Agg);
+    }
+    CB->eraseFromParent();
+  }
+
   void replaceGetMethodOuterType(CallBase *CB) {
     auto *Callee = getOrInsertRuntimeFunc(CB, true, false,
       // CJ_MCC_GetMethodOuterType: TypeInfo*(*)(i8*, i8*, i64 index)
@@ -1066,6 +1128,10 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
       break;
     case Intrinsic::cj_get_method_outertype:
       Lowering.replaceGetMethodOuterType(CI);
+      Changed = true;
+      break;
+    case Intrinsic::cj_get_mtable_func_outertype:
+      Lowering.replaceGetMTableFuncOuterType(CI);
       Changed = true;
       break;
     case Intrinsic::cj_throw_exception:

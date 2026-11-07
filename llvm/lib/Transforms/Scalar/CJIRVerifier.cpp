@@ -760,8 +760,10 @@ public:
       }
       break;
     }
-    case Intrinsic::cj_get_mtable_func: {
+    case Intrinsic::cj_get_mtable_func:
+    case Intrinsic::cj_get_mtable_func_outertype: {
       // funcPtr = call i8** @llvm.cj.get.mtable.func(i8* ti1, i8* ti2, i64 i)
+      // {funcPtr, outerTI} = call @llvm.cj.get.mtable.func.outertype(same)
       ConstantInt *IdxOpr = dyn_cast<ConstantInt>(Call.getArgOperand(2));
       if (IdxOpr == nullptr) {
         checkFailed("Called Function index should be constant int!", &Call);

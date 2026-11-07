@@ -623,6 +623,15 @@ def int_cj_get_mtable_func          : Intrinsic<[llvm_ptr_ty],
 def int_cj_get_method_outertype     : Intrinsic<[llvm_ptr_ty],
                                                 [llvm_ptr_ty, llvm_ptr_ty, llvm_i64_ty],
                                                 [IntrNoMem, IntrWillReturn, IntrSpeculatable]>;
+// Fused interface dispatch: {method pointer, outer TypeInfo} for one
+// (ti, itf, index) site in a single runtime lookup. No memory, speculation or
+// willreturn properties: every call reads, and may register into or update,
+// mutable runtime metadata that can change across library unload/load, and the
+// lowered call writes the outer TypeInfo through an out-parameter. It must not
+// be CSEd, hoisted or speculated like the legacy pair above.
+def int_cj_get_mtable_func_outertype : Intrinsic<[llvm_ptr_ty, llvm_ptr_ty],
+                                                 [llvm_ptr_ty, llvm_ptr_ty, llvm_i64_ty],
+                                                 []>;
 def int_cj_get_vtable_func          : Intrinsic<[llvm_ptr_ty],
                                                 [llvm_ptr_ty, llvm_i64_ty, llvm_i64_ty, llvm_ptr_ty]>;
 // Binds a virtual/interface function pointer with its VFE metadata (objType

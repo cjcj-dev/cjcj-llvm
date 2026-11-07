@@ -141,6 +141,7 @@ static constexpr StringLiteral PrivateRuntimeABI[] = {
     "CJ_MCC_GetGCTimeUs",
     "CJ_MCC_GetJSLambdaAddr",
     "CJ_MCC_GetMTable",
+    "CJ_MCC_GetMTableAndOuterTI",
     "CJ_MCC_GetMaxHeapSize",
     "CJ_MCC_GetMethodOuterTI",
     "CJ_MCC_GetNativeThreadNumber",
@@ -341,6 +342,7 @@ static bool isCangjiePrivateIntrinsic(Intrinsic::ID ID) {
   case Intrinsic::cj_gcwrite_generic:
   case Intrinsic::cj_gcread_generic:
   case Intrinsic::cj_get_mtable_func:
+  case Intrinsic::cj_get_mtable_func_outertype:
   case Intrinsic::cj_get_method_outertype:
   case Intrinsic::cj_get_vtable_func:
   case Intrinsic::cj_vfe_info:
