@@ -135,6 +135,9 @@ static unsigned storeStrength(const CallInst *CI) {
 // loads the count, keeps the capacity trap and scans entries 1..count-1. The
 // result is the same predicate the counted loop computed; the common heap
 // hit no longer pays for the count load, the capacity test or the loop.
+// This relies on the completed startup publication: RegionManager constructs
+// the reservation table before mutators start, with no later production
+// republication. It is not a predicate for concurrent table replacement.
 static Value *emitReservedHeapSlot(IRBuilder<> &Builder, Module *M, Value *PlaceI,
                                    const Twine &Name) {
   LLVMContext &C = M->getContext();
@@ -224,8 +227,11 @@ static void threadReservedHeapSlot(Value *InHeap) {
     return;
   BasicBlock *HeapBB = Br->getSuccessor(0);
   BasicBlock *PlainBB = Br->getSuccessor(1);
-  if (HeapBB == Done || PlainBB == Done || isa<PHINode>(HeapBB->front()) ||
-      isa<PHINode>(PlainBB->front()))
+  // Store lowering threads the edges before populating these blocks. An empty
+  // destination has no PHIs, and front() must not dereference its end sentinel.
+  if (HeapBB == Done || PlainBB == Done ||
+      (!HeapBB->empty() && isa<PHINode>(HeapBB->front())) ||
+      (!PlainBB->empty() && isa<PHINode>(PlainBB->front())))
     return;
   for (unsigned I = In->getNumIncomingValues(); I-- > 0;) {
     auto *Known = dyn_cast<ConstantInt>(In->getIncomingValue(I));
