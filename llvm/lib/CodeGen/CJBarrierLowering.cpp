@@ -449,13 +449,100 @@ static bool hasProvenNonHeapDestination(CallBase *CI) {
   return hasProvenNonHeapDestination(Dst);
 }
 
+// Byte size of the object allocation that Ptr addresses at offset zero, or 0.
+// MCC_NewObject/MCC_NewPinnedObject allocate exactly their size operand,
+// AlignUp(instance size, 8) + TYPEINFO_PTR_SIZE, and return non-null (runtime
+// CompilerCalls.cpp:123-158). Arrays, interior pointers and cycles yield 0.
+static uint64_t getAllocatedObjectBytes(Value *Ptr,
+                                        SmallPtrSetImpl<Value *> &Active,
+                                        DenseMap<Value *, uint64_t> &Known) {
+  auto It = Known.find(Ptr);
+  if (It != Known.end())
+    return It->second;
+  if (!Ptr->getType()->isPointerTy() ||
+      Ptr->getType()->getPointerAddressSpace() != 1 ||
+      Active.size() == 64 || !Active.insert(Ptr).second)
+    return 0;
+
+  uint64_t Bytes = [&]() -> uint64_t {
+    if (auto *Result = dyn_cast<GCResultInst>(Ptr)) {
+      auto *SP = dyn_cast<GCStatepointInst>(Result->getStatepoint());
+      const Function *Callee = SP ? SP->getActualCalledFunction() : nullptr;
+      if (!Callee || SP->actual_arg_size() < 2)
+        return 0;
+      StringRef Name = Callee->getName();
+      if (!Name.isCangjieNewObjFunction() && Name != NewObjFastStr &&
+          Name != "CJ_MCC_NewPinnedObject")
+        return 0;
+      auto *Size = dyn_cast<ConstantInt>((SP->actual_arg_begin() + 1)->get());
+      return Size && !Size->isNegative() ? Size->getZExtValue() : 0;
+    }
+    if (auto *Relocate = dyn_cast<GCRelocateInst>(Ptr))
+      return getAllocatedObjectBytes(Relocate->getDerivedPtr(), Active, Known);
+    if (auto *Op = dyn_cast<Operator>(Ptr))
+      if (Op->getOpcode() == Instruction::BitCast ||
+          Op->getOpcode() == Instruction::AddrSpaceCast)
+        return getAllocatedObjectBytes(Op->getOperand(0), Active, Known);
+    uint64_t Min = UINT64_MAX;
+    auto Merge = [&](Value *Incoming) {
+      Min = std::min(Min, getAllocatedObjectBytes(Incoming, Active, Known));
+      return Min != 0;
+    };
+    if (auto *Phi = dyn_cast<PHINode>(Ptr))
+      return Phi->getNumIncomingValues() != 0 &&
+                     llvm::all_of(Phi->incoming_values(), Merge)
+                 ? Min
+                 : 0;
+    if (auto *Select = dyn_cast<SelectInst>(Ptr))
+      return Merge(Select->getTrueValue()) && Merge(Select->getFalseValue())
+                 ? Min
+                 : 0;
+    return 0;
+  }();
+  Active.erase(Ptr);
+  Known[Ptr] = Bytes;
+  return Bytes;
+}
+
+// A GEP without inbounds makes no in-object promise. A constant field offset
+// below the allocated size of a proven object start still addresses that
+// object, so the reserved-range test would hit (runtime P04 publishes every
+// ZGC reservation). Offsets are accumulated modulo the index width, as the
+// address is.
+static bool isAllocatedObjectField(GEPOperator *GEP) {
+  auto *I = dyn_cast<Instruction>(GEP);
+  if (!I)
+    return false;
+  const DataLayout &DL = I->getModule()->getDataLayout();
+  APInt Offset(DL.getIndexTypeSizeInBits(GEP->getType()), 0);
+  Value *Base = GEP;
+  for (;;) {
+    if (auto *Inner = dyn_cast<GEPOperator>(Base)) {
+      if (!Inner->accumulateConstantOffset(DL, Offset))
+        return false;
+      Base = Inner->getPointerOperand();
+    } else if (auto *Cast = dyn_cast<BitCastOperator>(Base)) {
+      Base = Cast->getOperand(0);
+    } else {
+      break;
+    }
+  }
+  SmallPtrSet<Value *, 16> Active;
+  DenseMap<Value *, uint64_t> Known;
+  return !Offset.isNegative() &&
+         Offset.ult(getAllocatedObjectBytes(Base, Active, Known));
+}
+
 // ZBarrierSetC2::set_barrier_data (zBarrierSetC2.cpp:341-364) determines
 // the storage domain before emitting the barrier. Cangjie also has stack
 // objects and headerless value storage in AS1: AS1 alone is not a proof.
 // Inspect the final allocation statepoint, after partial escape analysis.
+// FieldOffsets admits isAllocatedObjectField for the domain test only; the
+// dominance elision keeps the inbounds-only proof.
 static bool hasHeapAllocationOrigin(Value *Ptr,
                                     SmallPtrSetImpl<Value *> &Active,
-                                    DenseMap<Value *, bool> &Known) {
+                                    DenseMap<Value *, bool> &Known,
+                                    bool FieldOffsets) {
   auto It = Known.find(Ptr);
   if (It != Known.end())
     return It->second;
@@ -478,23 +565,30 @@ static bool hasHeapAllocationOrigin(Value *Ptr,
              Name == "CJ_MCC_NewArray64" || Name == "CJ_MCC_NewObjArray";
     }
     if (auto *Relocate = dyn_cast<GCRelocateInst>(Ptr))
-      return hasHeapAllocationOrigin(Relocate->getDerivedPtr(), Active, Known);
-    if (auto *GEP = dyn_cast<GEPOperator>(Ptr))
-      return GEP->isInBounds() &&
-             hasHeapAllocationOrigin(GEP->getPointerOperand(), Active, Known);
+      return hasHeapAllocationOrigin(Relocate->getDerivedPtr(), Active, Known,
+                                     FieldOffsets);
+    if (auto *GEP = dyn_cast<GEPOperator>(Ptr)) {
+      if (GEP->isInBounds())
+        return hasHeapAllocationOrigin(GEP->getPointerOperand(), Active, Known,
+                                       FieldOffsets);
+      return FieldOffsets && isAllocatedObjectField(GEP);
+    }
     if (auto *Op = dyn_cast<Operator>(Ptr))
       if (Op->getOpcode() == Instruction::BitCast ||
           Op->getOpcode() == Instruction::AddrSpaceCast)
-        return hasHeapAllocationOrigin(Op->getOperand(0), Active, Known);
+        return hasHeapAllocationOrigin(Op->getOperand(0), Active, Known,
+                                       FieldOffsets);
     if (auto *Phi = dyn_cast<PHINode>(Ptr)) {
       for (Value *Incoming : Phi->incoming_values())
-        if (!hasHeapAllocationOrigin(Incoming, Active, Known))
+        if (!hasHeapAllocationOrigin(Incoming, Active, Known, FieldOffsets))
           return false;
       return Phi->getNumIncomingValues() != 0;
     }
     if (auto *Select = dyn_cast<SelectInst>(Ptr))
-      return hasHeapAllocationOrigin(Select->getTrueValue(), Active, Known) &&
-             hasHeapAllocationOrigin(Select->getFalseValue(), Active, Known);
+      return hasHeapAllocationOrigin(Select->getTrueValue(), Active, Known,
+                                     FieldOffsets) &&
+             hasHeapAllocationOrigin(Select->getFalseValue(), Active, Known,
+                                     FieldOffsets);
     return false;
   }();
   Active.erase(Ptr);
@@ -502,10 +596,10 @@ static bool hasHeapAllocationOrigin(Value *Ptr,
   return Proven;
 }
 
-static bool hasProvenHeapDestination(Value *Dst) {
+static bool hasProvenHeapDestination(Value *Dst, bool FieldOffsets = false) {
   SmallPtrSet<Value *, 16> Active;
   DenseMap<Value *, bool> Known;
-  bool Proven = hasHeapAllocationOrigin(Dst, Active, Known);
+  bool Proven = hasHeapAllocationOrigin(Dst, Active, Known, FieldOffsets);
   if (Proven && hasProvenNonHeapDestination(Dst))
     report_fatal_error("conflicting heap and non-heap destination proofs");
   return Proven;
@@ -793,7 +887,7 @@ public:
     Value *InHeap = nullptr;
     if ((ReadBarrier->getIntrinsicID() == Intrinsic::cj_gcread_ref ||
          ReadBarrier->getIntrinsicID() == Intrinsic::cj_gcread_weakref) &&
-        !hasProvenHeapDestination(RefFieldPtr)) {
+        !hasProvenHeapDestination(RefFieldPtr, /*FieldOffsets=*/true)) {
       // Value-type storage can be plain. Route it to the accessor before
       // entering the heap fast path, whose only predicate is the mask test.
       Value *PlaceI = Builder.CreatePtrToInt(RefFieldPtr, Builder.getInt64Ty(),
@@ -971,7 +1065,7 @@ public:
     // before entering the heap barrier, as the runtime accessor does.
     B.CreateBr(Done);
     B.SetInsertPoint(Entry->getTerminator());
-    Value *InHeap = hasProvenHeapDestination(Place)
+    Value *InHeap = hasProvenHeapDestination(Place, /*FieldOffsets=*/true)
         ? B.getTrue()
         : emitReservedHeapSlot(B, M, B.CreatePtrToInt(Place, I64),
                                "cj.store.inheap");
