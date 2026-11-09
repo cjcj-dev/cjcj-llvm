@@ -4,7 +4,7 @@
 ; Cangjie value-type storage needs a separate non-heap accessor branch.
 define i8 addrspace(1)* @strong(i8 addrspace(1)* %base, i8 addrspace(1)* addrspace(1)* %slot) gc "cangjie" {
 ; CHECK-LABEL: define i8 addrspace(1)* @strong(
-; CHECK: br i1 %cj.read.inheap.result, label %loadFast, label %loadAccessor
+; CHECK: br i1 %cj.read.inheap.first.hit, label %loadFast, label %cj.read.inheap.scan
 ; CHECK: loadFast:
 ; CHECK: [[O:%[^ ]+]] = load i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)* %slot
 ; CHECK: [[BITS:%[^ ]+]] = ptrtoint i8 addrspace(1)* [[O]] to i64

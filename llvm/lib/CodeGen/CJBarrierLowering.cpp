@@ -16,6 +16,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/CodeGen/CangjieRuntimeLayout.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/CJIntrinsics.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Dominators.h"
@@ -23,6 +24,7 @@
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/IR/Statepoint.h"
@@ -121,28 +123,54 @@ static unsigned storeStrength(const CallInst *CI) {
   return GCWriteRef::Unknown;
 }
 
+// P01/P04 slot-domain test: exists i < g_cjHeapRangeCount with
+// g_cjHeapRangeStart[i] <= Place < g_cjHeapRangeEnd[i].
+//
+// The runtime publisher (runtime/src/Heap/z/zAddress.cpp
+// ZAddress::PublishCompilerHeapRanges) clears all kCjHeapRangeCap entries
+// before it publishes the live count and entries, and the entries start out
+// zero-initialized, so every entry at or beyond the live count is the empty
+// range [0, 0). Entry 0 is therefore tested without the count: it is empty
+// when the count is 0 and is the first live reservation otherwise. Only a miss
+// loads the count, keeps the capacity trap and scans entries 1..count-1. The
+// result is the same predicate the counted loop computed; the common heap
+// hit no longer pays for the count load, the capacity test or the loop.
 static Value *emitReservedHeapSlot(IRBuilder<> &Builder, Module *M, Value *PlaceI,
                                    const Twine &Name) {
   LLVMContext &C = M->getContext();
   Type *I64 = Type::getInt64Ty(C);
   ArrayType *ArrTy = ArrayType::get(I64, kCjHeapRangeCap);
-  Value *Count = Builder.CreateLoad(
-      I64, M->getOrInsertGlobal("g_cjHeapRangeCount", I64), Name + ".n");
   Constant *Starts = M->getOrInsertGlobal("g_cjHeapRangeStart", ArrTy);
   Constant *Ends = M->getOrInsertGlobal("g_cjHeapRangeEnd", ArrTy);
 
-  // Keep the decision at this helper's original read/store call sites. The
-  // runtime count controls a bounded loop, rather than unrolling empty slots.
+  // Keep the decision at this helper's original read/store call sites.
   BasicBlock *Entry = Builder.GetInsertBlock();
   Instruction *ResumeAt = &*Builder.GetInsertPoint();
   Function *F = Entry->getParent();
   BasicBlock *Done = Entry->splitBasicBlock(ResumeAt, Name + ".done");
+  BasicBlock *Scan = BasicBlock::Create(C, Name + ".scan", F, Done);
   BasicBlock *Check = BasicBlock::Create(C, Name + ".check", F, Done);
   BasicBlock *Loop = BasicBlock::Create(C, Name + ".loop", F, Done);
   BasicBlock *Next = BasicBlock::Create(C, Name + ".next", F, Done);
   BasicBlock *Invalid = BasicBlock::Create(C, Name + ".invalid", F, Done);
   Entry->getTerminator()->eraseFromParent();
   Builder.SetInsertPoint(Entry);
+  Value *Zero = Builder.getInt64(0);
+  Value *FirstStart = Builder.CreateLoad(
+      I64, Builder.CreateInBoundsGEP(ArrTy, Starts, {Zero, Zero}),
+      Name + ".first.start");
+  Value *FirstEnd = Builder.CreateLoad(
+      I64, Builder.CreateInBoundsGEP(ArrTy, Ends, {Zero, Zero}),
+      Name + ".first.end");
+  Value *FirstHit = Builder.CreateAnd(Builder.CreateICmpUGE(PlaceI, FirstStart),
+                                      Builder.CreateICmpULT(PlaceI, FirstEnd),
+                                      Name + ".first.hit");
+  Builder.CreateCondBr(FirstHit, Done, Scan,
+                       MDBuilder(C).createBranchWeights(2000, 1));
+
+  Builder.SetInsertPoint(Scan);
+  Value *Count = Builder.CreateLoad(
+      I64, M->getOrInsertGlobal("g_cjHeapRangeCount", I64), Name + ".n");
   Value *Valid = Builder.CreateICmpULE(Count, Builder.getInt64(kCjHeapRangeCap),
                                       Name + ".count.valid");
   Builder.CreateCondBr(Valid, Check, Invalid);
@@ -151,12 +179,13 @@ static Value *emitReservedHeapSlot(IRBuilder<> &Builder, Module *M, Value *Place
   Builder.CreateCall(Intrinsic::getDeclaration(M, Intrinsic::trap));
   Builder.CreateUnreachable();
 
+  // Entry 0 has been tested; the remaining live entries are 1..count-1.
   Builder.SetInsertPoint(Check);
-  Builder.CreateCondBr(Builder.CreateICmpNE(Count, Builder.getInt64(0)), Loop, Done);
+  Builder.CreateCondBr(Builder.CreateICmpUGT(Count, Builder.getInt64(1)), Loop, Done);
 
   Builder.SetInsertPoint(Loop);
   PHINode *Index = Builder.CreatePHI(I64, 2, Name + ".index");
-  Index->addIncoming(Builder.getInt64(0), Check);
+  Index->addIncoming(Builder.getInt64(1), Check);
   Value *SPtr = Builder.CreateInBoundsGEP(
       ArrTy, Starts, {Builder.getInt64(0), Index}, Name + ".sp");
   Value *EPtr = Builder.CreateInBoundsGEP(
@@ -173,11 +202,49 @@ static Value *emitReservedHeapSlot(IRBuilder<> &Builder, Module *M, Value *Place
   Builder.CreateCondBr(Builder.CreateICmpULT(NextIndex, Count), Loop, Done);
 
   Builder.SetInsertPoint(ResumeAt);
-  PHINode *In = Builder.CreatePHI(Builder.getInt1Ty(), 3, Name + ".result");
+  PHINode *In = Builder.CreatePHI(Builder.getInt1Ty(), 4, Name + ".result");
+  In->addIncoming(Builder.getTrue(), Entry);
   In->addIncoming(Builder.getFalse(), Check);
   In->addIncoming(Builder.getTrue(), Loop);
   In->addIncoming(Builder.getFalse(), Next);
   return In;
+}
+
+// The slot-domain result is a phi of constants whose only use is the domain
+// branch of its own block. Branch from each decision point straight to the
+// heap or accessor block, so no boolean is materialized and retested.
+static void threadReservedHeapSlot(Value *InHeap) {
+  auto *In = dyn_cast<PHINode>(InHeap);
+  if (!In || !In->hasOneUse())
+    return;
+  BasicBlock *Done = In->getParent();
+  auto *Br = dyn_cast<BranchInst>(Done->getTerminator());
+  if (!Br || !Br->isConditional() || Br->getCondition() != In ||
+      &Done->front() != In || In->getNextNode() != Br)
+    return;
+  BasicBlock *HeapBB = Br->getSuccessor(0);
+  BasicBlock *PlainBB = Br->getSuccessor(1);
+  if (HeapBB == Done || PlainBB == Done || isa<PHINode>(HeapBB->front()) ||
+      isa<PHINode>(PlainBB->front()))
+    return;
+  for (unsigned I = In->getNumIncomingValues(); I-- > 0;) {
+    auto *Known = dyn_cast<ConstantInt>(In->getIncomingValue(I));
+    BasicBlock *Pred = In->getIncomingBlock(I);
+    if (!Known || Pred->getTerminator()->getNumSuccessors() == 0)
+      continue;
+    unsigned Edges = 0;
+    for (BasicBlock *Succ : successors(Pred))
+      Edges += Succ == Done;
+    if (Edges != 1)
+      continue;
+    Pred->getTerminator()->replaceSuccessorWith(Done, Known->isOne() ? HeapBB : PlainBB);
+    In->removeIncomingValue(I, /*DeletePHIIfEmpty=*/false);
+  }
+  if (pred_empty(Done)) {
+    Br->eraseFromParent();
+    In->eraseFromParent();
+    Done->eraseFromParent();
+  }
 }
 template <typename KeyT, typename ValT>
 using StdMap = std::unordered_map<KeyT, ValT>;
@@ -902,8 +969,12 @@ public:
         cast<Instruction>(Builder.CreatePtrToInt(Load, Type::getInt64Ty(C)));
     PtrToInt->setDebugLoc(*Loc);
     Value *CmpEQ = cmpTaggedPointer(PtrToInt, Builder);
-    return splitFastPathAndSlowPath(ReadInst->getParent(), CmpEQ, PtrToInt,
-                                    RefFieldPtr, Domain, InHeap);
+    const bool Erased = splitFastPathAndSlowPath(ReadInst->getParent(), CmpEQ,
+                                                 PtrToInt, RefFieldPtr, Domain,
+                                                 InHeap);
+    if (InHeap)
+      threadReservedHeapSlot(InHeap);
+    return Erased;
   }
 
   // insert a load from RefFieldPtr:
@@ -1072,6 +1143,7 @@ public:
     Instruction *OldBranch = B.GetInsertBlock()->getTerminator();
     B.CreateCondBr(InHeap, Fast, Native);
     OldBranch->eraseFromParent();
+    threadReservedHeapSlot(InHeap);
     B.SetInsertPoint(Native);
     B.CreateBr(Done);
     CI->moveBefore(Native->getTerminator());

@@ -4,8 +4,8 @@
 define void @p01_write(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
                       i8 addrspace(1)* addrspace(1)* %slot) gc "cangjie" {
 ; CHECK-LABEL: define void @p01_write(
-; CHECK: %cj.store.inheap.result = phi i1
-; CHECK: br i1 %cj.store.inheap.result, label %storeFast, label %storeAccessor
+; CHECK: %cj.store.inheap.first.hit = and i1
+; CHECK: br i1 %cj.store.inheap.first.hit, label %storeFast, label %cj.store.inheap.scan
 ; CHECK: storeFast:
 ; CHECK: load i16
 ; CHECK: getelementptr i8, i8* %cj.gcdata{{[0-9]*}}, i64 32
@@ -26,8 +26,8 @@ define void @p01_write(i8 addrspace(1)* %value, i8 addrspace(1)* %base,
 define i8 addrspace(1)* @p01_read(i8 addrspace(1)* %base,
                                  i8 addrspace(1)* addrspace(1)* %slot) gc "cangjie" {
 ; CHECK-LABEL: define i8 addrspace(1)* @p01_read(
-; CHECK: %cj.read.inheap.result = phi i1
-; CHECK: br i1 %cj.read.inheap.result, label %loadFast, label %loadAccessor
+; CHECK: %cj.read.inheap.first.hit = and i1
+; CHECK: br i1 %cj.read.inheap.first.hit, label %loadFast, label %cj.read.inheap.scan
 ; CHECK: loadFast:
 ; CHECK: and i64 {{.*}}, %cj.loadbadmask
 ; CHECK: br i1 {{.*}}, label %gcNoMarked, label %gcMarked
