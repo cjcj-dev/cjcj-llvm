@@ -25,6 +25,7 @@
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Metadata.h"
+#include "llvm/IR/Operator.h"
 #include "llvm/IR/SafepointIRVerifier.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
@@ -1045,6 +1046,80 @@ static void declareRuntimeFunc(Module &M) {
   M.declareCJRuntimeFunc(FinalizerStr, FinalizerFT, false);
 }
 
+// A copy intrinsic is a typed contract, not permission to erase arbitrary
+// pointer provenance. Admit only complete native objects with disjoint owners.
+// Keeping this check local also makes the standalone/legacy pass safe when the
+// Cangjie verifier has not run (including targets that skip that verifier).
+static Value *getNativeCopyObject(Value *Pointer, StructType *Payload) {
+  for (;;) {
+    auto *PT = dyn_cast<PointerType>(Pointer->getType());
+    if (!PT || PT->getAddressSpace() != 0)
+      return nullptr;
+    if (auto *BC = dyn_cast<BitCastOperator>(Pointer)) {
+      Pointer = BC->getOperand(0);
+      continue;
+    }
+    if (auto *GEP = dyn_cast<GEPOperator>(Pointer)) {
+      if (!GEP->hasAllZeroIndices())
+        return nullptr;
+      Pointer = GEP->getPointerOperand();
+      continue;
+    }
+    break;
+  }
+  if (auto *AI = dyn_cast<AllocaInst>(Pointer)) {
+    auto *Count = dyn_cast<ConstantInt>(AI->getArraySize());
+    if (AI->isStaticAlloca() && AI->getAllocatedType() == Payload && Count &&
+        Count->isOne())
+      return AI;
+  }
+  if (auto *Arg = dyn_cast<Argument>(Pointer)) {
+    if (Arg->hasNoAliasAttr() && Arg->hasStructRetAttr() &&
+        !Arg->hasByValAttr() && Arg->getParamStructRetType() == Payload)
+      return Arg;
+  }
+  return nullptr;
+}
+
+static bool lowerNativeCopyEarly(CallBase *Call) {
+  auto *CI = dyn_cast<CallInst>(Call);
+  if (!CI || CI->hasOperandBundles())
+    return false;
+  MDNode *Metadata = CI->getMetadata("AggType");
+  if (!Metadata || Metadata->getNumOperands() != 1)
+    return false;
+  auto *Name = dyn_cast<MDString>(Metadata->getOperand(0));
+  if (!Name)
+    return false;
+  auto *Payload = StructType::getTypeByName(CI->getContext(), Name->getString());
+  auto *Length = dyn_cast<ConstantInt>(CI->getArgOperand(2));
+  if (!Payload || !Payload->isSized() || containsGCPtrType(Payload) || !Length ||
+      Length->isZero() || Length->getValue().getActiveBits() > 64)
+    return false;
+  const DataLayout &DL = CI->getModule()->getDataLayout();
+  TypeSize Size = DL.getTypeAllocSize(Payload);
+  if (Size.isScalable() || Size.getFixedSize() != Length->getZExtValue())
+    return false;
+  Value *Destination = getNativeCopyObject(CI->getArgOperand(0), Payload);
+  Value *Source = getNativeCopyObject(CI->getArgOperand(1), Payload);
+  // Distinct local allocations cannot overlap. A typed noalias sret owner is
+  // also disjoint from this function's local object. Do not infer disjointness
+  // from AS0 alone, or admit two arbitrary/forwarded argument pointers.
+  if (!Destination || !Source || Destination == Source ||
+      (!isa<AllocaInst>(Destination) && !isa<AllocaInst>(Source)))
+    return false;
+
+  IRBuilder<> Builder(CI);
+  CallInst *Copy = Builder.CreateMemCpy(
+      CI->getArgOperand(0), CI->getParamAlign(0), CI->getArgOperand(1),
+      CI->getParamAlign(1), Length, /*isVolatile=*/false);
+  Copy->copyMetadata(*CI);
+  Copy->setMetadata(LLVMContext::MD_cj_agg, nullptr);
+  Copy->setDebugLoc(CI->getDebugLoc());
+  CI->eraseFromParent();
+  return true;
+}
+
 static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
   bool Changed = false;
   EscapeScope ES(F);
@@ -1058,6 +1133,9 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
     unsigned IID = CI->getIntrinsicID();
     switch (IID) {
     default:
+      break;
+    case Intrinsic::cj_copy_no_ref_struct:
+      Changed |= lowerNativeCopyEarly(CI);
       break;
     case Intrinsic::cj_get_field_offset: {
       LowerGetFieldOffset Lower(CI);
