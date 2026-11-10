@@ -1,5 +1,5 @@
 ; RUN: opt -passes=cj-runtime-lowering -S < %s | FileCheck %s
-; RUN: opt -cj-runtime-lowering -S < %s | FileCheck %s
+; RUN: opt -enable-new-pm=0 -cj-runtime-lowering -S < %s | FileCheck %s
 ; RUN: opt -passes='cj-runtime-lowering,function(sroa)' -S < %s | FileCheck %s --check-prefix=SROA
 ; Existing typed payload contract; no frontend or verifier relaxation.
 target datalayout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128"
