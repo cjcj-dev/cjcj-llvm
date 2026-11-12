@@ -43,7 +43,7 @@ entry:
 ; CJBarrierLowering.
 define void @ordinary_write(i8 addrspace(1)* %obj, i8 addrspace(1)* addrspace(1)* %field, i8 addrspace(1)* %value) gc "cangjie" {
 ; CHECK-LABEL: define void @ordinary_write
-; CHECK: call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %value, i8 addrspace(1)* %obj, i8 addrspace(1)* addrspace(1)* %field)
+; CHECK: call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %value, i8 addrspace(1)* %obj, i8 addrspace(1)* addrspace(1)* %field)
 entry:
   call void @llvm.cj.gcwrite.ref(i8 addrspace(1)* %value, i8 addrspace(1)* %obj, i8 addrspace(1)* addrspace(1)* %field)
   ret void
