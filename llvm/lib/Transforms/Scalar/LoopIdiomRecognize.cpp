@@ -555,9 +555,13 @@ LoopIdiomRecognize::isLegalStore(StoreInst *SI) {
     if (StoreSize != Stride && StoreSize != -Stride) {
       // A simple store narrower than a positive stride may still be one leaf
       // of a field-wise element copy (see processLoopStoreChainsOfLoopLoads).
-      // Pointer-valued leaves never take part in such a chain.
-      if (!Stride.isStrictlyPositive() || Stride.ule(StoreSize) ||
-          !SI->isSimple() || StoredVal->getType()->isPtrOrPtrVectorTy())
+      // Pointer-valued leaves never take part in such a chain, and neither do
+      // zero-sized ones: they share their offset with the next leaf (and maybe
+      // their load with another zero-sized store), so one load could then be
+      // listed, and erased, twice.
+      if (StoreSize == 0 || !Stride.isStrictlyPositive() ||
+          Stride.ule(StoreSize) || !SI->isSimple() ||
+          StoredVal->getType()->isPtrOrPtrVectorTy())
         return LegalStoreKind::None;
       IsChainPart = true;
     }
@@ -1665,8 +1669,12 @@ bool LoopIdiomRecognize::processLoopStoreChainsOfLoopLoads(StoreList &Parts,
         break;
       ChainStores.push_back(Member.second);
       ChainLoads.push_back(cast<LoadInst>(Member.second->getValueOperand()));
-      Covered += DL->getTypeStoreSize(
-          Member.second->getValueOperand()->getType());
+      uint64_t PartSize =
+          DL->getTypeStoreSize(Member.second->getValueOperand()->getType());
+      // Offsets strictly increase, so every store and every load (which sits at
+      // the offset of its store) is listed once and is erased once.
+      assert(PartSize > 0 && "zero-sized parts are rejected by isLegalStore");
+      Covered += PartSize;
       if (Stride.sle(Covered))
         break;
     }
