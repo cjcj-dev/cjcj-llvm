@@ -1584,6 +1584,20 @@ bool LoopIdiomRecognize::processLoopStoreOfLoopLoad(
       MSSAU->removeMemoryAccess(SI, true);
     deleteDeadInstruction(SI);
   }
+  // The leaf loads of a chain must not stay behind either: with a memmove they
+  // read memory the call has already changed, and when the source is shifted
+  // by a non-multiple of the stride a leaf then sees the bytes of a different
+  // leaf, which may violate its metadata (for example !noundef). Every load
+  // whose only user was a deleted store is dead now; a load with other users
+  // exists only when the loop does not access the destination range, so it
+  // reads memory the call does not write.
+  for (LoadInst *LI : ChainLoads) {
+    if (!LI->use_empty())
+      continue;
+    if (MSSAU)
+      MSSAU->removeMemoryAccess(LI, true);
+    deleteDeadInstruction(LI);
+  }
   if (MSSAU && VerifyMemorySSA)
     MSSAU->getMemorySSA()->verifyMemorySSA();
   if (UseMemMove)

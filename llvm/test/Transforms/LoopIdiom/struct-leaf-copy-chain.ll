@@ -1,4 +1,5 @@
 ; RUN: opt -aa-pipeline=basic-aa -passes=loop-idiom -S < %s | FileCheck %s
+; RUN: opt -aa-pipeline=basic-aa -passes='loop-mssa(loop-idiom)' -verify-memoryssa -S < %s | FileCheck %s
 ;
 ; A loop that copies whole aggregate elements leaf by leaf (one load/store pair
 ; per field, each narrower than the element stride) is recognized like a single
@@ -168,3 +169,35 @@ loop:
 exit:
   ret void
 }
+
+; Two {i64, i64} elements shifted down by 24 bytes, which is not a multiple of
+; the 16-byte stride: after the memmove, the memory the !noundef leaf load %x
+; would read holds bytes of the other leaf, so the leaf loads must be removed
+; together with the stores rather than left in the loop.
+; CHECK-LABEL: @shift_pairs_by_one_and_a_half(
+; CHECK: call void @llvm.memmove.p0i8.p0i8.i64(i8* align 8 %{{.*}}, i8* align 8 %{{.*}}, i64 32, i1 false)
+; CHECK-NOT: load
+; CHECK-NOT: store
+; CHECK: ret void
+define void @shift_pairs_by_one_and_a_half(i64* %a) {
+entry:
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %loop ]
+  %j = shl nuw nsw i64 %i, 1
+  %dx = getelementptr inbounds i64, i64* %a, i64 %j
+  %dy = getelementptr inbounds i64, i64* %dx, i64 1
+  %sx = getelementptr inbounds i64, i64* %dx, i64 3
+  %sy = getelementptr inbounds i64, i64* %dx, i64 4
+  %x = load i64, i64* %sx, align 8, !noundef !0
+  %y = load i64, i64* %sy, align 8
+  store i64 %x, i64* %dx, align 8
+  store i64 %y, i64* %dy, align 8
+  %next = add nuw nsw i64 %i, 1
+  %done = icmp eq i64 %next, 2
+  br i1 %done, label %exit, label %loop
+exit:
+  ret void
+}
+
+!0 = !{}
