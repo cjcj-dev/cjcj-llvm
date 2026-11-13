@@ -2183,6 +2183,14 @@ bool CallAnalyzer::simplifyCallSite(Function *F, CallBase &Call) {
 }
 
 bool CallAnalyzer::visitCallBase(CallBase &Call) {
+  // A call to SetDebugLocation only carries a source location for Cangjie
+  // stack traces; AsmPrinter emits no instruction for it. Like a debug
+  // intrinsic, it must not be charged when estimating callee size, in any
+  // block.
+  if (CJPipeline)
+    if (const Function *Callee = Call.getCalledFunction())
+      if (Callee->getName().isSetDebugLocation())
+        return true;
   if (CJPipeline && isa<UnreachableInst>(Call.getParent()->getTerminator()))
     return false;
   if (!onCallBaseVisitStart(Call))
