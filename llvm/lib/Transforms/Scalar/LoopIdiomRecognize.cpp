@@ -180,6 +180,7 @@ private:
   StoreListMap StoreRefsForMemset;
   StoreListMap StoreRefsForMemsetPattern;
   StoreList StoreRefsForMemcpy;
+  StoreList StoreRefsForMemcpyParts;
   bool HasMemset;
   bool HasMemsetPattern;
   bool HasMemcpy;
@@ -191,6 +192,7 @@ private:
     MemsetPattern,
     Memcpy,
     UnorderedAtomicMemcpy,
+    MemcpyPart, // Narrower than the stride; may join a field-wise copy chain.
     DontUse // Dummy retval never to be used. Allows catching errors in retval
             // handling.
   };
@@ -229,7 +231,10 @@ private:
                                   Instruction *TheLoad,
                                   const SCEVAddRecExpr *StoreEv,
                                   const SCEVAddRecExpr *LoadEv,
-                                  const SCEV *BECount);
+                                  const SCEV *BECount,
+                                  ArrayRef<StoreInst *> ChainStores = {},
+                                  ArrayRef<LoadInst *> ChainLoads = {});
+  bool processLoopStoreChainsOfLoopLoads(StoreList &Parts, const SCEV *BECount);
   bool avoidLIRForMultiBlockLoop(bool IsMemset = false,
                                  bool IsLoopMemset = false);
 
@@ -546,8 +551,16 @@ LoopIdiomRecognize::isLegalStore(StoreInst *SI) {
     // know that every byte is touched in the loop.
     APInt Stride = getStoreStride(StoreEv);
     unsigned StoreSize = DL->getTypeStoreSize(SI->getValueOperand()->getType());
-    if (StoreSize != Stride && StoreSize != -Stride)
-      return LegalStoreKind::None;
+    bool IsChainPart = false;
+    if (StoreSize != Stride && StoreSize != -Stride) {
+      // A simple store narrower than a positive stride may still be one leaf
+      // of a field-wise element copy (see processLoopStoreChainsOfLoopLoads).
+      // Pointer-valued leaves never take part in such a chain.
+      if (!Stride.isStrictlyPositive() || Stride.ule(StoreSize) ||
+          !SI->isSimple() || StoredVal->getType()->isPtrOrPtrVectorTy())
+        return LegalStoreKind::None;
+      IsChainPart = true;
+    }
 
     // The store must be feeding a non-volatile load.
     LoadInst *LI = dyn_cast<LoadInst>(SI->getValueOperand());
@@ -571,6 +584,10 @@ LoopIdiomRecognize::isLegalStore(StoreInst *SI) {
     if (StoreEv->getOperand(1) != LoadEv->getOperand(1))
       return LegalStoreKind::None;
 
+    if (IsChainPart)
+      return LI->isSimple() ? LegalStoreKind::MemcpyPart
+                            : LegalStoreKind::None;
+
     // Success.  This store can be converted into a memcpy.
     UnorderedAtomic = UnorderedAtomic || LI->isAtomic();
     return UnorderedAtomic ? LegalStoreKind::UnorderedAtomicMemcpy
@@ -584,6 +601,7 @@ void LoopIdiomRecognize::collectStores(BasicBlock *BB) {
   StoreRefsForMemset.clear();
   StoreRefsForMemsetPattern.clear();
   StoreRefsForMemcpy.clear();
+  StoreRefsForMemcpyParts.clear();
   for (Instruction &I : *BB) {
     StoreInst *SI = dyn_cast<StoreInst>(&I);
     if (!SI)
@@ -607,6 +625,9 @@ void LoopIdiomRecognize::collectStores(BasicBlock *BB) {
     case LegalStoreKind::Memcpy:
     case LegalStoreKind::UnorderedAtomicMemcpy:
       StoreRefsForMemcpy.push_back(SI);
+      break;
+    case LegalStoreKind::MemcpyPart:
+      StoreRefsForMemcpyParts.push_back(SI);
       break;
     default:
       assert(false && "unhandled return value");
@@ -644,6 +665,10 @@ bool LoopIdiomRecognize::runOnLoopBlock(
   // Optimize the store into a memcpy, if it feeds an similarly strided load.
   for (auto &SI : StoreRefsForMemcpy)
     MadeChange |= processLoopStoreOfLoopLoad(SI, BECount);
+
+  // Field-wise copies of whole elements, e.g. one store per struct leaf.
+  MadeChange |= processLoopStoreChainsOfLoopLoads(StoreRefsForMemcpyParts,
+                                                 BECount);
 
   MadeChange |= processLoopMemIntrinsic<MemCpyInst>(
       BB, &LoopIdiomRecognize::processLoopMemCpy, BECount);
@@ -1284,8 +1309,8 @@ public:
         IsSameObject(BP1 == BP2) {}
 
   bool loadAndStoreMayFormMemmove(unsigned StoreSize, bool IsNegStride,
-                                  const Instruction &TheLoad,
-                                  bool IsMemCpy) const {
+                                  const Instruction &TheLoad, bool IsMemCpy,
+                                  bool IsChain = false) const {
     if (IsMemCpy) {
       // Ensure that LoadBasePtr is after StoreBasePtr or before StoreBasePtr
       // for negative stride.
@@ -1296,7 +1321,10 @@ public:
       // Ensure that LoadBasePtr is after StoreBasePtr or before StoreBasePtr
       // for negative stride. LoadBasePtr shouldn't overlap with StoreBasePtr.
       int64_t LoadSize =
-          DL.getTypeSizeInBits(TheLoad.getType()).getFixedSize() / 8;
+          IsChain ? int64_t(StoreSize)
+                  : int64_t(DL.getTypeSizeInBits(TheLoad.getType())
+                                .getFixedSize() /
+                            8);
       if (BP1 != BP2 || LoadSize != int64_t(StoreSize))
         return false;
       if ((!IsNegStride && LoadOff < StoreOff + int64_t(StoreSize)) ||
@@ -1321,7 +1349,9 @@ bool LoopIdiomRecognize::processLoopStoreOfLoopLoad(
     Value *DestPtr, Value *SourcePtr, const SCEV *StoreSizeSCEV,
     MaybeAlign StoreAlign, MaybeAlign LoadAlign, Instruction *TheStore,
     Instruction *TheLoad, const SCEVAddRecExpr *StoreEv,
-    const SCEVAddRecExpr *LoadEv, const SCEV *BECount) {
+    const SCEVAddRecExpr *LoadEv, const SCEV *BECount,
+    ArrayRef<StoreInst *> ChainStores, ArrayRef<LoadInst *> ChainLoads) {
+  const bool IsChain = !ChainStores.empty();
 
   // FIXME: until llvm.memcpy.inline supports dynamic sizes, we need to
   // conservatively bail here, since otherwise we may have to transform
@@ -1377,6 +1407,9 @@ bool LoopIdiomRecognize::processLoopStoreOfLoopLoad(
 
   SmallPtrSet<Instruction *, 2> IgnoredInsts;
   IgnoredInsts.insert(TheStore);
+  // The other leaf stores of a chain write the same element range.
+  for (StoreInst *SI : ChainStores)
+    IgnoredInsts.insert(SI);
 
   bool IsMemCpy = isa<MemCpyInst>(TheStore);
   const StringRef InstRemark = IsMemCpy ? "memcpy" : "load and store";
@@ -1391,6 +1424,11 @@ bool LoopIdiomRecognize::processLoopStoreOfLoopLoad(
     if (!TheLoad->hasOneUse())
       return Changed;
     IgnoredInsts.insert(TheLoad);
+    for (LoadInst *LI : ChainLoads) {
+      if (!LI->hasOneUse())
+        return Changed;
+      IgnoredInsts.insert(LI);
+    }
     if (mayLoopAccessLocation(StoreBasePtr, ModRefInfo::ModRef, CurLoop,
                               BECount, StoreSizeSCEV, *AA, IgnoredInsts)) {
       ORE.emit([&]() {
@@ -1404,6 +1442,8 @@ bool LoopIdiomRecognize::processLoopStoreOfLoopLoad(
       return Changed;
     }
     IgnoredInsts.erase(TheLoad);
+    for (LoadInst *LI : ChainLoads)
+      IgnoredInsts.erase(LI);
   }
 
   const SCEV *LdStart = LoadEv->getStart();
@@ -1439,7 +1479,7 @@ bool LoopIdiomRecognize::processLoopStoreOfLoopLoad(
   bool UseMemMove = IsMemCpy ? Verifier.IsSameObject : LoopAccessStore;
   if (UseMemMove)
     if (!Verifier.loadAndStoreMayFormMemmove(StoreSize, IsNegStride, *TheLoad,
-                                             IsMemCpy))
+                                             IsMemCpy, IsChain))
       return Changed;
 
   if (avoidLIRForMultiBlockLoop())
@@ -1456,6 +1496,10 @@ bool LoopIdiomRecognize::processLoopStoreOfLoopLoad(
   AAMDNodes AATags = TheLoad->getAAMetadata();
   AAMDNodes StoreAATags = TheStore->getAAMetadata();
   AATags = AATags.merge(StoreAATags);
+  for (LoadInst *LI : ChainLoads)
+    AATags = AATags.merge(LI->getAAMetadata());
+  for (StoreInst *SI : ChainStores)
+    AATags = AATags.merge(SI->getAAMetadata());
   if (auto CI = dyn_cast<ConstantInt>(NumBytes))
     AATags = AATags.extendTo(CI->getZExtValue());
   else
@@ -1533,6 +1577,13 @@ bool LoopIdiomRecognize::processLoopStoreOfLoopLoad(
   if (MSSAU)
     MSSAU->removeMemoryAccess(TheStore, true);
   deleteDeadInstruction(TheStore);
+  for (StoreInst *SI : ChainStores) {
+    if (SI == TheStore)
+      continue;
+    if (MSSAU)
+      MSSAU->removeMemoryAccess(SI, true);
+    deleteDeadInstruction(SI);
+  }
   if (MSSAU && VerifyMemorySSA)
     MSSAU->getMemorySSA()->verifyMemorySSA();
   if (UseMemMove)
@@ -1541,6 +1592,84 @@ bool LoopIdiomRecognize::processLoopStoreOfLoopLoad(
     ++NumMemCpy;
   ExpCleaner.markResultUsed();
   return true;
+}
+
+/// Field-wise copies of aggregate elements (for example a struct of two i64
+/// leaves copied leaf by leaf) give several store-of-load pairs per iteration,
+/// none of which covers the stride on its own. When the stores of such a group
+/// tile one contiguous range of exactly one stride, and each stored value is
+/// loaded at the same offset from a range with the same stride, the group copies
+/// whole elements and is handled like a single stride-sized store of a loaded
+/// value, with the same alias and memmove-direction checks.
+bool LoopIdiomRecognize::processLoopStoreChainsOfLoopLoads(StoreList &Parts,
+                                                           const SCEV *BECount) {
+  bool MadeChange = false;
+  SmallPtrSet<StoreInst *, 8> Used;
+  for (StoreInst *Head : Parts) {
+    if (Used.count(Head))
+      continue;
+    auto *HeadEv = cast<SCEVAddRecExpr>(SE->getSCEV(Head->getPointerOperand()));
+    auto *HeadLoad = cast<LoadInst>(Head->getValueOperand());
+    auto *HeadLoadEv =
+        cast<SCEVAddRecExpr>(SE->getSCEV(HeadLoad->getPointerOperand()));
+    APInt Stride = getStoreStride(HeadEv);
+
+    // Collect the members by their byte offset from Head; the store and the
+    // load of every member must have the same offset.
+    SmallVector<std::pair<int64_t, StoreInst *>, 8> Members;
+    for (StoreInst *SI : Parts) {
+      if (Used.count(SI))
+        continue;
+      auto *Ev = cast<SCEVAddRecExpr>(SE->getSCEV(SI->getPointerOperand()));
+      auto *LI = cast<LoadInst>(SI->getValueOperand());
+      auto *LEv = cast<SCEVAddRecExpr>(SE->getSCEV(LI->getPointerOperand()));
+      if (Ev->getOperand(1) != HeadEv->getOperand(1) ||
+          LEv->getOperand(1) != HeadLoadEv->getOperand(1))
+        continue;
+      auto *StoreOff = dyn_cast<SCEVConstant>(
+          SE->getMinusSCEV(Ev->getStart(), HeadEv->getStart()));
+      auto *LoadOff = dyn_cast<SCEVConstant>(
+          SE->getMinusSCEV(LEv->getStart(), HeadLoadEv->getStart()));
+      if (!StoreOff || !LoadOff ||
+          StoreOff->getAPInt() != LoadOff->getAPInt() ||
+          StoreOff->getAPInt().getMinSignedBits() > 64)
+        continue;
+      Members.push_back({StoreOff->getAPInt().getSExtValue(), SI});
+    }
+    llvm::sort(Members, [](const std::pair<int64_t, StoreInst *> &A,
+                           const std::pair<int64_t, StoreInst *> &B) {
+      return A.first < B.first;
+    });
+
+    // Head must start the range and the members must tile [0, Stride) without
+    // gaps or overlap.
+    SmallVector<StoreInst *, 8> ChainStores;
+    SmallVector<LoadInst *, 8> ChainLoads;
+    int64_t Covered = 0;
+    for (const auto &Member : Members) {
+      if (Member.first != Covered)
+        break;
+      ChainStores.push_back(Member.second);
+      ChainLoads.push_back(cast<LoadInst>(Member.second->getValueOperand()));
+      Covered += DL->getTypeStoreSize(
+          Member.second->getValueOperand()->getType());
+      if (Stride.sle(Covered))
+        break;
+    }
+    if (ChainStores.size() < 2 || ChainStores.front() != Head ||
+        Stride != Covered)
+      continue;
+
+    for (StoreInst *SI : ChainStores)
+      Used.insert(SI);
+    const SCEV *StoreSizeSCEV =
+        SE->getConstant(Head->getPointerOperand()->getType(), Covered);
+    MadeChange |= processLoopStoreOfLoopLoad(
+        Head->getPointerOperand(), HeadLoad->getPointerOperand(), StoreSizeSCEV,
+        Head->getAlign(), HeadLoad->getAlign(), Head, HeadLoad, HeadEv,
+        HeadLoadEv, BECount, ChainStores, ChainLoads);
+  }
+  return MadeChange;
 }
 
 // When compiling for codesize we avoid idiom recognition for a multi-block loop
