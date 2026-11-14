@@ -657,6 +657,13 @@ public:
 
   bool isEscapeParam() const { return EscapeParam & EscapeState; }
 
+  // Escaped to the heap or a global. Unlike isEscaped(), this excludes the
+  // relative EscapeParam state of a location that only reaches another
+  // parameter or the return value, which callers resolve from the summary.
+  bool isGlobalEscaped() const {
+    return Escaped || (EscapeState & EscapeGlobal) != 0;
+  }
+
   bool setEscapeParam(const ObjectLocation &Loc) {
     EscapeState |= EscapeParam;
     unsigned OldSize = EscapeLoc.size();
@@ -778,7 +785,12 @@ public:
   bool isNew() const override { return true; }
 
   int EscapeEdge(ObjectLocation &Src, int Path) override {
-    if (isEscaped() && Src.isEscaped()) {
+    // A parameter that only flows to another parameter or the return value is
+    // still allocatable by its caller. If an escaped allocation holds it, the
+    // escape must still reach the parameter summary; otherwise the caller may
+    // stack-allocate an object that this function stores into the heap.
+    if (isEscaped() && Src.isEscaped() &&
+        (!Src.isParam() || Src.isGlobalEscaped())) {
       return 0;
     }
     if (isEscaped()) {
