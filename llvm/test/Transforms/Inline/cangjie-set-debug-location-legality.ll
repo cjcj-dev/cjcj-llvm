@@ -49,7 +49,9 @@ entry:
 }
 
 ;--- site-attr.ll
-declare void @SetDebugLocation()
+; As CJRuntimeLowering declares it: a "cj-runtime" function, which the Cangjie
+; stackmap limit does not count.
+declare void @SetDebugLocation() #1
 declare void @ThrowIndexOutOfBoundsException()
 
 ; returns_twice on the call site: inlining would expose it to a caller that is
@@ -158,3 +160,4 @@ entry:
 }
 
 attributes #0 = { returns_twice }
+attributes #1 = { "cj-runtime" }
