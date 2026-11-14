@@ -522,10 +522,14 @@ static bool hasProvenNonHeapDestination(CallBase *CI) {
   return hasProvenNonHeapDestination(Dst);
 }
 
+static bool isAllocation(CallInst *CI);
+static uint64_t getBoundedArrayAllocationBytes(const GCStatepointInst *SP);
+
 // Byte size of the object allocation that Ptr addresses at offset zero, or 0.
 // MCC_NewObject/MCC_NewPinnedObject allocate exactly their size operand,
 // AlignUp(instance size, 8) + TYPEINFO_PTR_SIZE, and return non-null (runtime
-// CompilerCalls.cpp:123-158). Arrays, interior pointers and cycles yield 0.
+// CompilerCalls.cpp:123-158). Arrays accepted by isAllocation use the
+// runtime's exact MArray extent. Interior pointers and cycles yield 0.
 static uint64_t getAllocatedObjectBytes(Value *Ptr,
                                         SmallPtrSetImpl<Value *> &Active,
                                         DenseMap<Value *, uint64_t> &Known) {
@@ -546,7 +550,7 @@ static uint64_t getAllocatedObjectBytes(Value *Ptr,
       StringRef Name = Callee->getName();
       if (!Name.isCangjieNewObjFunction() && Name != NewObjFastStr &&
           Name != "CJ_MCC_NewPinnedObject")
-        return 0;
+        return isAllocation(Result) ? getBoundedArrayAllocationBytes(SP) : 0;
       auto *Size = dyn_cast<ConstantInt>((SP->actual_arg_begin() + 1)->get());
       return Size && !Size->isNegative() ? Size->getZExtValue() : 0;
     }
@@ -611,7 +615,8 @@ static bool isAllocatedObjectField(GEPOperator *GEP) {
 // objects and headerless value storage in AS1: AS1 alone is not a proof.
 // Inspect the final allocation statepoint, after partial escape analysis.
 // FieldOffsets admits isAllocatedObjectField for the domain test only; the
-// dominance elision keeps the inbounds-only proof.
+// dominance elision admits non-inbounds slots only through
+// isAllocationSlotStore, which also requires the allocation dominator.
 static bool hasHeapAllocationOrigin(Value *Ptr,
                                     SmallPtrSetImpl<Value *> &Active,
                                     DenseMap<Value *, bool> &Known,
@@ -729,6 +734,81 @@ static bool isArrayAllocation(CallInst *CI) {
          Name == "CJ_MCC_NewArray32" || Name == "CJ_MCC_NewArray64";
 }
 
+// TypeInfo operands may name an internal alias of the defined TypeInfo.
+// Value::stripPointerCastsAndAliases() would also follow interposable
+// aliases, whose link-time aliasee need not be this initializer.
+static const GlobalVariable *getDefinitiveTypeInfo(const Value *V) {
+  for (unsigned Depth = 0; Depth != 8; ++Depth) {
+    V = V->stripPointerCasts();
+    auto *GA = dyn_cast<GlobalAlias>(V);
+    if (!GA) {
+      auto *GV = dyn_cast<GlobalVariable>(V);
+      return GV && GV->hasDefinitiveInitializer() ? GV : nullptr;
+    }
+    if (GA->isInterposable())
+      return nullptr;
+    V = GA->getAliasee();
+  }
+  return nullptr;
+}
+
+// Exact MArray extent of a constant-length array allocation entry, or 0.
+// Runtime MArray::NewArray/NewKnownWidthArray: CalculateArraySize is
+// sizeof(MArray) + nElems * elemBytes, where a CJ_MCC_NewArray component of
+// negative kind (every IsObjectType kind is negative) uses the reference
+// size and any other component its componentSize (MArray.inline.h:121-160;
+// MClass.h superTypeInfo/componentTypeInfo union).
+static uint64_t getArrayAllocationBytes(const GCStatepointInst *SP) {
+  Function *Callee = SP->getActualCalledFunction();
+  if (!Callee || SP->actual_arg_size() < 2)
+    return 0;
+  StringRef Name = Callee->getName();
+  const DataLayout &DL = SP->getModule()->getDataLayout();
+  uint64_t ElementBytes = 0;
+  if (Name == "CJ_MCC_NewArray8") ElementBytes = 1;
+  else if (Name == "CJ_MCC_NewArray16") ElementBytes = 2;
+  else if (Name == "CJ_MCC_NewArray32") ElementBytes = 4;
+  else if (Name == "CJ_MCC_NewArray64") ElementBytes = 8;
+  else if (Name == "CJ_MCC_NewObjArray") ElementBytes = DL.getPointerSize(1);
+  else if (Name == "CJ_MCC_NewArray") {
+    const GlobalVariable *ArrayTI =
+        getDefinitiveTypeInfo(SP->actual_arg_begin()->get());
+    auto *ArrayData = ArrayTI
+        ? dyn_cast<ConstantStruct>(ArrayTI->getInitializer())
+        : nullptr;
+    if (!ArrayData || ArrayData->getNumOperands() <= CIT_SUPER)
+      return 0;
+    const GlobalVariable *ComponentTI =
+        getDefinitiveTypeInfo(ArrayData->getOperand(CIT_SUPER));
+    auto *ComponentData = ComponentTI
+        ? dyn_cast<ConstantStruct>(ComponentTI->getInitializer())
+        : nullptr;
+    if (!ComponentData || ComponentData->getNumOperands() <= CIT_SIZE)
+      return 0;
+    auto *Kind = dyn_cast<ConstantInt>(ComponentData->getOperand(CIT_TYPE));
+    auto *Size = dyn_cast<ConstantInt>(ComponentData->getOperand(CIT_SIZE));
+    if (!Kind || !Size || Kind->getSExtValue() == TK_GENERIC ||
+        Kind->getSExtValue() == TK_GENERIC_CUSTOM)
+      return 0;
+    ElementBytes = Kind->isNegative() ? DL.getPointerSize(1)
+                                      : Size->getZExtValue();
+  }
+  if (!ElementBytes)
+    return 0;
+  auto *Length = dyn_cast<ConstantInt>((SP->actual_arg_begin() + 1)->get());
+  // MArray consists of the type pointer and the pointer-sized MIndex length.
+  const uint64_t HeaderBytes = 2 * DL.getPointerSize(1);
+  if (!Length || Length->isNegative() ||
+      Length->getValue().ugt((UINT64_MAX - HeaderBytes) / ElementBytes))
+    return 0;
+  return HeaderBytes + Length->getZExtValue() * ElementBytes;
+}
+
+static uint64_t getBoundedArrayAllocationBytes(const GCStatepointInst *SP) {
+  uint64_t Bytes = getArrayAllocationBytes(SP);
+  return Bytes <= CangjieRuntimeLayout::ArrayInitSegmentSize ? Bytes : 0;
+}
+
 // ZGC barrierSetC2.cpp:1041-1064. At this pipeline point the allocation
 // result has not yet been expanded to a fast/slow-path merge phi. Only runtime
 // entries covered by on_slowpath_allocation_exit may promise raw-null storage.
@@ -744,51 +824,12 @@ static bool isAllocation(CallInst *CI) {
 
   // AOT has no deoptimization at the slow-path exit (zBarrierSet.cpp:275-301).
   // Segmented initialization can yield after allocating, so exclude arrays
-  // unless the entire allocation fits within its first 64 KiB segment.
-  const DataLayout &DL = CI->getModule()->getDataLayout();
+  // unless the entire allocation fits within its first 64 KiB segment, the
+  // same bound under which the runtime array entries call
+  // on_slowpath_allocation_exit (CompilerCalls.cpp:167-255).
   // CJRuntimeLowering also passes an optional third fast-path size hint.
   // It can be poison; derive the bound from the runtime's length and layout.
-  if (SP->actual_arg_size() < 2)
-    return false;
-  uint64_t ElementBytes = 0;
-  if (Name == "CJ_MCC_NewArray8") ElementBytes = 1;
-  else if (Name == "CJ_MCC_NewArray16") ElementBytes = 2;
-  else if (Name == "CJ_MCC_NewArray32") ElementBytes = 4;
-  else if (Name == "CJ_MCC_NewArray64") ElementBytes = 8;
-  else if (Name == "CJ_MCC_NewObjArray") ElementBytes = DL.getPointerSize(1);
-  else if (Name == "CJ_MCC_NewArray") {
-    auto *ArrayTI = dyn_cast<GlobalVariable>(
-        SP->actual_arg_begin()->get()->stripPointerCasts());
-    auto *ArrayData = ArrayTI && ArrayTI->hasInitializer()
-                          ? dyn_cast<ConstantStruct>(ArrayTI->getInitializer())
-                          : nullptr;
-    if (!ArrayData || ArrayData->getNumOperands() <= CIT_SUPER)
-      return false;
-    auto *ComponentTI = dyn_cast<GlobalVariable>(
-        ArrayData->getOperand(CIT_SUPER)->stripPointerCasts());
-    auto *ComponentData = ComponentTI && ComponentTI->hasInitializer()
-                             ? dyn_cast<ConstantStruct>(ComponentTI->getInitializer())
-                             : nullptr;
-    if (!ComponentData || ComponentData->getNumOperands() <= CIT_SIZE)
-      return false;
-    auto *Kind = dyn_cast<ConstantInt>(ComponentData->getOperand(CIT_TYPE));
-    auto *Size = dyn_cast<ConstantInt>(ComponentData->getOperand(CIT_SIZE));
-    if (!Kind || !Size || Kind->getSExtValue() == TK_GENERIC ||
-        Kind->getSExtValue() == TK_GENERIC_CUSTOM)
-      return false;
-    ElementBytes = Kind->isNegative() ? DL.getPointerSize(1)
-                                    : Size->getZExtValue();
-  }
-  if (!ElementBytes)
-    return false;
-  auto *Length = dyn_cast<ConstantInt>((SP->actual_arg_begin() + 1)->get());
-  // MArray consists of the type pointer and the pointer-sized MIndex length.
-  const uint64_t HeaderBytes = 2 * DL.getPointerSize(1);
-  if (!Length || Length->isNegative() ||
-      Length->getValue().ugt(
-          (CangjieRuntimeLayout::ArrayInitSegmentSize - HeaderBytes) / ElementBytes))
-    return false;
-  return true;
+  return getBoundedArrayAllocationBytes(SP) != 0;
 }
 
 // ZGC barrierSetC2.cpp:905-918: all statepoints, not just polling stubs.
@@ -882,6 +923,35 @@ static void elideDominatedBarriers(ArrayRef<CallInst *> Accesses,
   }
 }
 
+// ZGC barrierSetC2.cpp:973-1003 needs only base + concrete non-negative
+// offset; Cangjie's front end may emit that offset without inbounds. Such a
+// GEP makes no in-object promise, so prove the slot from the allocation
+// itself: the base is the gc.result of an isAllocation entry (no relocate,
+// phi or select), the offset is constant, it lies past the TypeInfo pointer
+// (and MArray length) and the whole reference slot ends within the exact
+// allocated extent. Dominance and the no-safepoint interval are still
+// checked by elideDominatedBarriers against that same allocation.
+static bool isAllocationSlotStore(CallInst *Access) {
+  if (Access->getIntrinsicID() != Intrinsic::cj_gcwrite_ref)
+    return false;
+  APInt Offset;
+  bool UnknownOffset;
+  auto *Alloc =
+      dyn_cast_or_null<CallInst>(getBaseAndOffset(Access, Offset, UnknownOffset));
+  if (!Alloc || UnknownOffset || !isAllocation(Alloc) ||
+      hasProvenNonHeapDestination(Access))
+    return false;
+  const DataLayout &DL = Access->getModule()->getDataLayout();
+  const uint64_t SlotBytes = DL.getPointerSize(1);
+  const uint64_t HeaderBytes =
+      isArrayAllocation(Alloc) ? 2 * SlotBytes : SlotBytes;
+  SmallPtrSet<Value *, 16> Active;
+  DenseMap<Value *, uint64_t> Known;
+  const uint64_t Bytes = getAllocatedObjectBytes(Alloc, Active, Known);
+  return Bytes >= HeaderBytes + SlotBytes && !Offset.isNegative() &&
+         Offset.uge(HeaderBytes) && Offset.ule(Bytes - SlotBytes);
+}
+
 // ZGC zBarrierSetC2.cpp:480-552: first collect three access/dominator lists,
 // then apply the common proof. Allocations only join load/store dominators.
 static void analyzeDominatingBarriers(Function &F) {
@@ -913,6 +983,9 @@ static void analyzeDominatingBarriers(Function &F) {
         LoadDominators.push_back(CI);
         StoreDominators.push_back(CI);
         AtomicDominators.push_back(CI);
+      } else if (isAllocationSlotStore(CI)) {
+        // Allocation-dominated candidate only; never a dominator itself.
+        Stores.push_back(CI);
       }
       break;
     case Intrinsic::cj_atomic_swap:
