@@ -22,16 +22,36 @@
 
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
+#include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/StackMaps.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Statepoint.h"
 #include "llvm/InitializePasses.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
+
+namespace llvm {
+extern cl::opt<bool> CJPipeline;
+extern cl::opt<bool> EnableSafepointOutline;
+
+// Inline Cangjie safepoint polls reach CJ_MCC_HandleSafepoint only on their slow
+// path; that stub saves every general-purpose register into the save area the
+// runtime maps for the poll's immediate managed sender. GC pointers live across
+// such a poll may therefore remain in registers its register mask preserves.
+// Ordinary call statepoints still spill register GC pointers to frame slots.
+cl::opt<unsigned> CJSafepointPollMaxRegistersForGCPointers(
+    "cj-safepoint-poll-max-registers-for-gc-values", cl::Hidden, cl::init(64),
+    cl::desc("Max number of registers holding GC pointers across a Cangjie "
+             "inline safepoint poll (0 keeps frame-slot roots)"));
+} // namespace llvm
 
 #define DEBUG_TYPE "fixup-statepoint-caller-saved"
 STATISTIC(NumSpilledRegisters, "Number of spilled register");
@@ -596,6 +616,21 @@ public:
 };
 } // namespace
 
+// Mirrors keepsSafepointPollGCPointersInRegisters in StatepointLowering.cpp.
+static bool keepsSafepointPollGCPointersInRegisters(const MachineInstr &MI,
+                                                    const MachineFunction &MF) {
+  if (!CJPipeline || EnableSafepointOutline ||
+      CJSafepointPollMaxRegistersForGCPointers == 0)
+    return false;
+  if (StatepointOpers(&MI).getID() != Cangjie::CJStatepointID::Safepoint)
+    return false;
+  if (MF.getTarget().getOptLevel() == CodeGenOpt::None ||
+      MF.getFunction().hasOptNone())
+    return false;
+  const Triple &TT = MF.getTarget().getTargetTriple();
+  return TT.getArch() == Triple::x86_64 && TT.isOSLinux();
+}
+
 bool FixupStatepointCallerSaved::runOnMachineFunction(MachineFunction &MF) {
   if (skipFunction(MF.getFunction()))
     return false;
@@ -627,7 +662,8 @@ bool FixupStatepointCallerSaved::runOnMachineFunction(MachineFunction &MF) {
     if (MaxStatepointsWithRegs.getNumOccurrences() &&
         NumStatepoints >= MaxStatepointsWithRegs)
       AllowGCPtrInCSR = false;
-    Changed |= SPP.process(*I, AllowGCPtrInCSR);
+    Changed |= SPP.process(
+        *I, AllowGCPtrInCSR || keepsSafepointPollGCPointersInRegisters(*I, MF));
   }
   return Changed;
 }

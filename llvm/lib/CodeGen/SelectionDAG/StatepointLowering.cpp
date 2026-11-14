@@ -38,6 +38,7 @@
 #include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/GCStrategy.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
@@ -60,6 +61,8 @@ using namespace llvm;
 
 namespace llvm {
 extern cl::opt<bool> CJPipeline;
+extern cl::opt<bool> EnableSafepointOutline;
+extern cl::opt<unsigned> CJSafepointPollMaxRegistersForGCPointers;
 }
 #define DEBUG_TYPE "statepoint-lowering"
 
@@ -592,6 +595,27 @@ static bool isGCValue(const Value *V, SelectionDAGBuilder &Builder) {
   return true; // conservative
 }
 
+/// An inline Cangjie safepoint poll calls CJ_MCC_HandleSafepoint only on its
+/// slow path. That stub saves every general-purpose register into the save area
+/// the runtime stack walker maps for the poll's immediate managed sender
+/// (FrameType::SAFEPOINT), so GC pointers live across the poll may stay in
+/// registers preserved by the poll's register mask; the stack map then names the
+/// register. Ordinary call statepoints keep their frame-slot roots.
+static bool
+keepsSafepointPollGCPointersInRegisters(
+    const SelectionDAGBuilder::StatepointLoweringInfo &SI,
+    SelectionDAGBuilder &Builder) {
+  if (!CJPipeline || EnableSafepointOutline ||
+      SI.ID != Cangjie::CJStatepointID::Safepoint ||
+      CJSafepointPollMaxRegistersForGCPointers == 0)
+    return false;
+  if (Builder.DAG.getTarget().getOptLevel() == CodeGenOpt::None ||
+      Builder.DAG.getMachineFunction().getFunction().hasOptNone())
+    return false;
+  const Triple &TT = Builder.DAG.getTarget().getTargetTriple();
+  return TT.getArch() == Triple::x86_64 && TT.isOSLinux();
+}
+
 /// Lower deopt state and gc pointer arguments of the statepoint.  The actual
 /// lowering is described in lowerIncomingStatepointValue.  This function is
 /// responsible for lowering everything in the right position and playing some
@@ -664,6 +688,9 @@ lowerStatepointMetaArgs(SmallVectorImpl<SDValue> &Ops,
 
   // Decide which deriver pointers will go on VRegs
   unsigned MaxVRegPtrs = MaxRegistersForGCPointers.getValue();
+  if (keepsSafepointPollGCPointersInRegisters(SI, Builder))
+    MaxVRegPtrs = std::max(MaxVRegPtrs,
+                           CJSafepointPollMaxRegistersForGCPointers.getValue());
 
   // Pointers used on exceptional path of invoke statepoint.
   // We cannot assing them to VRegs.
