@@ -1,0 +1,20 @@
+#!/usr/bin/env zx
+// One normal std.core producer invocation; frozen SDK and source stay read-only.
+import fs from 'node:fs';
+import path from 'node:path';
+import {spawn,spawnSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
+const out=process.argv[2];if(!out||!path.isAbsolute(out))throw Error('absolute new output required');fs.mkdirSync(out);for(const d of ['tmp','temps'])fs.mkdirSync(path.join(out,d));
+const W='/mnt/cjcj-nvme/impl_full_sdk_sol_1108/integrated-gc-1114';
+const sdk=W+'/work/sdk-stage2',src=W+'/work/sources/std1';
+const r={out,start:new Date().toISOString(),steps:[],sdk,src};const save=()=>fs.writeFileSync(out+'/result.json',JSON.stringify(r,null,2));save();
+try{
+ const cg='/sys/fs/cgroup'+fs.readFileSync('/proc/self/cgroup','utf8').trim().split('::').at(-1);r.resources=Object.fromEntries(['cpuset.cpus.effective','memory.max','memory.swap.max'].map(n=>[n,fs.readFileSync(cg+'/'+n,'utf8').trim()]));r.limits=fs.readFileSync('/proc/self/limits','utf8');save();if(r.resources['memory.swap.max']!=='0'||!r.limits.match(/Max core file size\s+0\s+0/))throw Error('resource contract');
+ r.source=spawnSync('git',['-C',src,'rev-parse','HEAD'],{encoding:'utf8'}).stdout.trim();if(r.source!=='fcfb5ea1931e0d5f66d834476a01db75bd826ada')throw Error('fixed std source');
+ r.stage=JSON.parse(fs.readFileSync(sdk+'/STAGE-INPUTS.json','utf8'));r.entry=fs.readFileSync(sdk+'/bin/cjcj-stage1.entry','utf8');
+ const n=fs.readFileSync(src+'/stdlib/build/build/build.ninja','utf8');const at=n.indexOf('build modules/linux_x86_64_cjnative_bc/std/libstd.core.bc');if(at<0)throw Error('normal core target missing');const block=n.slice(at,n.indexOf('\n\n',at));r.original=block;const cmd=block.split('\n').find(x=>x.startsWith('  COMMAND = '));const args=cmd.slice(cmd.indexOf(' cjc ')+5).trim().split(/\s+/);if(!args.includes('--lto=full')||!args.includes('-O2')||args.some(x=>/["']/.test(x)))throw Error('unexpected native producer argv');const pos=args.indexOf('--output');if(pos<0)throw Error('output not found');args[pos+1]=out+'/libstd.core.bc';args.push('--save-temps',out+'/temps','--opt-options','-print-before-all -print-after-all -filter-print-funcs=_CNat6String7indexOfHRNatY0_E,_CNat6String7indexOfHh,_CNat6String11indexOfFastHhl','-j8');
+ const env={...process.env,CANGJIE_HOME:sdk,CANGJIE_PATH:src+'/stdlib/build/build/modules/linux_x86_64_cjnative',LIBRARY_PATH:src+'/stdlib/build/build/lib',PATH:sdk+'/bin:'+sdk+'/third_party/llvm/bin:/usr/local/bin:/usr/bin:/bin',TMPDIR:out+'/tmp',HOME:'/root',LD_LIBRARY_PATH:sdk+'/third_party/llvm/lib',KKK2_JOBS:'8',CMAKE_BUILD_PARALLEL_LEVEL:'8'};delete env.LD_PRELOAD;delete env.LD_AUDIT;r.env=Object.fromEntries(['CANGJIE_HOME','CANGJIE_PATH','LIBRARY_PATH','PATH','TMPDIR','HOME','LD_LIBRARY_PATH','KKK2_JOBS'].map(k=>[k,env[k]]));
+ const id=p=>({path:p,real:fs.realpathSync(p),sha256:createHash('sha256').update(fs.readFileSync(p)).digest('hex')});r.identities=[id(sdk+'/libexec/compiler/cjcj-stage1'),id(sdk+'/third_party/llvm/bin/opt')];const row={argv:[sdk+'/bin/cjc',...args],cwd:out};r.steps.push(row);save();
+ const stdout=fs.openSync(out+'/compile.stdout','wx'),stderr=fs.openSync(out+'/compile.stderr','wx');const p=spawn(row.argv[0],row.argv.slice(1),{cwd:out,env,stdio:['ignore',stdout,stderr]});const seen=new Map();const timer=setInterval(()=>{const todo=[p.pid];for(let i=0;i<todo.length;i++){const pid=todo[i];try{const exe=fs.readlinkSync('/proc/'+pid+'/exe');seen.set(pid,{pid,exe,argv:fs.readFileSync('/proc/'+pid+'/cmdline','utf8').split('\0')});for(const tid of fs.readdirSync('/proc/'+pid+'/task'))for(const c of fs.readFileSync('/proc/'+pid+'/task/'+tid+'/children','utf8').trim().split(/\s+/).filter(Boolean).map(Number))if(!todo.includes(c))todo.push(c);}catch{}}},50);
+ Object.assign(row,await new Promise((resolve,reject)=>{p.on('error',reject);p.on('exit',(rc,signal)=>resolve({rc,signal}));}));clearInterval(timer);fs.closeSync(stdout);fs.closeSync(stderr);r.processes=[...seen.values()];r.end=new Date().toISOString();save();process.exitCode=row.rc??1;
+}catch(e){r.error=e.stack;r.end=new Date().toISOString();save();throw e;}
