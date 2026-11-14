@@ -1877,7 +1877,10 @@ static bool isNoAliasAllocaValue(AllocaInst *AI, Instruction *I,
 // can't move LI to the preheader if br pred contains a LI's pointer, or if the
 // Terminator is a normal if-else branch.
 static bool
-cjPartialSpeculativeExecute(Instruction *I, const Loop *L, MemorySSA *MSSA, AAResults *AA) {
+cjPartialSpeculativeExecute(Instruction *I, const Loop *L, MemorySSA *MSSA,
+                            AAResults *AA, const Instruction *CtxI,
+                            const DominatorTree *DT,
+                            const TargetLibraryInfo *TLI) {
   Value *LoadPtr = nullptr;
   if (auto *LI = dyn_cast<LoadInst>(I))
     LoadPtr = LI->getPointerOperand();
@@ -1885,6 +1888,20 @@ cjPartialSpeculativeExecute(Instruction *I, const Loop *L, MemorySSA *MSSA, AARe
     LoadPtr = II->getCJRefGCReadPtr();
 
   if (!LoadPtr)
+    return false;
+
+  // Independence from the branch condition is not a dereferenceability
+  // proof: a non-null array can still be indexed at or beyond its end.
+  // Require the same complete access proof as the general speculation path.
+  const DataLayout &DL = I->getModule()->getDataLayout();
+  Type *AccessTy = LoadPtr->getType()->getNonOpaquePointerElementType();
+  Align Alignment(8);
+  if (auto *LI = dyn_cast<LoadInst>(I)) {
+    AccessTy = LI->getType();
+    Alignment = LI->getAlign();
+  }
+  if (!isDereferenceableAndAlignedPointer(LoadPtr, AccessTy, Alignment, DL,
+                                         CtxI, DT, TLI))
     return false;
 
   BasicBlock *BB = I->getParent();
@@ -1962,7 +1979,7 @@ static bool isSafeToExecuteUnconditionally(
     return true;
   // Partial speculative execution, out-of-order execution loads, and implicit
   // exceptions.
-  if (CJPipeline && cjPartialSpeculativeExecute(&Inst, CurLoop, MSSA, AA))
+  if (CJPipeline && cjPartialSpeculativeExecute(&Inst, CurLoop, MSSA, AA, CtxI, DT, TLI))
     return true;
 
   bool GuaranteedToExecute =
