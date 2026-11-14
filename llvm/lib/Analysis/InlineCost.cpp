@@ -448,6 +448,7 @@ protected:
   bool canFoldInboundsGEP(GetElementPtrInst &I);
   bool accumulateGEPOffset(GEPOperator &GEP, APInt &Offset);
   bool simplifyCallSite(Function *F, CallBase &Call);
+  bool recordCallLegality(CallBase &Call);
   bool simplifyInstruction(Instruction &I);
   bool simplifyIntrinsicCallIsConstant(CallBase &CB);
   ConstantInt *stripAndComputeInBoundsConstantOffsets(Value *&V);
@@ -2182,20 +2183,24 @@ bool CallAnalyzer::simplifyCallSite(Function *F, CallBase &Call) {
   return false;
 }
 
-bool CallAnalyzer::visitCallBase(CallBase &Call) {
-  // A call to SetDebugLocation only carries a source location for Cangjie
-  // stack traces; AsmPrinter emits no instruction for it. Like a debug
-  // intrinsic, it must not be charged when estimating callee size, in any
-  // block.
-  if (CJPipeline)
-    if (const Function *Callee = Call.getCalledFunction())
-      if (Callee->getName().isSetDebugLocation())
-        return true;
-  if (CJPipeline && isa<UnreachableInst>(Call.getParent()->getTerminator()))
+/// Cangjie lowers llvm.cj.set.location to a direct call of the runtime
+/// declaration `void SetDebugLocation()` (CJRuntimeLowering). It only records
+/// a source location for stack traces and AsmPrinter emits no instruction for
+/// it, but in IR it is still an ordinary call with its own attributes.
+static bool isCJSetDebugLocationCall(const CallBase &Call) {
+  const Function *Callee = Call.getCalledFunction();
+  if (!Callee || !Callee->isDeclaration() ||
+      !Callee->getName().isSetDebugLocation())
     return false;
-  if (!onCallBaseVisitStart(Call))
-    return true;
+  const FunctionType *FTy = Call.getFunctionType();
+  return FTy == Callee->getFunctionType() && FTy->getReturnType()->isVoidTy() &&
+         FTy->getNumParams() == 0 && !FTy->isVarArg();
+}
 
+/// Record the call properties that decide whether the callee may be inlined at
+/// all. They are not costs, so no cost rule may skip them. Returns false when
+/// the call aborts the analysis.
+bool CallAnalyzer::recordCallLegality(CallBase &Call) {
   if (Call.hasFnAttr(Attribute::ReturnsTwice) &&
       !F.hasFnAttribute(Attribute::ReturnsTwice)) {
     // This aborts the entire analysis.
@@ -2204,6 +2209,36 @@ bool CallAnalyzer::visitCallBase(CallBase &Call) {
   }
   if (isa<CallInst>(Call) && cast<CallInst>(Call).cannotDuplicate())
     ContainsNoDuplicateCall = true;
+  return true;
+}
+
+bool CallAnalyzer::visitCallBase(CallBase &Call) {
+  if (CJPipeline) {
+    const bool LocationOnly = isCJSetDebugLocationCall(Call);
+    const bool InUnreachableBB =
+        isa<UnreachableInst>(Call.getParent()->getTerminator());
+    if (LocationOnly || InUnreachableBB) {
+      // These Cangjie rules only change what the call is charged; its
+      // legality is still recorded.
+      if (!recordCallLegality(Call))
+        return false;
+      if (LocationOnly) {
+        // No call penalty, argument setup or instruction cost in any block.
+        // Outside the unreachable-block rule it still clobbers memory for the
+        // IR passes that run after inlining.
+        if (!InUnreachableBB && !Call.onlyReadsMemory())
+          disableLoadElimination();
+        return true;
+      }
+      // Calls on a Cangjie exception path are charged as one instruction.
+      return false;
+    }
+  }
+  if (!onCallBaseVisitStart(Call))
+    return true;
+
+  if (!recordCallLegality(Call))
+    return false;
 
   Function *F = Call.getCalledFunction();
   bool IsIndirectCall = !F;
