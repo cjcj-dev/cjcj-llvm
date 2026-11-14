@@ -4710,9 +4710,10 @@ static bool isCJRefReadSafeToSpeculativelyExecute(
   Value *Ptr = II->getCJRefGCReadPtr();
   if (!Ptr)
     return false;
+  // The result is the reference read from the slot. Unlike the slot's
+  // pointee API, this access type is also available with opaque pointers.
   return isDereferenceableAndAlignedPointer(
-      Ptr, Ptr->getType()->getNonOpaquePointerElementType(), Align(8), DL, CtxI,
-      DT, TLI);
+      Ptr, II->getType(), Align(8), DL, CtxI, DT, TLI);
 }
 
 bool llvm::isSafeToSpeculativelyExecuteWithOpcode(

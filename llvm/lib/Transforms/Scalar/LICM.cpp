@@ -1882,10 +1882,19 @@ cjPartialSpeculativeExecute(Instruction *I, const Loop *L, MemorySSA *MSSA,
                             const DominatorTree *DT,
                             const TargetLibraryInfo *TLI) {
   Value *LoadPtr = nullptr;
-  if (auto *LI = dyn_cast<LoadInst>(I))
+  Type *AccessTy = nullptr;
+  Align Alignment(8);
+  if (auto *LI = dyn_cast<LoadInst>(I)) {
     LoadPtr = LI->getPointerOperand();
-  else if (auto *II = dyn_cast<IntrinsicInst>(I))
+    AccessTy = LI->getType();
+    Alignment = LI->getAlign();
+  } else if (auto *II = dyn_cast<IntrinsicInst>(I)) {
     LoadPtr = II->getCJRefGCReadPtr();
+    // A ref-read returns the reference stored in the slot, including when
+    // the slot operand is an opaque pointer. Keep its existing alignment.
+    if (LoadPtr)
+      AccessTy = II->getType();
+  }
 
   if (!LoadPtr)
     return false;
@@ -1894,12 +1903,6 @@ cjPartialSpeculativeExecute(Instruction *I, const Loop *L, MemorySSA *MSSA,
   // proof: a non-null array can still be indexed at or beyond its end.
   // Require the same complete access proof as the general speculation path.
   const DataLayout &DL = I->getModule()->getDataLayout();
-  Type *AccessTy = LoadPtr->getType()->getNonOpaquePointerElementType();
-  Align Alignment(8);
-  if (auto *LI = dyn_cast<LoadInst>(I)) {
-    AccessTy = LI->getType();
-    Alignment = LI->getAlign();
-  }
   if (!isDereferenceableAndAlignedPointer(LoadPtr, AccessTy, Alignment, DL,
                                          CtxI, DT, TLI))
     return false;
