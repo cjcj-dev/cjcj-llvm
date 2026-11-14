@@ -52,7 +52,10 @@ entry:
   ret void
 }
 
-; Offset 0 is the TypeInfo pointer, not an initialized field slot.
+; Offset 0 is the TypeInfo pointer, not an initialized field slot: the
+; non-inbounds admission requires the slot to lie past the object header.
+; (A plain bitcast of the allocation already took the pre-existing inbounds
+; allocation-origin path, which this change does not alter.)
 ; CHECK-LABEL: define void @object_typeinfo_slot(
 ; CHECK: cj.store.prev.low
 ; CHECK: call void @CJ_MCC_StoreBarrierOnHeapField
@@ -60,7 +63,8 @@ define void @object_typeinfo_slot(i8* %type, i8 addrspace(1)* %value) gc "cangji
 entry:
   %token = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, i8 addrspace(1)* (i8*, i64)* @CJ_MCC_NewObject, i32 2, i32 0, i8* %type, i64 24)
   %heap = call i8 addrspace(1)* @llvm.cj.gc.result(token %token)
-  %s = bitcast i8 addrspace(1)* %heap to i8 addrspace(1)* addrspace(1)*
+  %f = getelementptr i8, i8 addrspace(1)* %heap, i64 0
+  %s = bitcast i8 addrspace(1)* %f to i8 addrspace(1)* addrspace(1)*
   call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %value, i8 addrspace(1)* %heap, i8 addrspace(1)* addrspace(1)* %s, i32 1)
   ret void
 }
