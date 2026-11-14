@@ -3,18 +3,37 @@
 ;
 ; A constant field offset below the MCC_NewObject size operand addresses the
 ; allocated object even without inbounds, so the reserved-range test is
-; folded. The barrier itself is kept: dominance elision stays inbounds-only.
+; folded. With no safepoint after the allocation the slot is also an
+; allocation-dominated initialization store (colored, barrier elided); after a
+; safepoint the barrier is kept and only the domain test is folded.
 target datalayout = "e-m:e-p:64:64-p1:64:64-i64:64-n8:16:32:64-S128"
 
 ; CHECK-LABEL: define void @fresh_write(
 ; CHECK-NOT: g_cjHeapRangeCount
-; CHECK: cj.storebadmask
+; CHECK-NOT: cj.storebadmask
+; CHECK: store volatile i64 %cj.store.colored
 ; CHECK-NOT: g_cjHeapRangeCount
 ; CHECK: ret void
 define void @fresh_write(i8* %type, i8 addrspace(1)* %value) gc "cangjie" {
 entry:
   %token = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, i8 addrspace(1)* (i8*, i32)* @CJ_MCC_NewObject, i32 2, i32 0, i8* %type, i32 32)
   %heap = call i8 addrspace(1)* @llvm.cj.gc.result(token %token)
+  %field = getelementptr i8, i8 addrspace(1)* %heap, i64 8
+  %slot = bitcast i8 addrspace(1)* %field to i8 addrspace(1)* addrspace(1)*
+  call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %value, i8 addrspace(1)* %heap, i8 addrspace(1)* addrspace(1)* %slot, i32 1)
+  ret void
+}
+
+; CHECK-LABEL: define void @fresh_write_after_safepoint(
+; CHECK-NOT: g_cjHeapRangeCount
+; CHECK: cj.storebadmask
+; CHECK-NOT: g_cjHeapRangeCount
+; CHECK: ret void
+define void @fresh_write_after_safepoint(i8* %type, i8 addrspace(1)* %value) gc "cangjie" {
+entry:
+  %token = call token (...) @llvm.cj.gc.statepoint(i64 0, i32 0, i8 addrspace(1)* (i8*, i32)* @CJ_MCC_NewObject, i32 2, i32 0, i8* %type, i32 32)
+  %heap = call i8 addrspace(1)* @llvm.cj.gc.result(token %token)
+  %point = call token (...) @llvm.cj.gc.statepoint(i64 1, i32 0, void ()* @safepoint, i32 0, i32 0)
   %field = getelementptr i8, i8 addrspace(1)* %heap, i64 8
   %slot = bitcast i8 addrspace(1)* %field to i8 addrspace(1)* addrspace(1)*
   call void (i8 addrspace(1)*, i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)*, ...) @llvm.cj.gcwrite.ref(i8 addrspace(1)* %value, i8 addrspace(1)* %heap, i8 addrspace(1)* addrspace(1)* %slot, i32 1)
