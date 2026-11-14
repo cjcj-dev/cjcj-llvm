@@ -11,13 +11,12 @@ declare i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)*, i8 addrspace(1)* 
 ; CHECK-NOT: call {{.*}} @llvm.cj.gcread.static.ref(
 ; CHECK: read:
 ; CHECK: %value = call {{.*}} @llvm.cj.gcread.static.ref(
-define i8 addrspace(1)* @static_unknown_extent(i8 addrspace(1)* %owner, i8 addrspace(1)** %slot, i1* %flag, i64 %count) {
+define i8 addrspace(1)* @static_unknown_extent(i8 addrspace(1)* %owner, i8 addrspace(1)** %slot, i1 %run, i64 %count) {
 entry:
   br label %loop
 loop:
   %i = phi i64 [0, %entry], [%next, %latch]
   %last = phi i8 addrspace(1)* [null, %entry], [%result, %latch]
-  %run = load i1, i1* %flag, align 1
   br i1 %run, label %read, label %latch
 read:
   %value = call i8 addrspace(1)* @llvm.cj.gcread.static.ref(i8 addrspace(1)** %slot)
@@ -35,13 +34,12 @@ exit:
 ; CHECK: entry:
 ; CHECK: %value = call {{.*}} @llvm.cj.gcread.static.ref(
 ; CHECK: br label %loop
-define i8 addrspace(1)* @static_in_range(i8 addrspace(1)* %owner, i8 addrspace(1)** align 8 dereferenceable(8) %slot, i1* %flag, i64 %count) {
+define i8 addrspace(1)* @static_in_range(i8 addrspace(1)* %owner, i8 addrspace(1)** align 8 dereferenceable(8) %slot, i1 %run, i64 %count) {
 entry:
   br label %loop
 loop:
   %i = phi i64 [0, %entry], [%next, %latch]
   %last = phi i8 addrspace(1)* [null, %entry], [%result, %latch]
-  %run = load i1, i1* %flag, align 1
   br i1 %run, label %read, label %latch
 read:
   %value = call i8 addrspace(1)* @llvm.cj.gcread.static.ref(i8 addrspace(1)** %slot)
@@ -60,13 +58,12 @@ exit:
 ; CHECK-NOT: call {{.*}} @llvm.cj.gcread.ref(
 ; CHECK: read:
 ; CHECK: %value = call {{.*}} @llvm.cj.gcread.ref(
-define i8 addrspace(1)* @instance_unknown_extent(i8 addrspace(1)* %owner, i8 addrspace(1)* addrspace(1)* %slot, i1* %flag, i64 %count) {
+define i8 addrspace(1)* @instance_unknown_extent(i8 addrspace(1)* %owner, i8 addrspace(1)* addrspace(1)* %slot, i1 %run, i64 %count) {
 entry:
   br label %loop
 loop:
   %i = phi i64 [0, %entry], [%next, %latch]
   %last = phi i8 addrspace(1)* [null, %entry], [%result, %latch]
-  %run = load i1, i1* %flag, align 1
   br i1 %run, label %read, label %latch
 read:
   %value = call i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)* %owner, i8 addrspace(1)* addrspace(1)* %slot)
@@ -84,13 +81,12 @@ exit:
 ; CHECK: entry:
 ; CHECK: %value = call {{.*}} @llvm.cj.gcread.ref(
 ; CHECK: br label %loop
-define i8 addrspace(1)* @instance_in_range(i8 addrspace(1)* %owner, i8 addrspace(1)* addrspace(1)* align 8 dereferenceable(8) %slot, i1* %flag, i64 %count) {
+define i8 addrspace(1)* @instance_in_range(i8 addrspace(1)* %owner, i8 addrspace(1)* addrspace(1)* align 8 dereferenceable(8) %slot, i1 %run, i64 %count) {
 entry:
   br label %loop
 loop:
   %i = phi i64 [0, %entry], [%next, %latch]
   %last = phi i8 addrspace(1)* [null, %entry], [%result, %latch]
-  %run = load i1, i1* %flag, align 1
   br i1 %run, label %read, label %latch
 read:
   %value = call i8 addrspace(1)* @llvm.cj.gcread.ref(i8 addrspace(1)* %owner, i8 addrspace(1)* addrspace(1)* %slot)
