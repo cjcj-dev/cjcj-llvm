@@ -1,4 +1,4 @@
-; RUN: opt -S -cangjie-pipeline -passes='function(loop-mssa(licm))' %s | FileCheck %s
+; RUN: opt -opaque-pointers=0 -S -cangjie-pipeline -passes='function(loop-mssa(licm))' %s | FileCheck %s
 ; RUN: opt -opaque-pointers -S -cangjie-pipeline -passes='function(loop-mssa(licm))' %s | FileCheck %s
 ; Both ref-read intrinsics return the reference stored in the slot. Its type,
 ; not the slot pointer's pointee API, supplies the access size in either mode.

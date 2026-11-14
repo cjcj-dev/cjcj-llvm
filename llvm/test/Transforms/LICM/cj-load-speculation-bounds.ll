@@ -1,5 +1,5 @@
 ; RUN: opt -opaque-pointers -S -cangjie-pipeline -passes='function(loop-mssa(licm))' %s | FileCheck %s
-; RUN: opt -S -cangjie-pipeline -passes='function(loop-mssa(licm))' %s | FileCheck %s
+; RUN: opt -opaque-pointers=0 -S -cangjie-pipeline -passes='function(loop-mssa(licm))' %s | FileCheck %s
 ;
 ; A condition independent of the pointer is not proof that the access is valid.
 ; Cover both the generic dereferenceability query and CJ partial speculation.
