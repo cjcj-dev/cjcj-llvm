@@ -1,4 +1,5 @@
 ; RUN: opt -passes=cj-runtime-lowering,verify -S < %s | FileCheck %s
+; RUN: opt -passes=cj-runtime-lowering,verify -S < %s | FileCheck %s --check-prefix=R1
 ; RUN: opt -cj-runtime-lowering -verify -S < %s | FileCheck %s
 ; RUN: opt -passes=cj-runtime-lowering,verify -enable-cangjie-new-array-fastpath=false -S < %s | FileCheck %s --check-prefix=OFF
 ; RUN: opt -passes=cj-runtime-lowering,verify -cangjie-JIT -S < %s | FileCheck %s --check-prefix=OFF
@@ -28,15 +29,16 @@ target datalayout = "e-p:64:64-p1:64:64-i64:64-n8:16:32:64-S128"
 
 ; CHECK-LABEL: define i8 addrspace(1)* @bytes(
 ; CHECK: array.check:
-; CHECK: %[[FITS:.*]] = icmp ult i64 %n, 4096
+; CHECK-NEXT: %[[LEN:.*]] = freeze i64 %n
+; CHECK-NEXT: %[[FITS:.*]] = icmp ult i64 %[[LEN]], 4096
 ; CHECK-NEXT: br i1 %[[FITS]], label %array.fast, label %array.slow
 ; CHECK: array.fast:
-; CHECK-NEXT: %[[PAD:.*]] = add i64 %n, 23
+; CHECK-NEXT: %[[PAD:.*]] = add i64 %[[LEN]], 23
 ; CHECK-NEXT: %[[SIZE:.*]] = and i64 %[[PAD]], -8
-; CHECK-NEXT: %[[FAST:.*]] = call noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %n, i64 %[[SIZE]]){{.*}}!fast_new_array
+; CHECK-NEXT: %[[FAST:.*]] = call noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %[[LEN]], i64 %[[SIZE]]){{.*}}!fast_new_array
 ; CHECK-NEXT: br label %entry
 ; CHECK: array.slow:
-; CHECK-NEXT: %[[SLOW:.*]] = call noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %n, i64 poison)
+; CHECK-NEXT: %[[SLOW:.*]] = call noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %[[LEN]], i64 poison)
 ; CHECK-NEXT: br label %entry
 ; CHECK: %[[RESULT:.*]] = phi i8 addrspace(1)* [ %[[FAST]], %array.fast ], [ %[[SLOW]], %array.slow ]
 ; CHECK-NEXT: ret i8 addrspace(1)* %[[RESULT]]
@@ -46,10 +48,11 @@ target datalayout = "e-p:64:64-p1:64:64-i64:64-n8:16:32:64-S128"
 ; OFF-NOT: !fast_new_array
 ; OFF: ret
 ; MERGE-LABEL: define i8 addrspace(1)* @bytes(
-; MERGE: icmp ult i64 %n, 4096
+; MERGE: %[[MLEN:.*]] = freeze i64 %n
+; MERGE: icmp ult i64 %[[MLEN]], 4096
 ; MERGE: br i1
-; MERGE: call noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %n, i64 %{{.*}}){{.*}}!fast_new_array
-; MERGE: call noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %n, i64 poison)
+; MERGE: call noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %[[MLEN]], i64 %{{.*}}){{.*}}!fast_new_array
+; MERGE: call noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %[[MLEN]], i64 poison)
 ; MERGE-LABEL: define i8 addrspace(1)* @two(
 ; X86-LABEL: bytes:
 ; X86: cmpq $4095,
@@ -78,8 +81,10 @@ entry:
 ; Exercise traversal after splitting a block: the following allocation must
 ; also lower, and the first result remains live over the second statepoint.
 ; CHECK-LABEL: define i8 addrspace(1)* @two(
-; CHECK: icmp ult i64 %n, 4096
-; CHECK: icmp ult i64 %m, 4096
+; CHECK: %[[N:.*]] = freeze i64 %n
+; CHECK: icmp ult i64 %[[N]], 4096
+; CHECK: %[[M:.*]] = freeze i64 %m
+; CHECK: icmp ult i64 %[[M]], 4096
 ; CHECK-NOT: @llvm.cj.malloc.array
 ; CHECK: ret
 define i8 addrspace(1)* @two(i64 %n, i64 %m) gc "cangjie" {
@@ -98,7 +103,8 @@ define i8 addrspace(1)* @two(i64 %n, i64 %m) gc "cangjie" {
 ; CHECK-NEXT: br label %array.check
 ; CHECK: array.check:
 ; CHECK-NEXT: %n = phi i64 [ %a, %left ], [ %b, %right ]
-; CHECK-NEXT: %{{.*}} = icmp ult i64 %n, 4096
+; CHECK-NEXT: %[[JOIN:.*]] = freeze i64 %n
+; CHECK-NEXT: %{{.*}} = icmp ult i64 %[[JOIN]], 4096
 ; CHECK: ret
 define i8 addrspace(1)* @join(i1 %c, i64 %a, i64 %b) gc "cangjie" {
 entry:
@@ -116,9 +122,10 @@ alloc:
 ; Both exceptional edges carry the original handler phi value. The normal
 ; successor still receives the merged allocation from the original block.
 ; CHECK-LABEL: define i8 addrspace(1)* @with_handler(
-; CHECK: invoke noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %n, i64 %{{.*}})
+; CHECK: %[[EXLEN:.*]] = freeze i64 %n
+; CHECK: invoke noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %[[EXLEN]], i64 %{{.*}})
 ; CHECK-NEXT: to label %alloc unwind label %handler, !fast_new_array
-; CHECK: invoke noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %n, i64 poison)
+; CHECK: invoke noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %[[EXLEN]], i64 poison)
 ; CHECK-NEXT: to label %alloc unwind label %handler
 ; CHECK: alloc:
 ; CHECK-NEXT: %[[MERGED:.*]] = phi i8 addrspace(1)*
@@ -138,6 +145,61 @@ handler:
   %lp = landingpad { i8*, i32 } cleanup
   call void @observe(i32 %which)
   ret i8 addrspace(1)* null
+}
+
+; R1: a partially undefined length may select 0 and 1 at different uses.
+; One freeze must feed the gate, size, and both runtime length operands.
+
+; R1-LABEL: define i8 addrspace(1)* @bounded_undef(
+; R1: %[[L:.*]] = freeze i64 %n
+; R1-NEXT: %[[FIT:.*]] = icmp ult i64 %[[L]], 4096
+; R1-NEXT: br i1 %[[FIT]], label %array.fast, label %array.slow
+; R1: array.fast:
+; R1-NEXT: %[[PAD:.*]] = add i64 %[[L]], 23
+; R1-NEXT: %[[SIZE:.*]] = and i64 %[[PAD]], -8
+; R1-NEXT: %{{.*}} = call noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %[[L]], i64 %[[SIZE]]){{.*}}!fast_new_array
+; R1: array.slow:
+; R1-NEXT: %{{.*}} = call noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %[[L]], i64 poison)
+; R1: ret
+define i8 addrspace(1)* @bounded_undef() gc "cangjie" {
+entry:
+  %n = and i64 undef, 1
+  %a = call i8 addrspace(1)* @llvm.cj.malloc.array(i8* bitcast (%TypeInfo* @Bytes.ti to i8*), i64 %n, i64 1)
+  ret i8 addrspace(1)* %a
+}
+
+; R1-LABEL: define i8 addrspace(1)* @poison_length(
+; R1: %[[L:.*]] = freeze i64 poison
+; R1-NEXT: %[[FIT:.*]] = icmp ult i64 %[[L]], 4096
+; R1-NEXT: br i1 %[[FIT]], label %array.fast, label %array.slow
+; R1: array.fast:
+; R1-NEXT: %[[PAD:.*]] = add i64 %[[L]], 23
+; R1-NEXT: %[[SIZE:.*]] = and i64 %[[PAD]], -8
+; R1-NEXT: %{{.*}} = call noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %[[L]], i64 %[[SIZE]]){{.*}}!fast_new_array
+; R1: array.slow:
+; R1-NEXT: %{{.*}} = call noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %[[L]], i64 poison)
+; R1: ret
+define i8 addrspace(1)* @poison_length() gc "cangjie" {
+entry:
+  %a = call i8 addrspace(1)* @llvm.cj.malloc.array(i8* bitcast (%TypeInfo* @Bytes.ti to i8*), i64 poison, i64 1)
+  ret i8 addrspace(1)* %a
+}
+
+; R1-LABEL: define i8 addrspace(1)* @defined_length(
+; R1: %[[L:.*]] = freeze i64 %n
+; R1-NEXT: %[[FIT:.*]] = icmp ult i64 %[[L]], 4096
+; R1-NEXT: br i1 %[[FIT]], label %array.fast, label %array.slow
+; R1: array.fast:
+; R1-NEXT: %[[PAD:.*]] = add i64 %[[L]], 23
+; R1-NEXT: %[[SIZE:.*]] = and i64 %[[PAD]], -8
+; R1-NEXT: %{{.*}} = call noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %[[L]], i64 %[[SIZE]]){{.*}}!fast_new_array
+; R1: array.slow:
+; R1-NEXT: %{{.*}} = call noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %[[L]], i64 poison)
+; R1: ret
+define i8 addrspace(1)* @defined_length(i64 noundef %n) gc "cangjie" {
+entry:
+  %a = call i8 addrspace(1)* @llvm.cj.malloc.array(i8* bitcast (%TypeInfo* @Bytes.ti to i8*), i64 %n, i64 1)
+  ret i8 addrspace(1)* %a
 }
 
 ; CHECK-LABEL: @word(

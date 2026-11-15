@@ -486,6 +486,10 @@ public:
         BasicBlock *Slow = BasicBlock::Create(C, "array.slow", F, Continue);
         IRBuilder<> B(Check->getTerminator());
         B.SetCurrentDebugLocation(CI->getDebugLoc());
+        // The intrinsic does not require a noundef length. Freeze once before
+        // duplicating its use so the range, extent, and array header agree.
+        Length = B.CreateFreeze(Length, "array.length");
+        CI->setArgOperand(1, Length);
         // An unsigned comparison rejects negative and overflowing lengths
         // before the emitter sees a size. No out-of-range sentinel is needed.
         Value *Fits = B.CreateICmpULT(Length, B.getInt64(MaxArrayFast));
