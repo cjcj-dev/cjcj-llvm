@@ -488,7 +488,9 @@ static bool fuseResidualMTableOuterTIPairs(Function &F) {
     Fused = dyn_cast<Function>(GV);
     if (!Fused || !Fused->isDeclaration() ||
         Fused->getFunctionType() != FTy ||
-        Fused->getCallingConv() != CallingConv::C)
+        Fused->getCallingConv() != CallingConv::C ||
+        !Fused->hasFnAttribute("cj-runtime") ||
+        !Fused->hasFnAttribute("gc-leaf-function"))
       return false;
     for (Attribute A : Fused->getAttributes().getFnAttrs())
       if (!A.isStringAttribute() ||

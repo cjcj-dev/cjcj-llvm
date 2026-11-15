@@ -2,6 +2,7 @@
 ; RUN: opt -passes=cj-specific-opt -verify-each -S %t/readnone.ll | FileCheck %s --check-prefix=KEEP
 ; RUN: opt -passes=cj-specific-opt -verify-each -S %t/wrong-type.ll | FileCheck %s --check-prefix=KEEP
 ; RUN: opt -passes=cj-specific-opt -verify-each -S %t/unmarked.ll | FileCheck %s --check-prefix=KEEP
+; RUN: opt -passes=cj-specific-opt -verify-each -S %t/unmarked-fused.ll | FileCheck %s --check-prefix=KEEP
 ; RUN: opt -passes=cj-specific-opt -verify-each -S %t/other-as.ll | FileCheck %s --check-prefix=AS
 ; RUN: opt -passes=cj-specific-opt -verify-each -S %t/fresh.ll | FileCheck %s --check-prefix=FRESH
 ;
@@ -53,6 +54,16 @@ attributes #0 = { "cj-runtime" "gc-leaf-function" }
 define i8* @test(i8 addrspace(1)* noundef %ti, i8* noundef %itf) gc "cangjie" {
   %t = call i8* @CJ_MCC_GetMTable(i8 addrspace(1)* %ti, i8* %itf)
   %o = call i8* @CJ_MCC_GetMethodOuterTI(i8 addrspace(1)* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+;--- unmarked-fused.ll
+declare i8* @CJ_MCC_GetMTable(i8*, i8*) #0
+declare i8* @CJ_MCC_GetMethodOuterTI(i8*, i8*, i64) #0
+declare i8* @CJ_MCC_GetMTableAndOuterTI(i8*, i8*, i64, i8**)
+attributes #0 = { "cj-runtime" "gc-leaf-function" }
+define i8* @test(i8* noundef %ti, i8* noundef %itf) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
   ret i8* %o
 }
 ;--- fresh.ll
