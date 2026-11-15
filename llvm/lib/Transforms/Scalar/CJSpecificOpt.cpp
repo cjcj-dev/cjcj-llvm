@@ -451,7 +451,8 @@ static bool isMTableSlotLoad(LoadInst &LI, CallInst &MTable,
     if (GEP->getSourceElementType() != PtrTy || GEP->getNumIndices() != 1)
       return false;
     auto *Index = dyn_cast<ConstantInt>(GEP->idx_begin()->get());
-    if (!Index || Index->getValue() != MethodIndex.getValue())
+    if (!Index || Index->getType() != MethodIndex.getType() ||
+        Index->getValue() != MethodIndex.getValue())
       return false;
     Address = GEP->getPointerOperand();
   } else if (!MethodIndex.isZero())

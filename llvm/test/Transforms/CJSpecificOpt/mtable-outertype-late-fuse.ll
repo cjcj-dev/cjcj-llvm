@@ -146,6 +146,19 @@ define i8* @multiple_slots(i8* noundef %ti, i8* noundef %itf, i8* noundef %other
   ret i8* %o
 }
 
+; NEG-LABEL: define i8* @different_index_width(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @different_index_width(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %p = bitcast i8* %t to i8**
+  %p0 = getelementptr i8*, i8** %p, i32 0
+  %q = load i8*, i8** %p0
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
 ; NEG-LABEL: define i8* @volatile_table(
 ; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
 ; NEG: call i8* @CJ_MCC_GetMTable(
