@@ -28,11 +28,12 @@
 ; FIXED-NEXT: [[ENTRIES:%.*]] = getelementptr i8, i8* %cj.store.buffer, i64 0
 ; DYNAMIC: load i64, i64* @g_cjStoreBarrierBufferBufferOffset
 ; COMMON: %cj.store.entry = getelementptr i8, i8* {{.*}}, i64 %cj.store.next
+; COMMON-NEXT: [[SLOTBITS:%.*]] = ptrtoint i64 addrspace(1)* {{.*}} to i64
 ; FIXED-NEXT: [[PBYTE:%.*]] = getelementptr i8, i8* %cj.store.entry, i64 0
 ; DYNAMIC: load i64, i64* @g_cjStoreBarrierEntryPOffset
 ; COMMON: [[P:%.*]] = bitcast i8* {{.*}} to i64*
-; COMMON: store i64 {{.*}}, i64* [[P]]
-; COMMON-NEXT: %cj.store.buffer.prev = load i64, i64* {{.*}}
+; COMMON: store i64 [[SLOTBITS]], i64* [[P]]
+; COMMON-NEXT: %cj.store.buffer.prev = load i64, i64 addrspace(1)* {{.*}}
 ; FIXED-NEXT: [[PREVBYTE:%.*]] = getelementptr i8, i8* %cj.store.entry, i64 8
 ; DYNAMIC: load i64, i64* @g_cjStoreBarrierEntryPrevOffset
 ; COMMON: [[PREV:%.*]] = bitcast i8* {{.*}} to i64*
