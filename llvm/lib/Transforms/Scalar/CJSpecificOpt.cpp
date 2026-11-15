@@ -498,11 +498,17 @@ static bool fuseResidualMTableOuterTIPairs(Function &F) {
         !Fused->hasFnAttribute("cj-runtime") ||
         !Fused->hasFnAttribute("gc-leaf-function"))
       return false;
-    for (Attribute A : Fused->getAttributes().getFnAttrs())
+    for (Attribute A : Fused->getAttributes().getFnAttrs()) {
+      // RuntimeLowering transfers the fused intrinsic's implicit nounwind.
+      // This is the existing runtime's unwind contract, not a memory effect:
+      // it does not license treating the new out-slot as unwritten.
+      if (A.hasAttribute(Attribute::NoUnwind))
+        continue;
       if (!A.isStringAttribute() ||
           (A.getKindAsString() != "cj-runtime" &&
            A.getKindAsString() != "gc-leaf-function"))
         return false;
+    }
     if (Fused->getAttributes().hasRetAttrs())
       return false;
     for (unsigned I = 0; I != 4; ++I)
