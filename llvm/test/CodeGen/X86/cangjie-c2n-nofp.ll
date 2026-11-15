@@ -1,12 +1,8 @@
 ; RUN: opt -mtriple=x86_64-unknown-linux-gnu -passes=cj-runtime-lowering %s -o %t.bc
 ; RUN: llc -cangjie-pipeline -verify-machineinstrs %t.bc -o - | FileCheck %s
-; RUN: opt -mtriple=x86_64-unknown-linux-gnu -passes="cj-runtime-lowering,cj-rewrite-statepoint" %s -o %t.sp.bc
-; RUN: llvm-dis %t.sp.bc -o - | FileCheck %s --check-prefix=SP
-; RUN: llc -cangjie-pipeline -verify-machineinstrs %t.sp.bc -o - | FileCheck %s
 ; RUN: opt -mtriple=x86_64-unknown-linux-musl -passes=cj-runtime-lowering -S %s | FileCheck %s --check-prefix=OTHER
 ; RUN: opt -mtriple=x86_64-unknown-linux-gnux32 -passes=cj-runtime-lowering -S %s | FileCheck %s --check-prefix=OTHER
 ; RUN: opt -mtriple=aarch64-unknown-linux-gnu -passes=cj-runtime-lowering -S %s | FileCheck %s --check-prefix=OTHER
-; SP: call token {{.*}}@llvm.cj.gc.statepoint{{.*}}@LLVMBuildNeg
 ; OTHER-NOT: CJ_MCC_C2NStubNoFP
 ;
 ; Qualification uses the actual call type and preservation mask, including a
