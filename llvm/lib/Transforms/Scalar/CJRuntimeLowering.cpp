@@ -1014,6 +1014,63 @@ static bool isCJBlockingFunc(Function &F) {
   return false;
 }
 
+static bool hasC2NNoFPValueAttrs(AttributeSet AS) {
+  for (Attribute A : AS) {
+    if (!A.isEnumAttribute() && !A.isIntAttribute())
+      return false;
+    switch (A.getKindAsEnum()) {
+    case Attribute::SExt:
+    case Attribute::ZExt:
+    case Attribute::NoUndef:
+    case Attribute::NoAlias:
+    case Attribute::NonNull:
+    case Attribute::NoCapture:
+    case Attribute::ReadOnly:
+    case Attribute::WriteOnly:
+    case Attribute::ReadNone:
+    case Attribute::Alignment:
+    case Attribute::Dereferenceable:
+    case Attribute::DereferenceableOrNull:
+      break;
+    default:
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool hasC2NNoFPSpecialAttrs(AttributeList AL) {
+  return AL.hasFnAttr(Attribute::StackAlignment) ||
+         AL.hasFnAttr("no_caller_saved_registers") ||
+         AL.hasFnAttr("no_callee_saved_registers");
+}
+
+// Preserve the pre-statepoint call-site ABI proof. RSP moves return
+// attributes to gc.result, so inspecting only its final callee operand would
+// lose this part of the contract. The emitter also rechecks the final uses.
+static bool proveC2NNoFPCallSites(const Function &F) {
+  for (const User *U : F.users()) {
+    if (auto *GV = dyn_cast<GlobalVariable>(U)) {
+      if (GV->hasInternalLinkage() && GV->hasAttribute("cj-native") &&
+          GV->getName() == F.getName().str() + ".CJStubGV" &&
+          GV->getInitializer() == &F)
+        continue;
+      return false;
+    }
+    const auto *CB = dyn_cast<CallBase>(U);
+    if (!CB || CB->getCalledFunction() != &F ||
+        CB->getFunctionType() != F.getFunctionType() ||
+        CB->getCallingConv() != CallingConv::C ||
+        hasC2NNoFPSpecialAttrs(CB->getAttributes()) ||
+        !hasC2NNoFPValueAttrs(CB->getAttributes().getRetAttrs()))
+      return false;
+    for (unsigned I = 0; I < CB->arg_size(); ++I)
+      if (!hasC2NNoFPValueAttrs(CB->getAttributes().getParamAttrs(I)))
+        return false;
+  }
+  return true;
+}
+
 static void insertGVForNativeFunc(Module &M, Function &F,
                                   const TargetLibraryInfo &TLI) {
   LibFunc LF;
@@ -1031,6 +1088,10 @@ static void insertGVForNativeFunc(Module &M, Function &F,
   CJFuncGV->setInitializer(&F);
   CJFuncGV->setLinkage(GlobalVariable::InternalLinkage);
   CJFuncGV->addAttribute("cj-native");
+  // Recompute rather than trusting a serialized or user-supplied proof.
+  F.setMetadata("c2n-nofp-call-sites", nullptr);
+  if (F.hasFnAttribute("cj2c") && proveC2NNoFPCallSites(F))
+    F.setMetadata("c2n-nofp-call-sites", MDNode::get(M.getContext(), {}));
 }
 
 // Declares MCC functions ready for backend processing.
@@ -1039,6 +1100,10 @@ static void declareRuntimeFunc(Module &M) {
   // declare C2NStub and N2CStub
   auto *NativeStubFT = FunctionType::get(Type::getVoidTy(C), true);
   M.declareCJRuntimeFunc(C2NStubStr, NativeStubFT, true);
+  const Triple T(M.getTargetTriple());
+  if (T.getArch() == Triple::x86_64 && T.isOSLinux() &&
+      T.getEnvironment() == Triple::GNU)
+    M.declareCJRuntimeFunc("CJ_MCC_C2NStubNoFP", NativeStubFT, true);
   M.declareCJRuntimeFunc(N2CStubStr, NativeStubFT, true);
 
   Type *RefType = Type::getInt8PtrTy(C, 1);
