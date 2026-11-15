@@ -87,6 +87,30 @@ define i8 addrspace(1)* @two(i64 %n, i64 %m) gc "cangjie" {
   ret i8 addrspace(1)* %a
 }
 
+; A pre-existing multi-predecessor join must keep every incoming edge when its
+; phi and prefix instructions move to the new range-check block.
+; CHECK-LABEL: define i8 addrspace(1)* @join(
+; CHECK: left:
+; CHECK-NEXT: br label %array.check
+; CHECK: right:
+; CHECK-NEXT: br label %array.check
+; CHECK: array.check:
+; CHECK-NEXT: %n = phi i64 [ %a, %left ], [ %b, %right ]
+; CHECK-NEXT: %{{.*}} = icmp ult i64 %n, 4096
+; CHECK: ret
+define i8 addrspace(1)* @join(i1 %c, i64 %a, i64 %b) gc "cangjie" {
+entry:
+  br i1 %c, label %left, label %right
+left:
+  br label %alloc
+right:
+  br label %alloc
+alloc:
+  %n = phi i64 [ %a, %left ], [ %b, %right ]
+  %p = call i8 addrspace(1)* @llvm.cj.malloc.array(i8* bitcast (%TypeInfo* @Bytes.ti to i8*), i64 %n, i64 1)
+  ret i8 addrspace(1)* %p
+}
+
 ; Both exceptional edges carry the original handler phi value. The normal
 ; successor still receives the merged allocation from the original block.
 ; CHECK-LABEL: define i8 addrspace(1)* @with_handler(

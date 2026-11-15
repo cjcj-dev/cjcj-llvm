@@ -464,6 +464,7 @@ public:
           (TT.getArch() == Triple::x86_64 || TT.isAArch64(64)) &&
           (Call || isa<InvokeInst>(CI)) &&
           (!Call || !Call->isTailCall()) &&
+          !CI->getParent()->hasAddressTaken() &&
           getMallocArrayFuncName(CI) == "CJ_MCC_NewArray8") {
         Function *Runtime = getOrInsertRuntimeFunc(CI, false, true);
         Value *Length = CI->getArgOperand(1);
@@ -471,7 +472,16 @@ public:
         Function *F = Continue->getParent();
         // Keep the following instructions in their original block: the
         // lowering traversal has already advanced its instruction iterator.
-        BasicBlock *Check = Continue->splitBasicBlockBefore(CI, "array.check");
+        // Snapshot predecessors before redirecting edges: mutating the use
+        // list while walking it can skip an edge when this block is a join.
+        SmallVector<BasicBlock *, 8> Preds(pred_begin(Continue),
+                                          pred_end(Continue));
+        BasicBlock *Check = BasicBlock::Create(C, "array.check", F, Continue);
+        Check->getInstList().splice(Check->end(), Continue->getInstList(),
+                                   Continue->begin(), CI->getIterator());
+        for (BasicBlock *Pred : Preds)
+          Pred->getTerminator()->replaceSuccessorWith(Continue, Check);
+        BranchInst::Create(Continue, Check);
         BasicBlock *Fast = BasicBlock::Create(C, "array.fast", F, Continue);
         BasicBlock *Slow = BasicBlock::Create(C, "array.slow", F, Continue);
         IRBuilder<> B(Check->getTerminator());
