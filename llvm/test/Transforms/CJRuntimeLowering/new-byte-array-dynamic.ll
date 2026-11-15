@@ -147,7 +147,7 @@ handler:
   ret i8 addrspace(1)* null
 }
 
-; R1: a partially undefined length may select 0 and 1 at different uses.
+; A partially undefined length may select 0 and 1 at different uses.
 ; One freeze must feed the gate, size, and both runtime length operands.
 
 ; R1-LABEL: define i8 addrspace(1)* @bounded_undef(
