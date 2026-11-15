@@ -18,6 +18,7 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
@@ -36,6 +37,8 @@
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
 using namespace llvm;
+
+extern cl::opt<bool> CangjieLTOPreOpt;
 
 #define DEBUG_TYPE "cj-specific-opt"
 
@@ -386,6 +389,212 @@ static bool lowerCJIntrinsics(Function &F, bool MemsetOnly) {
   return Changed;
 }
 
+// These are reserved runtime entry points, not arbitrary readnone functions.
+// Do not reinterpret a differently typed declaration, call ABI, or bundle.
+// Ordinary tail is only a hint (and is inferred by the normal O2 pipeline).
+// Never transfer it to the fused call: the new callee writes a caller alloca.
+// musttail and notail retain their separate contracts and are not matched.
+static bool isPlainMetadataCall(CallInst &CI, StringRef Name,
+                                FunctionType *FT) {
+  Function *Callee = CI.getCalledFunction();
+  if (!Callee || Callee->getName() != Name || !Callee->isDeclaration() ||
+      Callee->getFunctionType() != FT || CI.getFunctionType() != FT ||
+      Callee->getCallingConv() != CallingConv::C ||
+      CI.getCallingConv() != CallingConv::C ||
+      (CI.getTailCallKind() != CallInst::TCK_None &&
+       CI.getTailCallKind() != CallInst::TCK_Tail) ||
+      CI.hasOperandBundles() ||
+      !Callee->hasFnAttribute("cj-runtime") ||
+      !Callee->hasFnAttribute("gc-leaf-function"))
+    return false;
+
+  auto OrdinaryAttrs = [](AttributeList AL) {
+    for (unsigned Index : AL.indexes()) {
+      // Only noundef/nonnull are accepted on operands/results. In particular,
+      // never silently change an ABI parameter (byval, inreg, ...).
+      for (Attribute A : AL.getAttributes(Index)) {
+        if (Index != AttributeList::FunctionIndex) {
+          if (!A.hasAttribute(Attribute::NoUndef) &&
+              !A.hasAttribute(Attribute::NonNull))
+            return false;
+          continue;
+        }
+        if (A.isStringAttribute()) {
+          if (A.getKindAsString() != "cj-runtime" &&
+              A.getKindAsString() != "gc-leaf-function")
+            return false;
+          continue;
+        }
+        switch (A.getKindAsEnum()) {
+        case Attribute::ReadNone:
+        case Attribute::ReadOnly:
+        case Attribute::NoUnwind:
+        case Attribute::WillReturn:
+        case Attribute::Speculatable:
+        case Attribute::NoFree:
+        case Attribute::NoSync:
+        case Attribute::MustProgress:
+          break;
+        default:
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+  return OrdinaryAttrs(CI.getAttributes()) &&
+         OrdinaryAttrs(Callee->getAttributes());
+}
+
+// Recognize the actual pointer-sized function-table loads emitted by
+// CJRuntimeLowering. Metadata by itself is NOT a license to move a load.
+static bool isMTableSlotLoad(LoadInst &LI, CallInst &MTable,
+                             ConstantInt &MethodIndex) {
+  Type *PtrTy = MTable.getType();
+  if (!LI.isSimple() || LI.getType() != PtrTy)
+    return false;
+  Value *Address = LI.getPointerOperand();
+  if (auto *GEP = dyn_cast<GetElementPtrInst>(Address)) {
+    if (GEP->getSourceElementType() != PtrTy || GEP->getNumIndices() != 1)
+      return false;
+    auto *Index = dyn_cast<ConstantInt>(GEP->idx_begin()->get());
+    if (!Index || Index->getType() != MethodIndex.getType() ||
+        Index->getValue() != MethodIndex.getValue())
+      return false;
+    Address = GEP->getPointerOperand();
+  } else if (!MethodIndex.isZero())
+    return false;
+  auto *Cast = dyn_cast<BitCastInst>(Address);
+  return Cast && Cast->getType() == PtrTy->getPointerTo() &&
+         Cast->getOperand(0) == &MTable;
+}
+
+static bool fuseResidualMTableOuterTIPairs(Function &F) {
+  // New-PM default pipelines omit this pass during Cangjie prelink. Keep the
+  // same boundary for explicit and legacy invocations of the existing pass.
+  if (CangjieLTOPreOpt)
+    return false;
+  Module &M = *F.getParent();
+  auto &C = F.getContext();
+  Type *PtrTy = Type::getInt8PtrTy(C);
+  auto *MTy = FunctionType::get(PtrTy, {PtrTy, PtrTy}, false);
+  auto *OTy = FunctionType::get(PtrTy, {PtrTy, PtrTy, Type::getInt64Ty(C)},
+                                false);
+  auto *FTy = FunctionType::get(
+      PtrTy, {PtrTy, PtrTy, Type::getInt64Ty(C), PtrTy->getPointerTo()}, false);
+  // This pass runs after devirtualization/optimization and before statepoints
+  // in both optimizer PMs and the LTO backend. Do not retrofit already-rewritten
+  // input, or invent an out-slot ABI for a nonzero alloca address space.
+  if (M.getDataLayout().getAllocaAddrSpace() != 0)
+    return false;
+  for (Instruction &I : instructions(F))
+    if (auto *II = dyn_cast<IntrinsicInst>(&I))
+      if (II->getIntrinsicID() == Intrinsic::experimental_gc_statepoint ||
+          II->getIntrinsicID() == Intrinsic::experimental_gc_relocate)
+        return false;
+
+  // Never reuse a declaration whose attributes claim the out-slot is unwritten.
+  Function *Fused = nullptr;
+  if (GlobalValue *GV = M.getNamedValue("CJ_MCC_GetMTableAndOuterTI")) {
+    Fused = dyn_cast<Function>(GV);
+    if (!Fused || !Fused->isDeclaration() ||
+        Fused->getFunctionType() != FTy ||
+        Fused->getCallingConv() != CallingConv::C ||
+        !Fused->hasFnAttribute("cj-runtime") ||
+        !Fused->hasFnAttribute("gc-leaf-function"))
+      return false;
+    for (Attribute A : Fused->getAttributes().getFnAttrs()) {
+      // RuntimeLowering transfers the fused intrinsic's implicit nounwind.
+      // This is the existing runtime's unwind contract, not a memory effect:
+      // it does not license treating the new out-slot as unwritten.
+      if (A.hasAttribute(Attribute::NoUnwind))
+        continue;
+      if (!A.isStringAttribute() ||
+          (A.getKindAsString() != "cj-runtime" &&
+           A.getKindAsString() != "gc-leaf-function"))
+        return false;
+    }
+    if (Fused->getAttributes().hasRetAttrs())
+      return false;
+    for (unsigned I = 0; I != 4; ++I)
+      if (Fused->getAttributes().hasParamAttrs(I))
+        return false;
+  }
+
+  bool Changed = false;
+  for (BasicBlock &BB : F) {
+    for (auto It = BB.begin(); It != BB.end();) {
+      auto *Outer = dyn_cast<CallInst>(&*It++);
+      if (!Outer || !isPlainMetadataCall(*Outer, "CJ_MCC_GetMethodOuterTI", OTy))
+        continue;
+      auto *Index = dyn_cast<ConstantInt>(Outer->getArgOperand(2));
+      if (!Index || Index->isNegative())
+        continue;
+      CallInst *Table = nullptr;
+      SmallVector<LoadInst *, 4> Loads;
+      for (Instruction *I = Outer->getPrevNode(); I; I = I->getPrevNode()) {
+        if (isa<DbgInfoIntrinsic>(I))
+          continue;
+        if (auto *CI = dyn_cast<CallInst>(I)) {
+          if (isPlainMetadataCall(*CI, "CJ_MCC_GetMTable", MTy))
+            Table = CI;
+          break;
+        }
+        if (auto *LI = dyn_cast<LoadInst>(I)) {
+          Loads.push_back(LI);
+          continue;
+        }
+        if (I->mayReadOrWriteMemory() || I->mayHaveSideEffects() ||
+            !isSafeToSpeculativelyExecute(I))
+          break;
+      }
+      if (!Table || Table->getArgOperand(0) != Outer->getArgOperand(0) ||
+          Table->getArgOperand(1) != Outer->getArgOperand(1) ||
+          llvm::any_of(Loads, [&](LoadInst *LI) {
+            return !isMTableSlotLoad(*LI, *Table, *Index);
+          }))
+        continue;
+      // Do not match explicit undef/poison. Unannotated frontend loads/args
+      // can still contain undef bits in LLVM's model: freeze each common input
+      // once below, refining the two legacy uses to the same choice. A defined
+      // runtime execution requires live, initialized TypeInfo objects (both
+      // entry points dereference them), so poison inputs are already UB. This
+      // does not freeze a result or assume two different SSA values are equal.
+      if (isa<UndefValue>(Table->getArgOperand(0)) ||
+          isa<UndefValue>(Table->getArgOperand(1)))
+        continue;
+
+      if (!Fused)
+        Fused = M.declareCJRuntimeFunc("CJ_MCC_GetMTableAndOuterTI", FTy, true,
+                                      false);
+      IRBuilder<> Entry(&*F.getEntryBlock().getFirstInsertionPt());
+      AllocaInst *Slot = Entry.CreateAlloca(PtrTy, nullptr, "mtable.outer.ti");
+      IRBuilder<> B(Table);
+      auto WellDefined = [&](Value *V) {
+        return isGuaranteedNotToBeUndefOrPoison(V)
+                   ? V
+                   : B.CreateFreeze(V, "mtable.input");
+      };
+      auto *Pair = B.CreateCall(Fused, {WellDefined(Table->getArgOperand(0)),
+                                       WellDefined(Table->getArgOperand(1)),
+                                       Index, Slot});
+      Pair->setDebugLoc(Table->getDebugLoc());
+      // No attributes are copied: the fused function writes Slot and may take
+      // the original initialization fallback. The two legacy declarations'
+      // readnone/speculatable attributes do not describe it.
+      Table->replaceAllUsesWith(Pair);
+      IRBuilder<> OB(Outer);
+      auto *OuterTI = OB.CreateLoad(PtrTy, Slot, "mtable.outer");
+      OuterTI->setDebugLoc(Outer->getDebugLoc());
+      Outer->replaceAllUsesWith(OuterTI);
+      Outer->eraseFromParent();
+      Table->eraseFromParent();
+      Changed = true;
+    }
+  }
+  return Changed;
+}
+
 static bool runOnFunction(Function &F, unsigned OptLevel) {
   if (F.isDeclaration() || F.empty() || !F.hasCangjieGC() || F.hasOptNone())
     return false;
@@ -394,6 +603,7 @@ static bool runOnFunction(Function &F, unsigned OptLevel) {
   if (CangjieJIT)
     return Changed;
 
+  Changed |= fuseResidualMTableOuterTIPairs(F);
   Changed |= markfastCall(F);
   Changed |= deadAllocaElimination(F);
   Changed |= replaceInvalidAddrpaceCast(F);
