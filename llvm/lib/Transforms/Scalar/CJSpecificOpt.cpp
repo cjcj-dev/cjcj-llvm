@@ -441,7 +441,8 @@ static bool isPlainMetadataCall(CallInst &CI, StringRef Name,
 
 // Recognize the actual pointer-sized function-table loads emitted by
 // CJRuntimeLowering. Metadata by itself is NOT a license to move a load.
-static bool isMTableSlotLoad(LoadInst &LI, CallInst &MTable) {
+static bool isMTableSlotLoad(LoadInst &LI, CallInst &MTable,
+                             ConstantInt &MethodIndex) {
   Type *PtrTy = MTable.getType();
   if (!LI.isSimple() || LI.getType() != PtrTy)
     return false;
@@ -450,10 +451,11 @@ static bool isMTableSlotLoad(LoadInst &LI, CallInst &MTable) {
     if (GEP->getSourceElementType() != PtrTy || GEP->getNumIndices() != 1)
       return false;
     auto *Index = dyn_cast<ConstantInt>(GEP->idx_begin()->get());
-    if (!Index || Index->isNegative())
+    if (!Index || Index->getValue() != MethodIndex.getValue())
       return false;
     Address = GEP->getPointerOperand();
-  }
+  } else if (!MethodIndex.isZero())
+    return false;
   auto *Cast = dyn_cast<BitCastInst>(Address);
   return Cast && Cast->getType() == PtrTy->getPointerTo() &&
          Cast->getOperand(0) == &MTable;
@@ -529,14 +531,17 @@ static bool fuseResidualMTableOuterTIPairs(Function &F) {
       if (!Table || Table->getArgOperand(0) != Outer->getArgOperand(0) ||
           Table->getArgOperand(1) != Outer->getArgOperand(1) ||
           llvm::any_of(Loads, [&](LoadInst *LI) {
-            return !isMTableSlotLoad(*LI, *Table);
+            return !isMTableSlotLoad(*LI, *Table, *Index);
           }))
         continue;
-      // An undef use need not choose the same TypeInfo at two calls. Require
-      // well-defined SSA operands rather than relying on cast stripping or
-      // the legacy readnone/speculatable annotations to equate those choices.
-      if (!isGuaranteedNotToBeUndefOrPoison(Table->getArgOperand(0)) ||
-          !isGuaranteedNotToBeUndefOrPoison(Table->getArgOperand(1)))
+      // Do not match explicit undef/poison. Unannotated frontend loads/args
+      // can still contain undef bits in LLVM's model: freeze each common input
+      // once below, refining the two legacy uses to the same choice. A defined
+      // runtime execution requires live, initialized TypeInfo objects (both
+      // entry points dereference them), so poison inputs are already UB. This
+      // does not freeze a result or assume two different SSA values are equal.
+      if (isa<UndefValue>(Table->getArgOperand(0)) ||
+          isa<UndefValue>(Table->getArgOperand(1)))
         continue;
 
       if (!Fused)
@@ -545,8 +550,14 @@ static bool fuseResidualMTableOuterTIPairs(Function &F) {
       IRBuilder<> Entry(&*F.getEntryBlock().getFirstInsertionPt());
       AllocaInst *Slot = Entry.CreateAlloca(PtrTy, nullptr, "mtable.outer.ti");
       IRBuilder<> B(Table);
-      auto *Pair = B.CreateCall(Fused, {Table->getArgOperand(0),
-                                       Table->getArgOperand(1), Index, Slot});
+      auto WellDefined = [&](Value *V) {
+        return isGuaranteedNotToBeUndefOrPoison(V)
+                   ? V
+                   : B.CreateFreeze(V, "mtable.input");
+      };
+      auto *Pair = B.CreateCall(Fused, {WellDefined(Table->getArgOperand(0)),
+                                       WellDefined(Table->getArgOperand(1)),
+                                       Index, Slot});
       Pair->setDebugLoc(Table->getDebugLoc());
       // No attributes are copied: the fused function writes Slot and may take
       // the original initialization fallback. The two legacy declarations'
