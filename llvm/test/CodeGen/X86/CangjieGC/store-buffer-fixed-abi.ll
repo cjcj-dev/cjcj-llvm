@@ -1,11 +1,11 @@
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnu -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s --check-prefixes=FIXED,COMMON --implicit-check-not=g_cjStoreBarrier
 ; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnu -o - < %s | FileCheck %s --check-prefix=ASM --implicit-check-not=g_cjStoreBarrier
-; RUN: llc --cangjie-pipeline -mtriple=aarch64-unknown-linux-gnu -stop-after=cj-barrier-lowering -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s --check-prefixes=DYNAMIC,COMMON
-; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-musl -stop-after=cj-barrier-lowering -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s --check-prefixes=DYNAMIC,COMMON
-; RUN: llc --cangjie-pipeline -mtriple=x86_64-pc-windows-msvc -stop-after=cj-barrier-lowering -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s --check-prefixes=DYNAMIC,COMMON
-; RUN: llc --cangjie-pipeline -mtriple=x86_64-apple-darwin -stop-after=cj-barrier-lowering -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s --check-prefixes=DYNAMIC,COMMON
-; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnux32 -stop-after=cj-barrier-lowering -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s --check-prefixes=DYNAMIC,COMMON
-; RUN: llc --cangjie-pipeline -mtriple=x86_64 -stop-after=cj-barrier-lowering -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s --check-prefixes=DYNAMIC,COMMON
+; RUN: llc --cangjie-pipeline -mtriple=aarch64-unknown-linux-gnu -stop-before=stack-protector -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s --check-prefixes=DYNAMIC,COMMON
+; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-musl -stop-before=stack-protector -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s --check-prefixes=DYNAMIC,COMMON
+; RUN: llc --cangjie-pipeline -mtriple=x86_64-pc-windows-msvc -stop-before=stack-protector -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s --check-prefixes=DYNAMIC,COMMON
+; RUN: llc --cangjie-pipeline -mtriple=x86_64-apple-darwin -stop-before=stack-protector -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s --check-prefixes=DYNAMIC,COMMON
+; RUN: llc --cangjie-pipeline -mtriple=x86_64-unknown-linux-gnux32 -stop-before=stack-protector -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s --check-prefixes=DYNAMIC,COMMON
+; RUN: llc --cangjie-pipeline -mtriple=x86_64 -stop-before=stack-protector -print-after=cj-barrier-lowering -o /dev/null < %s 2>&1 | FileCheck %s --check-prefixes=DYNAMIC,COMMON
 ; current follows std::mutex: only the explicitly checked Linux GNU LP64
 ; runtime ABI may use 824. Unknown and different libc/OS/arch ABIs use exports.
 ; No change to the dynamic current value, slow branch, entry write ordering,
