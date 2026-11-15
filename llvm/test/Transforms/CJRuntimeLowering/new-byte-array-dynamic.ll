@@ -52,7 +52,8 @@ target datalayout = "e-p:64:64-p1:64:64-i64:64-n8:16:32:64-S128"
 ; MERGE: call noalias i8 addrspace(1)* @CJ_MCC_NewArray8({{.*}}i64 %n, i64 poison)
 ; MERGE-LABEL: define i8 addrspace(1)* @two(
 ; X86-LABEL: bytes:
-; X86: cmpq $4096,
+; X86: cmpq $4095,
+; X86-NEXT: ja
 ; X86: .LNewArrayFastPath
 ; X86: leaq (%rax,%rdx), %r8
 ; X86-NEXT: cmpq %r10, %r8
@@ -60,7 +61,8 @@ target datalayout = "e-p:64:64-p1:64:64-i64:64-n8:16:32:64-S128"
 ; X86: movq %rsi, 8(%rax)
 ; X86: callq CJ_MCC_NewArray8
 ; ARM-LABEL: bytes:
-; ARM: cmp x{{[0-9]+}}, #1, lsl #12
+; ARM: cmp x{{[0-9]+}}, #4095
+; ARM-NEXT: b.hi
 ; ARM: .LNewArrayFastPath
 ; ARM: add x7, x5, x2
 ; ARM-NEXT: cmp x7, x6
