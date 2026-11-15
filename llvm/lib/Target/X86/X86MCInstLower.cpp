@@ -3591,6 +3591,120 @@ void X86AsmPrinter::extendStackAndInsertFFIInfoForJmp(MCInst &MovGVToR11,
   return;
 }
 
+// Only scalar SysV register arguments/results qualify. In particular, the
+// CangjieGC calling convention preserves XMM registers and must not enter here.
+static bool isC2NNoFPScalar(Type *T) {
+  if (auto *I = dyn_cast<IntegerType>(T))
+    return I->getBitWidth() <= 64;
+  auto *P = dyn_cast<PointerType>(T);
+  return P && P->getAddressSpace() == 0;
+}
+
+static bool hasC2NNoFPValueAttrs(AttributeSet AS) {
+  for (Attribute A : AS) {
+    if (!A.isEnumAttribute() && !A.isIntAttribute())
+      return false;
+    switch (A.getKindAsEnum()) {
+    case Attribute::SExt:
+    case Attribute::ZExt:
+    case Attribute::NoUndef:
+    case Attribute::NoAlias:
+    case Attribute::NonNull:
+    case Attribute::NoCapture:
+    case Attribute::ReadOnly:
+    case Attribute::WriteOnly:
+    case Attribute::ReadNone:
+    case Attribute::Alignment:
+    case Attribute::Dereferenceable:
+    case Attribute::DereferenceableOrNull:
+      break;
+    default:
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool hasC2NNoFPSpecialAttrs(AttributeList AL) {
+  return AL.hasFnAttr("no_caller_saved_registers") ||
+         AL.hasFnAttr("no_callee_saved_registers");
+}
+
+// Prove the actual post-optimization uses, including rewritten statepoints,
+// rather than trusting a frontend annotation or the declaration's name. A
+// mismatched call, escaped address or unknown ABI poisons this whole callee.
+static bool qualifiesC2NNoFP(const Function &F, const MachineInstr &MI) {
+  const Triple T(F.getParent()->getTargetTriple());
+  FunctionType *FT = F.getFunctionType();
+  if (T.getArch() != Triple::x86_64 || !T.isOSLinux() ||
+      T.getEnvironment() != Triple::GNU || !F.isDeclaration() ||
+      !F.hasFnAttribute("cj2c") || !F.getMetadata("c2n-nofp-call-sites") ||
+      F.getAddressSpace() != 0 || F.getCallingConv() != CallingConv::C ||
+      FT->isVarArg() || FT->getNumParams() > 6 ||
+      (!FT->getReturnType()->isVoidTy() &&
+       !isC2NNoFPScalar(FT->getReturnType())) ||
+      hasC2NNoFPSpecialAttrs(F.getAttributes()) ||
+      !hasC2NNoFPValueAttrs(F.getAttributes().getRetAttrs()))
+    return false;
+  for (unsigned I = 0; I < FT->getNumParams(); ++I)
+    if (!isC2NNoFPScalar(FT->getParamType(I)) ||
+        !hasC2NNoFPValueAttrs(F.getAttributes().getParamAttrs(I)))
+      return false;
+
+  // RA has already consumed this mask. Require the ordinary caller-clobbered
+  // XMM contract, and no actual vector argument/result operand on the call.
+  bool HasMask = false;
+  for (const MachineOperand &MO : MI.operands()) {
+    if (MO.isRegMask()) {
+      HasMask = true;
+      for (MCPhysReg R : X86::VR128RegClass)
+        if (!MO.clobbersPhysReg(R))
+          return false;
+    }
+    if (MO.isReg() && MO.getReg() &&
+        (X86::VR128RegClass.contains(MO.getReg()) ||
+         X86::VR256RegClass.contains(MO.getReg()) ||
+         X86::VR512RegClass.contains(MO.getReg())))
+      return false;
+  }
+  if (!HasMask)
+    return false;
+
+  for (const User *U : F.users()) {
+    if (auto *GV = dyn_cast<GlobalVariable>(U)) {
+      if (GV->hasInternalLinkage() && GV->hasAttribute("cj-native") &&
+          GV->getName() == F.getName().str() + ".CJStubGV" &&
+          GV->getInitializer() == &F)
+        continue;
+      return false;
+    }
+    const auto *CB = dyn_cast<CallBase>(U);
+    if (!CB || CB->getCallingConv() != CallingConv::C ||
+        hasC2NNoFPSpecialAttrs(CB->getAttributes()))
+      return false;
+    unsigned Begin = 0;
+    if (const auto *SP = dyn_cast<GCStatepointInst>(CB)) {
+      if (SP->getActualCalledOperand() != &F ||
+          SP->actual_arg_size() != FT->getNumParams() ||
+          SP->getNumPatchBytes() != 0 || SP->getFlags() != 0)
+        return false;
+      Type *ET = SP->getParamElementType(GCStatepointInst::CalledFunctionPos);
+      if (ET && ET != FT)
+        return false;
+      Begin = GCStatepointInst::CallArgsBeginPos;
+    } else if (CB->getCalledFunction() != &F || CB->getFunctionType() != FT ||
+               CB->arg_size() != FT->getNumParams() ||
+               !hasC2NNoFPValueAttrs(CB->getAttributes().getRetAttrs())) {
+      return false;
+    }
+    for (unsigned I = 0; I < FT->getNumParams(); ++I)
+      if (CB->getArgOperand(Begin + I)->getType() != FT->getParamType(I) ||
+          !hasC2NNoFPValueAttrs(CB->getAttributes().getParamAttrs(Begin + I)))
+        return false;
+  }
+  return true;
+}
+
 void X86AsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
                                                 const Function *F,
                                                 const MachineOperand &MOSym,
@@ -3614,6 +3728,12 @@ void X86AsmPrinter::emitCangjieCallStubInstImpl(const MachineInstr *MI,
           dyn_cast<ConstantAsMetadata>(Metadata->getOperand(0).get())
               ->getValue())
           ->getSExtValue();
+  // Selection stays in the existing direct-call emitter: the callee GV,
+  // 16-byte argument header, stackmap and canonical runtime frame are unchanged.
+  if (Opcode == X86::CALL64pcrel32 && CallFrameSize == 0 &&
+      F->getName() == "CJ_MCC_C2NStub" && qualifiesC2NNoFP(*OriCalled, *MI))
+    if (const Function *NoFP = F->getParent()->getFunction("CJ_MCC_C2NStubNoFP"))
+      F = NoFP;
   MCInst MovGVToR11 = MCInstBuilder(X86::MOV64rm)
                           .addReg(X86::R11)
                           .addReg(X86::RIP)

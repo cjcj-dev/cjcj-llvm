@@ -117,6 +117,7 @@ static constexpr StringLiteral PrivateRuntimeABI[] = {
     "CJ_MCC_AsanRead",
     "CJ_MCC_AsanWrite",
     "CJ_MCC_C2NStub",
+    "CJ_MCC_C2NStubNoFP",
     "CJ_MCC_CheckMethodActualArgs",
     "CJ_MCC_CopyStructField",
     "CJ_MCC_CreateExportHandle",
