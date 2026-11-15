@@ -12,8 +12,9 @@ attributes #0 = { readnone speculatable willreturn "cj-runtime" "gc-leaf-functio
 ; POS: [[PAIR:%.*]] = call i8* @CJ_MCC_GetMTableAndOuterTI(i8* %ti, i8* %itf, i64 2, i8** %mtable.outer.ti)
 ; POS-NEXT: %p = bitcast i8* [[PAIR]] to i8**
 ; POS: %f2 = load i8*, i8** %p2
+; POS-NEXT: %fn = bitcast i8* %f2 to i8* (i8*, i8*)*
 ; POS-NEXT: [[OUT:%.*]] = load i8*, i8** %mtable.outer.ti
-; POS-NEXT: %v = call i8* %f2(i8* [[OUT]], i8* %ti)
+; POS-NEXT: %v = call i8* %fn(i8* [[OUT]], i8* %ti)
 ; POS-NOT: call i8* @CJ_MCC_GetMethodOuterTI
 ; POS: ret i8* %v
 define i8* @pair(i8* noundef %ti, i8* noundef %itf) gc "cangjie" {
@@ -21,8 +22,9 @@ define i8* @pair(i8* noundef %ti, i8* noundef %itf) gc "cangjie" {
   %p = bitcast i8* %t to i8**
   %p2 = getelementptr i8*, i8** %p, i64 2
   %f2 = load i8*, i8** %p2, !FuncTable !1
+  %fn = bitcast i8* %f2 to i8* (i8*, i8*)*
   %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 2)
-  %v = call i8* %f2(i8* %o, i8* %ti)
+  %v = call i8* %fn(i8* %o, i8* %ti)
   ret i8* %v
 }
 
