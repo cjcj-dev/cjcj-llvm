@@ -38,6 +38,8 @@
 
 using namespace llvm;
 
+extern cl::opt<bool> CangjieLTOPreOpt;
+
 #define DEBUG_TYPE "cj-specific-opt"
 
 STATISTIC(NumLocalAliases, "Number of local ti/tt aliases created");
@@ -463,6 +465,10 @@ static bool isMTableSlotLoad(LoadInst &LI, CallInst &MTable,
 }
 
 static bool fuseResidualMTableOuterTIPairs(Function &F) {
+  // New-PM default pipelines omit this pass during Cangjie prelink. Keep the
+  // same boundary for explicit and legacy invocations of the existing pass.
+  if (CangjieLTOPreOpt)
+    return false;
   Module &M = *F.getParent();
   auto &C = F.getContext();
   Type *PtrTy = Type::getInt8PtrTy(C);

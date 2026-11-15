@@ -1,5 +1,7 @@
 ; RUN: opt -passes=cj-specific-opt -verify-each -S %s | FileCheck %s --check-prefixes=POS,NEG
 ; RUN: opt -enable-new-pm=0 -cj-specific-opt -verify-each -S %s | FileCheck %s --check-prefixes=POS,NEG
+; RUN: opt -cangjie-lto -passes=cj-specific-opt -verify-each -S %s | FileCheck %s --check-prefix=PRELINK
+; RUN: opt -cangjie-lto -enable-new-pm=0 -cj-specific-opt -verify-each -S %s | FileCheck %s --check-prefix=PRELINK
 ; Late pairing is deliberately narrower than the source intrinsic lowering.
 declare i8* @CJ_MCC_GetMTable(i8*, i8*) #0
 declare i8* @CJ_MCC_GetMethodOuterTI(i8*, i8*, i64) #0
@@ -17,6 +19,11 @@ attributes #0 = { readnone speculatable willreturn "cj-runtime" "gc-leaf-functio
 ; POS-NEXT: %v = call i8* %fn(i8* [[OUT]], i8* %ti)
 ; POS-NOT: call i8* @CJ_MCC_GetMethodOuterTI
 ; POS: ret i8* %v
+; PRELINK-LABEL: define i8* @pair(
+; PRELINK: %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+; PRELINK: %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 2)
+; PRELINK-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; PRELINK: ret i8* %v
 define i8* @pair(i8* noundef %ti, i8* noundef %itf) gc "cangjie" {
   %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
   %p = bitcast i8* %t to i8**
