@@ -5,6 +5,7 @@
 ; RUN: opt -passes=cj-specific-opt -verify-each -S %t/unmarked-fused.ll | FileCheck %s --check-prefix=KEEP
 ; RUN: opt -passes=cj-specific-opt -verify-each -S %t/other-as.ll | FileCheck %s --check-prefix=AS
 ; RUN: opt -passes=cj-specific-opt -verify-each -S %t/fresh.ll | FileCheck %s --check-prefix=FRESH
+; RUN: opt -passes=cj-runtime-lowering,cj-specific-opt -verify-each -S %t/lowered.ll | FileCheck %s --check-prefix=LOWERED
 ;
 ; An existing fused declaration is not repaired by copying attributes or a
 ; function-pointer cast. Unmarked names are not evidence of the runtime ABI.
@@ -74,4 +75,30 @@ define i8* @test(i8* noundef %ti, i8* noundef %itf) gc "cangjie" {
   %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
   %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
   ret i8* %o
+}
+
+;--- lowered.ll
+; Exercise the normal producer, including the implicit nounwind attribute on
+; the already-used fused intrinsic's runtime declaration.
+declare i8* @llvm.cj.get.mtable.func(i8*, i8*, i64)
+declare i8* @llvm.cj.get.method.outertype(i8*, i8*, i64)
+declare { i8*, i8* } @llvm.cj.get.mtable.func.outertype(i8*, i8*, i64)
+; LOWERED-LABEL: define i8* @legacy_pair(
+; LOWERED: [[TABLE:%.*]] = call i8* @CJ_MCC_GetMTableAndOuterTI(i8* %ti, i8* %itf, i64 0,
+; LOWERED-NOT: call i8* @CJ_MCC_GetMTable(
+; LOWERED-NOT: call i8* @CJ_MCC_GetMethodOuterTI(
+; LOWERED: load i8*, i8**
+; LOWERED: ret i8*
+define i8* @legacy_pair(i8* noundef %ti, i8* noundef %itf) gc "cangjie" {
+  %method = call i8* @llvm.cj.get.mtable.func(i8* %ti, i8* %itf, i64 0)
+  %outer = call i8* @llvm.cj.get.method.outertype(i8* %ti, i8* %itf, i64 0)
+  %fn = bitcast i8* %method to i8* (i8*)*
+  %result = call i8* %fn(i8* %outer)
+  ret i8* %result
+}
+; LOWERED-LABEL: define { i8*, i8* } @existing(
+; LOWERED: call i8* @CJ_MCC_GetMTableAndOuterTI(
+define { i8*, i8* } @existing(i8* %ti, i8* %itf) gc "cangjie" {
+  %pair = call { i8*, i8* } @llvm.cj.get.mtable.func.outertype(i8* %ti, i8* %itf, i64 0)
+  ret { i8*, i8* } %pair
 }
