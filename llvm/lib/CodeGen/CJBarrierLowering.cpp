@@ -78,17 +78,36 @@ constexpr uint64_t StoreBadMask = 32;
 constexpr uint64_t StoreBarrierBuffer = 40;
 } // namespace ThreadGCDataABI
 
-// Buffer-internal layout is outside the fixed thread ABI (in particular its
-// mutex is platform-dependent). Continue to obtain those offsets at runtime.
-static Value *loadBarrierABI(IRBuilder<> &B, Module *M, StringRef Symbol) {
+// runtime/src/Heap/z/zStoreBarrierBuffer.hpp checks these constants against
+// the production layout. Unlike ThreadGCDataABI, current follows std::mutex:
+// this table is only the x86_64 Linux GNU LP64 ABI, not a generic 64-bit ABI.
+// Other targets retain the exported offsets, including unknown OS/libc triples.
+namespace StoreBarrierBufferABI {
+constexpr uint64_t Current = 824;
+constexpr uint64_t Buffer = 0;
+constexpr uint64_t EntrySize = 16;
+constexpr uint64_t EntryP = 0;
+constexpr uint64_t EntryPrev = 8;
+} // namespace StoreBarrierBufferABI
+
+static Value *loadBarrierABI(IRBuilder<> &B, Module *M, StringRef Symbol,
+                             uint64_t FixedOffset) {
+  const Triple TT(M->getTargetTriple());
+  const DataLayout &DL = M->getDataLayout();
+  if (TT.getArch() == Triple::x86_64 && TT.isOSLinux() &&
+      TT.getEnvironment() == Triple::GNU &&
+      DL.getPointerSizeInBits(0) == 64 && DL.getPointerSizeInBits(1) == 64)
+    return B.getInt64(FixedOffset);
   return B.CreateLoad(B.getInt64Ty(), M->getOrInsertGlobal(Symbol, B.getInt64Ty()),
                       Symbol.drop_front(2));
 }
 
 static Value *barrierField(IRBuilder<> &B, Module *M, Value *Base,
-                           StringRef Offset, Type *FieldTy) {
+                           StringRef Offset, uint64_t FixedOffset,
+                           Type *FieldTy) {
   Value *Bytes = B.CreateBitCast(Base, B.getInt8PtrTy());
-  Value *Address = B.CreateGEP(B.getInt8Ty(), Bytes, loadBarrierABI(B, M, Offset));
+  Value *Address = B.CreateGEP(B.getInt8Ty(), Bytes,
+                              loadBarrierABI(B, M, Offset, FixedOffset));
   return B.CreateBitCast(Address, FieldTy->getPointerTo());
 }
 
@@ -1296,22 +1315,27 @@ private:
         threadGCField(B, Data, ThreadGCDataABI::StoreBarrierBuffer, B.getInt8PtrTy()),
         "cj.store.buffer");
     Value *CurrentPtr = barrierField(B, M, Buffer,
-        "g_cjStoreBarrierBufferCurrentOffset", B.getInt64Ty());
+        "g_cjStoreBarrierBufferCurrentOffset", StoreBarrierBufferABI::Current,
+        B.getInt64Ty());
     Value *Current = B.CreateLoad(B.getInt64Ty(), CurrentPtr, "cj.store.current");
     BasicBlock *Append = BasicBlock::Create(C, "storeAppend", Slow->getParent(), Slow);
     B.CreateCondBr(B.CreateICmpEQ(Current, B.getInt64(0)), Slow, Append);
     B.SetInsertPoint(Append);
     Value *Next = B.CreateSub(Current,
-        loadBarrierABI(B, M, "g_cjStoreBarrierEntrySize"), "cj.store.next");
+        loadBarrierABI(B, M, "g_cjStoreBarrierEntrySize",
+                       StoreBarrierBufferABI::EntrySize), "cj.store.next");
     B.CreateStore(Next, CurrentPtr);
     Value *Entries = barrierField(B, M, Buffer,
-        "g_cjStoreBarrierBufferBufferOffset", B.getInt8Ty());
+        "g_cjStoreBarrierBufferBufferOffset", StoreBarrierBufferABI::Buffer,
+        B.getInt8Ty());
     Value *Entry = B.CreateGEP(B.getInt8Ty(), Entries, Next, "cj.store.entry");
     B.CreateStore(B.CreatePtrToInt(Place, B.getInt64Ty()),
-        barrierField(B, M, Entry, "g_cjStoreBarrierEntryPOffset", B.getInt64Ty()));
+        barrierField(B, M, Entry, "g_cjStoreBarrierEntryPOffset",
+                     StoreBarrierBufferABI::EntryP, B.getInt64Ty()));
     Value *Prev = B.CreateLoad(B.getInt64Ty(), Place, "cj.store.buffer.prev");
     B.CreateStore(Prev,
-        barrierField(B, M, Entry, "g_cjStoreBarrierEntryPrevOffset", B.getInt64Ty()));
+        barrierField(B, M, Entry, "g_cjStoreBarrierEntryPrevOffset",
+                     StoreBarrierBufferABI::EntryPrev, B.getInt64Ty()));
     B.CreateBr(Store);
   }
 
