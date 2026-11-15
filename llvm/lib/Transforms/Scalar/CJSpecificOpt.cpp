@@ -391,6 +391,9 @@ static bool lowerCJIntrinsics(Function &F, bool MemsetOnly) {
 
 // These are reserved runtime entry points, not arbitrary readnone functions.
 // Do not reinterpret a differently typed declaration, call ABI, or bundle.
+// Ordinary tail is only a hint (and is inferred by the normal O2 pipeline).
+// Never transfer it to the fused call: the new callee writes a caller alloca.
+// musttail and notail retain their separate contracts and are not matched.
 static bool isPlainMetadataCall(CallInst &CI, StringRef Name,
                                 FunctionType *FT) {
   Function *Callee = CI.getCalledFunction();
@@ -398,7 +401,9 @@ static bool isPlainMetadataCall(CallInst &CI, StringRef Name,
       Callee->getFunctionType() != FT || CI.getFunctionType() != FT ||
       Callee->getCallingConv() != CallingConv::C ||
       CI.getCallingConv() != CallingConv::C ||
-      CI.getTailCallKind() != CallInst::TCK_None || CI.hasOperandBundles() ||
+      (CI.getTailCallKind() != CallInst::TCK_None &&
+       CI.getTailCallKind() != CallInst::TCK_Tail) ||
+      CI.hasOperandBundles() ||
       !Callee->hasFnAttribute("cj-runtime") ||
       !Callee->hasFnAttribute("gc-leaf-function"))
     return false;
