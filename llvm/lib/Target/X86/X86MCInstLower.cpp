@@ -3626,7 +3626,8 @@ static bool hasC2NNoFPValueAttrs(AttributeSet AS) {
 }
 
 static bool hasC2NNoFPSpecialAttrs(AttributeList AL) {
-  return AL.hasFnAttr("no_caller_saved_registers") ||
+  return AL.hasFnAttr(Attribute::StackAlignment) ||
+         AL.hasFnAttr("no_caller_saved_registers") ||
          AL.hasFnAttr("no_callee_saved_registers");
 }
 

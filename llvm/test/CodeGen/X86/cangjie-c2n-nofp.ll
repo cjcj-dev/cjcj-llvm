@@ -91,3 +91,19 @@ define double @live_fp(double %x) gc "cangjie" {
  %sum=fadd double %x,%f
  ret double %sum
 }
+
+; Explicit stack-alignment contracts are outside the ordinary SysV subset.
+declare i64 @aligned(i64) alignstack(32) "cj2c"
+declare i64 @call_aligned(i64) "cj2c"
+; CHECK-LABEL: aligned_decl:
+; CHECK: callq CJ_MCC_C2NStub{{(@PLT)?$}}
+; CHECK-LABEL: aligned_call:
+; CHECK: callq CJ_MCC_C2NStub{{(@PLT)?$}}
+define i64 @aligned_decl(i64 %x) gc "cangjie" {
+ %r=call i64 @aligned(i64 %x)
+ ret i64 %r
+}
+define i64 @aligned_call(i64 %x) gc "cangjie" {
+ %r=call i64 @call_aligned(i64 %x) alignstack(32)
+ ret i64 %r
+}
