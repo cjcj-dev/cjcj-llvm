@@ -56587,5 +56587,14 @@ Align X86TargetLowering::getPrefLoopAlignment(MachineLoop *ML) const {
   if (ML->isInnermost() &&
       ExperimentalPrefInnermostLoopAlignment.getNumOccurrences())
     return Align(1ULL << ExperimentalPrefInnermostLoopAlignment);
+  // Keep managed innermost loop headers on a stable 32-byte boundary when
+  // unrelated linked code changes the section placement around their polls.
+  // Block placement still applies its usual cold/size and padding constraints.
+  // Preserve explicit -align-loops and the experimental override above.
+  if (!getTargetMachine().Options.LoopAlignment && ML->isInnermost() &&
+      Subtarget.is64Bit() && Subtarget.isTargetLinux() &&
+      Subtarget.getTargetTriple().isGNUEnvironment() &&
+      ML->getHeader()->getParent()->getFunction().hasCangjieGC())
+    return Align(32);
   return TargetLowering::getPrefLoopAlignment();
 }
