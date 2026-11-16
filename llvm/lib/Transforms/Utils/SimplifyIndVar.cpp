@@ -324,8 +324,9 @@ static bool isNonNegativeAtUse(const Use &U, ScalarEvolution &SE,
   auto *Mul = dyn_cast<WithOverflowInst>(Result->getAggregateOperand());
   if (!Mul || Mul->getIntrinsicID() != Intrinsic::smul_with_overflow ||
       Mul->getArgOperand(0) != Mul->getArgOperand(1) ||
-      !isGuaranteedNotToBeUndefOrPoison(Mul->getArgOperand(0), nullptr, Mul,
-                                      &DT) /* exact recurrence-proof cut */)
+      (!isGuaranteedNotToBeUndefOrPoison(Mul->getArgOperand(0), nullptr, Mul,
+                                       &DT) &&
+       !isDefinedOrPoisonAddRecurrence(Mul->getArgOperand(0), DT)))
     return false;
 
   // A poison operand poisons the overflow flag too. The dominating branch
