@@ -263,6 +263,38 @@ bool SimplifyIndvar::makeIVComparisonInvariant(ICmpInst *ICmp,
   return true;
 }
 
+// A constant-initialized, constant-step integer recurrence cannot introduce
+// undef. Overflow flags may introduce poison; the checked square's branch
+// below must still exclude that case before its result is consumed. This is
+// a structural induction over one PHI/add pair, not a cyclic value query.
+static bool isDefinedOrPoisonAddRecurrence(const Value *V,
+                                         const DominatorTree &DT) {
+  const auto *Next = dyn_cast<BinaryOperator>(V);
+  if (!Next || Next->getOpcode() != Instruction::Add ||
+      !Next->getType()->isIntegerTy())
+    return false;
+  auto *PN = dyn_cast<PHINode>(Next->getOperand(0));
+  Value *Step = Next->getOperand(1);
+  if (!PN) {
+    PN = dyn_cast<PHINode>(Step);
+    Step = Next->getOperand(0);
+  }
+  if (!PN || PN->getNumIncomingValues() != 2 || !isa<ConstantInt>(Step))
+    return false;
+  for (unsigned I = 0; I != 2; ++I) {
+    if (PN->getIncomingValue(I) != Next ||
+        !isa<ConstantInt>(PN->getIncomingValue(1 - I)))
+      continue;
+    BasicBlock *Backedge = PN->getIncomingBlock(I);
+    BasicBlock *Entry = PN->getIncomingBlock(1 - I);
+    if (DT.dominates(PN->getParent(), Backedge) &&
+        !DT.dominates(PN->getParent(), Entry) &&
+        DT.dominates(Next, Backedge->getTerminator()))
+      return true;
+  }
+  return false;
+}
+
 // Prove non-negativity at this particular use, not for every occurrence of
 // the SCEV. In particular a checked square is non-negative only on its
 // non-overflow edge. Cyclic or deep PHI dependencies are deliberately rejected.
@@ -292,10 +324,14 @@ static bool isNonNegativeAtUse(const Use &U, ScalarEvolution &SE,
   auto *Mul = dyn_cast<WithOverflowInst>(Result->getAggregateOperand());
   if (!Mul || Mul->getIntrinsicID() != Intrinsic::smul_with_overflow ||
       Mul->getArgOperand(0) != Mul->getArgOperand(1) ||
-      !isGuaranteedNotToBeUndefOrPoison(Mul->getArgOperand(0), nullptr, Mul,
-                                      &DT))
+      (!isGuaranteedNotToBeUndefOrPoison(Mul->getArgOperand(0), nullptr, Mul,
+                                       &DT) &&
+       !isDefinedOrPoisonAddRecurrence(Mul->getArgOperand(0), DT)))
     return false;
 
+  // A poison operand poisons the overflow flag too. The dominating branch
+  // remains in the IR, so a defined execution reaching the result use has
+  // a stable, non-poison operand even for the recurrence case above.
   // An aggregate escape is outside this deliberately narrow proof.
   for (User *MU : Mul->users())
     if (!isa<ExtractValueInst>(MU))
