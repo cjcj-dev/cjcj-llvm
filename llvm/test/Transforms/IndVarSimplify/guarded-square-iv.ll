@@ -80,3 +80,42 @@ overflow.fail:
 exit:
   ret void
 }
+
+declare {i32, i1} @llvm.smul.with.overflow.i32(i32, i32)
+declare void @use32(i32)
+
+define void @guarded_square_i32(i32 noundef %x, i32 %limit, i1 %again) {
+; CHECK-LABEL: @guarded_square_i32(
+; CHECK-NOT: icmp ult i32 %j,
+; CHECK: ret void
+entry:
+  br label %outer
+outer:
+  %start = phi i32 [ 4, %entry ], [ %square, %advance ]
+  %enter = icmp slt i32 %start, %limit
+  br i1 %enter, label %preheader, label %exit
+preheader:
+  br label %loop
+loop:
+  %j = phi i32 [ %start, %preheader ], [ %next, %body ]
+  %bounds = icmp ult i32 %j, %limit
+  br i1 %bounds, label %body, label %bounds.fail
+body:
+  call void @use32(i32 %j)
+  %next = add nsw i32 %j, 2
+  %cont = icmp slt i32 %next, %limit
+  br i1 %cont, label %loop, label %advance
+advance:
+  %mul = call {i32, i1} @llvm.smul.with.overflow.i32(i32 %x, i32 %x)
+  %square = extractvalue {i32, i1} %mul, 0
+  %overflow = extractvalue {i32, i1} %mul, 1
+  br i1 %overflow, label %overflow.fail, label %outer
+bounds.fail:
+  call void @fail()
+  ret void
+overflow.fail:
+  call void @fail()
+  ret void
+exit:
+  ret void
+}

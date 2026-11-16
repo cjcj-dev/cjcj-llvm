@@ -611,3 +611,79 @@ exit:
   ret void
 }
 
+
+define void @extra_start_incoming(i64 noundef %x, i64 %limit, i1 %again) {
+; CHECK-LABEL: @extra_start_incoming(
+; CHECK: %bounds = icmp ult i64 %j, %limit
+entry:
+  br i1 %again, label %initial, label %alternative
+initial:
+  br label %outer
+alternative:
+  br label %outer
+outer:
+  %start = phi i64 [ 4, %initial ], [ %x, %alternative ], [ %square, %advance ]
+  %enter = icmp slt i64 %start, %limit
+  br i1 %enter, label %preheader, label %exit
+preheader:
+  br label %loop
+loop:
+  %j = phi i64 [ %start, %preheader ], [ %next, %body ]
+  %bounds = icmp ult i64 %j, %limit
+  br i1 %bounds, label %body, label %bounds.fail
+body:
+  call void @use(i64 %j)
+  %next = add nsw i64 %j, 2
+  %cont = icmp slt i64 %next, %limit
+  br i1 %cont, label %loop, label %advance
+advance:
+  %mul = call {i64, i1} @llvm.smul.with.overflow.i64(i64 %x, i64 %x)
+  %square = extractvalue {i64, i1} %mul, 0
+  %overflow = extractvalue {i64, i1} %mul, 1
+  br i1 %overflow, label %overflow.fail, label %outer
+bounds.fail:
+  call void @fail()
+  ret void
+overflow.fail:
+  call void @fail()
+  ret void
+exit:
+  ret void
+}
+
+define void @extra_inner_entry(i64 noundef %x, i64 %limit, i1 %again) {
+; CHECK-LABEL: @extra_inner_entry(
+; CHECK: %bounds = icmp ult i64 %j, %limit
+entry:
+  br label %outer
+outer:
+  %start = phi i64 [ 4, %entry ], [ %square, %advance ]
+  %enter = icmp slt i64 %start, %limit
+  br i1 %enter, label %preheader, label %exit
+preheader:
+  br i1 %again, label %loop, label %alternative
+alternative:
+  br label %loop
+loop:
+  %j = phi i64 [ %start, %preheader ], [ -1, %alternative ], [ %next, %body ]
+  %bounds = icmp ult i64 %j, %limit
+  br i1 %bounds, label %body, label %bounds.fail
+body:
+  call void @use(i64 %j)
+  %next = add nsw i64 %j, 2
+  %cont = icmp slt i64 %next, %limit
+  br i1 %cont, label %loop, label %advance
+advance:
+  %mul = call {i64, i1} @llvm.smul.with.overflow.i64(i64 %x, i64 %x)
+  %square = extractvalue {i64, i1} %mul, 0
+  %overflow = extractvalue {i64, i1} %mul, 1
+  br i1 %overflow, label %overflow.fail, label %outer
+bounds.fail:
+  call void @fail()
+  ret void
+overflow.fail:
+  call void @fail()
+  ret void
+exit:
+  ret void
+}
