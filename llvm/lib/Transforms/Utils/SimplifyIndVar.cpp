@@ -14,6 +14,8 @@
 
 #include "llvm/Transforms/Utils/SimplifyIndVar.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Dominators.h"
@@ -261,6 +263,157 @@ bool SimplifyIndvar::makeIVComparisonInvariant(ICmpInst *ICmp,
   return true;
 }
 
+// A constant-initialized, constant-step integer recurrence cannot introduce
+// undef. Overflow flags may introduce poison; the checked square's branch
+// below must still exclude that case before its result is consumed. This is
+// a structural induction over one PHI/add pair, not a cyclic value query.
+static bool isDefinedOrPoisonAddRecurrence(const Value *V,
+                                         const DominatorTree &DT) {
+  const auto *Next = dyn_cast<BinaryOperator>(V);
+  if (!Next || Next->getOpcode() != Instruction::Add ||
+      !Next->getType()->isIntegerTy())
+    return false;
+  auto *PN = dyn_cast<PHINode>(Next->getOperand(0));
+  Value *Step = Next->getOperand(1);
+  if (!PN) {
+    PN = dyn_cast<PHINode>(Step);
+    Step = Next->getOperand(0);
+  }
+  if (!PN || PN->getNumIncomingValues() != 2 || !isa<ConstantInt>(Step))
+    return false;
+  for (unsigned I = 0; I != 2; ++I) {
+    if (PN->getIncomingValue(I) != Next ||
+        !isa<ConstantInt>(PN->getIncomingValue(1 - I)))
+      continue;
+    BasicBlock *Backedge = PN->getIncomingBlock(I);
+    BasicBlock *Entry = PN->getIncomingBlock(1 - I);
+    if (DT.dominates(PN->getParent(), Backedge) &&
+        !DT.dominates(PN->getParent(), Entry) &&
+        DT.dominates(Next, Backedge->getTerminator()))
+      return true;
+  }
+  return false;
+}
+
+// Prove non-negativity at this particular use, not for every occurrence of
+// the SCEV. In particular a checked square is non-negative only on its
+// non-overflow edge. Cyclic or deep PHI dependencies are deliberately rejected.
+static bool isNonNegativeAtUse(const Use &U, ScalarEvolution &SE,
+                              DominatorTree &DT,
+                              SmallPtrSetImpl<const Value *> &Visited,
+                              unsigned Depth = 0) {
+  Value *V = U.get();
+  if (Depth == 6 || !Visited.insert(V).second)
+    return false;
+  auto *UserI = dyn_cast<Instruction>(U.getUser());
+  if (!UserI || !V->getType()->isIntegerTy())
+    return false;
+  if (SE.isKnownNonNegative(SE.getSCEV(V)))
+    return true;
+  if (auto *PN = dyn_cast<PHINode>(V)) {
+    for (const Use &Incoming : PN->operands()) {
+      SmallPtrSet<const Value *, 8> Path(Visited.begin(), Visited.end());
+      if (!isNonNegativeAtUse(Incoming, SE, DT, Path, Depth + 1))
+        return false;
+    }
+    return true;
+  }
+  auto *Result = dyn_cast<ExtractValueInst>(V);
+  if (!Result || Result->getNumIndices() != 1 || Result->getIndices()[0] != 0)
+    return false;
+  auto *Mul = dyn_cast<WithOverflowInst>(Result->getAggregateOperand());
+  if (!Mul || Mul->getIntrinsicID() != Intrinsic::smul_with_overflow ||
+      Mul->getArgOperand(0) != Mul->getArgOperand(1) ||
+      (!isGuaranteedNotToBeUndefOrPoison(Mul->getArgOperand(0), nullptr, Mul,
+                                       &DT) &&
+       !isDefinedOrPoisonAddRecurrence(Mul->getArgOperand(0), DT)))
+    return false;
+
+  // A poison operand poisons the overflow flag too. The dominating branch
+  // remains in the IR, so a defined execution reaching the result use has
+  // a stable, non-poison operand even for the recurrence case above.
+  // An aggregate escape is outside this deliberately narrow proof.
+  for (User *MU : Mul->users())
+    if (!isa<ExtractValueInst>(MU))
+      return false;
+  for (User *MU : Mul->users()) {
+    auto *Overflow = cast<ExtractValueInst>(MU);
+    if (Overflow->getNumIndices() != 1 || Overflow->getIndices()[0] != 1)
+      continue;
+    for (User *OU : Overflow->users()) {
+      auto *BI = dyn_cast<BranchInst>(OU);
+      if (!BI || !BI->isConditional() || BI->getCondition() != Overflow)
+        continue;
+      BasicBlockEdge NoOverflow(BI->getParent(), BI->getSuccessor(1));
+      if (NoOverflow.isSingleEdge() && DT.dominates(NoOverflow, U))
+        return true;
+    }
+  }
+  return false;
+}
+
+// Look only for explicit signed comparisons on the actual incoming-use edge.
+// Never query the bounds check's true edge or derive a backedge condition from
+// a trip count that might itself depend on the bounds check being eliminated.
+static bool hasSignedUpperGuard(const Use &Incoming, Value *Bound, Loop &L,
+                                DominatorTree &DT) {
+  auto *PN = cast<PHINode>(Incoming.getUser());
+  BasicBlock *Pred = PN->getIncomingBlock(Incoming.getOperandNo());
+  for (auto *N = DT.getNode(Pred); N; N = N->getIDom()) {
+    BasicBlock *BB = N->getBlock();
+    if (L.contains(BB) && BB != L.getLoopLatch())
+      continue;
+    auto *BI = dyn_cast<BranchInst>(BB->getTerminator());
+    if (!BI || !BI->isConditional())
+      continue;
+    auto *Cmp = dyn_cast<ICmpInst>(BI->getCondition());
+    if (!Cmp)
+      continue;
+    auto P = Cmp->getPredicate();
+    if (Cmp->getOperand(0) == Bound && Cmp->getOperand(1) == Incoming.get())
+      P = ICmpInst::getSwappedPredicate(P);
+    else if (Cmp->getOperand(0) != Incoming.get() || Cmp->getOperand(1) != Bound)
+      continue;
+    if (P != ICmpInst::ICMP_SLT && P != ICmpInst::ICMP_SGE)
+      continue;
+    BasicBlockEdge Edge(BB, BI->getSuccessor(P == ICmpInst::ICMP_SLT ? 0 : 1));
+    if (Edge.isSingleEdge() && DT.dominates(Edge, Incoming))
+      return true;
+  }
+  return false;
+}
+
+static bool isGuardedNonNegativeIV(PHINode *PN, Value *Bound, Loop &L,
+                                  ScalarEvolution &SE, DominatorTree &DT) {
+  if (!PN || !PN->getType()->isIntegerTy() || PN->getParent() != L.getHeader() ||
+      PN->getNumIncomingValues() != 2 || !L.isLoopInvariant(Bound))
+    return false;
+  BasicBlock *Entry = L.getLoopPredecessor(), *Latch = L.getLoopLatch();
+  if (!Entry || !Latch)
+    return false;
+  int EntryIdx = PN->getBasicBlockIndex(Entry);
+  int LatchIdx = PN->getBasicBlockIndex(Latch);
+  if (EntryIdx < 0 || LatchIdx < 0)
+    return false;
+  auto *Next = dyn_cast<BinaryOperator>(PN->getIncomingValue(LatchIdx));
+  if (!Next || Next->getOpcode() != Instruction::Add ||
+      !Next->hasNoSignedWrap())
+    return false;
+  Value *Step = Next->getOperand(1);
+  if (Next->getOperand(0) != PN) {
+    if (Step != PN)
+      return false;
+    Step = Next->getOperand(0);
+  }
+  if (!L.isLoopInvariant(Step) || !SE.isKnownNonNegative(SE.getSCEV(Step)))
+    return false;
+  if (!hasSignedUpperGuard(PN->getOperandUse(EntryIdx), Bound, L, DT) ||
+      !hasSignedUpperGuard(PN->getOperandUse(LatchIdx), Bound, L, DT))
+    return false;
+  SmallPtrSet<const Value *, 8> Visited;
+  return isNonNegativeAtUse(PN->getOperandUse(EntryIdx), SE, DT, Visited);
+}
+
 /// SimplifyIVUsers helper for eliminating useless
 /// comparisons against an induction variable.
 void SimplifyIndvar::eliminateIVComparison(ICmpInst *ICmp,
@@ -293,6 +446,13 @@ void SimplifyIndvar::eliminateIVComparison(ICmpInst *ICmp,
     LLVM_DEBUG(dbgs() << "INDVARS: Eliminated comparison: " << *ICmp << '\n');
   } else if (makeIVComparisonInvariant(ICmp, IVOperand)) {
     // fallthrough to end of function
+  } else if ((Pred == ICmpInst::ICMP_ULT || Pred == ICmpInst::ICMP_UGE) &&
+             isGuardedNonNegativeIV(dyn_cast<PHINode>(IVOperand),
+                                    ICmp->getOperand(1 - IVOperIdx), *L, *SE,
+                                    *DT)) {
+    ICmp->replaceAllUsesWith(ConstantInt::getBool(
+        ICmp->getContext(), Pred == ICmpInst::ICMP_ULT));
+    DeadInsts.emplace_back(ICmp);
   } else if (ICmpInst::isSigned(OriginalPred) &&
              SE->isKnownNonNegative(S) && SE->isKnownNonNegative(X)) {
     // If we were unable to make anything above, all we can is to canonicalize
