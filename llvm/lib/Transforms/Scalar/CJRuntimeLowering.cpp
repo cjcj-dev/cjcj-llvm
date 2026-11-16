@@ -456,6 +456,90 @@ public:
     if (EnableCJNewArrayFast && !CangjieJIT) {
       auto *LengthOp = dyn_cast<ConstantInt>(CI->getArgOperand(1));
       auto *ElemSizeOp = dyn_cast<ConstantInt>(CI->getArgOperand(2));
+      Triple TT(M.getTargetTriple());
+      auto *Call = dyn_cast<CallInst>(CI);
+      if (!LengthOp && CI->getArgOperand(1)->getType()->isIntegerTy(64) &&
+          ElemSizeOp && ElemSizeOp->isOne() &&
+          DL.getPointerSizeInBits() == 64 && DL.getPointerSizeInBits(1) == 64 &&
+          (TT.getArch() == Triple::x86_64 || TT.isAArch64(64)) &&
+          (Call || isa<InvokeInst>(CI)) &&
+          (!Call || !Call->isTailCall()) &&
+          !CI->getParent()->hasAddressTaken() &&
+          getMallocArrayFuncName(CI) == "CJ_MCC_NewArray8") {
+        Function *Runtime = getOrInsertRuntimeFunc(CI, false, true);
+        Value *Length = CI->getArgOperand(1);
+        BasicBlock *Continue = CI->getParent();
+        Function *F = Continue->getParent();
+        // Keep the following instructions in their original block: the
+        // lowering traversal has already advanced its instruction iterator.
+        // Snapshot predecessors before redirecting edges: mutating the use
+        // list while walking it can skip an edge when this block is a join.
+        SmallVector<BasicBlock *, 8> Preds(pred_begin(Continue),
+                                          pred_end(Continue));
+        BasicBlock *Check = BasicBlock::Create(C, "array.check", F, Continue);
+        Check->getInstList().splice(Check->end(), Continue->getInstList(),
+                                   Continue->begin(), CI->getIterator());
+        for (BasicBlock *Pred : Preds)
+          Pred->getTerminator()->replaceSuccessorWith(Continue, Check);
+        BranchInst::Create(Continue, Check);
+        BasicBlock *Fast = BasicBlock::Create(C, "array.fast", F, Continue);
+        BasicBlock *Slow = BasicBlock::Create(C, "array.slow", F, Continue);
+        IRBuilder<> B(Check->getTerminator());
+        B.SetCurrentDebugLocation(CI->getDebugLoc());
+        // The intrinsic does not require a noundef length. Freeze once before
+        // duplicating its use so the range, extent, and array header agree.
+        Length = B.CreateFreeze(Length, "array.length");
+        CI->setArgOperand(1, Length);
+        // An unsigned comparison rejects negative and overflowing lengths
+        // before the emitter sees a size. No out-of-range sentinel is needed.
+        Value *Fits = B.CreateICmpULT(Length, B.getInt64(MaxArrayFast));
+        B.CreateCondBr(Fits, Fast, Slow);
+        Check->getTerminator()->eraseFromParent();
+
+        CI->removeFromParent();
+        Slow->getInstList().push_back(CI);
+        CI->setCalledFunction(Runtime);
+        CI->setArgOperand(2, PoisonValue::get(Type::getInt64Ty(C)));
+        CI->addRetAttr(Attribute::NoAlias);
+        auto *FastCall = cast<CallBase>(CI->clone());
+        B.SetInsertPoint(Fast);
+        // This block is reached only for 0 <= Length < 4096. Thus the size
+        // is in [16, 4112], with the same header/alignment as constant arrays.
+        Value *Bytes = B.CreateAdd(Length, B.getInt64(ArrayHeadSize + 7));
+        Bytes = B.CreateAnd(Bytes, B.getInt64(~uint64_t(7)));
+        FastCall->setArgOperand(2, Bytes);
+        setMetadata(FastCall, "fast_new_array");
+        // Runtime lowering precedes SimplifyCFG. Keep this call distinct from
+        // the slow call so merging cannot discard its fast-path metadata.
+        FastCall->addFnAttr(Attribute::NoMerge);
+        Fast->getInstList().push_back(FastCall);
+
+        if (auto *Invoke = dyn_cast<InvokeInst>(CI)) {
+          BasicBlock *Normal = Invoke->getNormalDest();
+          BasicBlock *Unwind = Invoke->getUnwindDest();
+          Invoke->setNormalDest(Continue);
+          cast<InvokeInst>(FastCall)->setNormalDest(Continue);
+          // Both calls retain the original exceptional edge and its values.
+          for (PHINode &PN : Unwind->phis()) {
+            int Idx = PN.getBasicBlockIndex(Continue);
+            if (Idx >= 0) {
+              Value *V = PN.getIncomingValue(Idx);
+              PN.setIncomingBlock(Idx, Slow);
+              PN.addIncoming(V, Fast);
+            }
+          }
+          BranchInst::Create(Normal, Continue);
+        } else {
+          BranchInst::Create(Continue, Fast);
+          BranchInst::Create(Continue, Slow);
+        }
+        auto *Result = PHINode::Create(CI->getType(), 2, "array.result",
+                                      &Continue->front());
+        CI->replaceAllUsesWith(Result);
+        Result->addIncoming(FastCall, Fast);
+        Result->addIncoming(CI, Slow);
+        return;
+      }
       if (LengthOp && ElemSizeOp) {
         uint64_t ElemSize = ElemSizeOp->getZExtValue();
         if (ElemSize == 0) {
