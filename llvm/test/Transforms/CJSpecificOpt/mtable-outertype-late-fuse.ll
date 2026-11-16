@@ -1,0 +1,378 @@
+; RUN: opt -passes=cj-specific-opt -verify-each -S %s | FileCheck %s --check-prefixes=POS,NEG
+; RUN: opt -enable-new-pm=0 -cj-specific-opt -verify-each -S %s | FileCheck %s --check-prefixes=POS,NEG
+; RUN: opt -cangjie-lto -passes=cj-specific-opt -verify-each -S %s | FileCheck %s --check-prefix=PRELINK
+; RUN: opt -cangjie-lto -enable-new-pm=0 -cj-specific-opt -verify-each -S %s | FileCheck %s --check-prefix=PRELINK
+; Late pairing is deliberately narrower than the source intrinsic lowering.
+declare i8* @CJ_MCC_GetMTable(i8*, i8*) #0
+declare i8* @CJ_MCC_GetMethodOuterTI(i8*, i8*, i64) #0
+declare void @opaque()
+declare i32 @__gxx_personality_v0(...)
+attributes #0 = { readnone speculatable willreturn "cj-runtime" "gc-leaf-function" }
+
+; POS-LABEL: define i8* @pair(
+; POS: %mtable.outer.ti = alloca i8*
+; POS: [[PAIR:%.*]] = call i8* @CJ_MCC_GetMTableAndOuterTI(i8* %ti, i8* %itf, i64 2, i8** %mtable.outer.ti)
+; POS-NEXT: %p = bitcast i8* [[PAIR]] to i8**
+; POS: %f2 = load i8*, i8** %p2
+; POS-NEXT: %fn = bitcast i8* %f2 to i8* (i8*, i8*)*
+; POS-NEXT: [[OUT:%.*]] = load i8*, i8** %mtable.outer.ti
+; POS-NEXT: %v = call i8* %fn(i8* [[OUT]], i8* %ti)
+; POS-NOT: call i8* @CJ_MCC_GetMethodOuterTI
+; POS: ret i8* %v
+; PRELINK-LABEL: define i8* @pair(
+; PRELINK: %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+; PRELINK: %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 2)
+; PRELINK-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; PRELINK: ret i8* %v
+define i8* @pair(i8* noundef %ti, i8* noundef %itf) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %p = bitcast i8* %t to i8**
+  %p2 = getelementptr i8*, i8** %p, i64 2
+  %f2 = load i8*, i8** %p2, !FuncTable !1
+  %fn = bitcast i8* %f2 to i8* (i8*, i8*)*
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 2)
+  %v = call i8* %fn(i8* %o, i8* %ti)
+  ret i8* %v
+}
+
+; Only one outer query is paired; the other remains a normal runtime call.
+; POS-LABEL: define i8* @one_pair(
+; POS: call i8* @CJ_MCC_GetMTableAndOuterTI(i8* %ti, i8* %itf, i64 0,
+; POS: call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 1)
+define i8* @one_pair(i8* noundef %ti, i8* noundef %itf) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  %o1 = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 1)
+  ret i8* %o1
+}
+
+; Frontend object-header loads need not carry noundef. Refine the common
+; operands once; do not let two undef uses select different TypeInfos.
+; POS-LABEL: define i8* @unannotated(
+; POS: [[TI:%.*]] = freeze i8* %ti
+; POS: [[ITF:%.*]] = freeze i8* %itf
+; POS: call i8* @CJ_MCC_GetMTableAndOuterTI(i8* [[TI]], i8* [[ITF]], i64 0,
+define i8* @unannotated(i8* %ti, i8* %itf) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; A preexisting fused consumer remains independent.
+; NEG-LABEL: define i8* @already_fused(
+; NEG: call i8* @CJ_MCC_GetMTableAndOuterTI(i8* %ti, i8* %itf, i64 0, i8** %slot)
+; NEG: load i8*, i8** %slot
+declare i8* @CJ_MCC_GetMTableAndOuterTI(i8*, i8*, i64, i8**) #1
+attributes #1 = { "cj-runtime" "gc-leaf-function" }
+define i8* @already_fused(i8* %ti, i8* %itf) gc "cangjie" {
+  %slot = alloca i8*
+  %t = call i8* @CJ_MCC_GetMTableAndOuterTI(i8* %ti, i8* %itf, i64 0, i8** %slot)
+  %o = load i8*, i8** %slot
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @different_ssa(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @different_ssa(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %other, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @different_itf(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @different_itf(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %other, i64 0)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @intervening_call(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @intervening_call(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  call void @opaque()
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @may_trap(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @may_trap(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %q = udiv i64 9, %n
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @arbitrary_invariant_load(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @arbitrary_invariant_load(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %q = load i8*, i8** %external, !invariant.load !0
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @other_table_slot(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @other_table_slot(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %p = bitcast i8* %t to i8**
+  %p2 = getelementptr i8*, i8** %p, i64 2
+  %q = load i8*, i8** %p2, !invariant.load !0
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @multiple_slots(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @multiple_slots(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %p = bitcast i8* %t to i8**
+  %q = load i8*, i8** %p
+  %p2 = getelementptr i8*, i8** %p, i64 2
+  %q2 = load i8*, i8** %p2
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @different_index_width(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @different_index_width(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %p = bitcast i8* %t to i8**
+  %p0 = getelementptr i8*, i8** %p, i32 0
+  %q = load i8*, i8** %p0
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @volatile_table(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @volatile_table(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %p = bitcast i8* %t to i8**
+  %q = load volatile i8*, i8** %p
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @atomic_table(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @atomic_table(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %p = bitcast i8* %t to i8**
+  %q = load atomic i8*, i8** %p acquire, align 8
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @dynamic_index(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @dynamic_index(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 %n)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @negative_index(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @negative_index(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 -1)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @undef(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @undef(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* undef, i8* %itf)
+
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* undef, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @poison(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @poison(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* poison, i8* %itf)
+
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* poison, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; The normal late pipeline infers ordinary tail. Discard the hint because the
+; fused callee accesses the caller's outslot, even when Outer immediately returns.
+; POS-LABEL: define i8* @tail(
+; POS: %mtable.outer.ti = alloca i8*
+; POS-NEXT: {{%.*}} = call i8* @CJ_MCC_GetMTableAndOuterTI(
+; POS-NEXT: [[TAIL_OUT:%.*]] = load i8*, i8** %mtable.outer.ti
+; POS-NEXT: ret i8* [[TAIL_OUT]]
+define i8* @tail(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+
+  %o = tail call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; POS-LABEL: define i8* @tail_both(
+; POS: %mtable.outer.ti = alloca i8*
+; POS-NEXT: [[PAIR:%.*]] = call i8* @CJ_MCC_GetMTableAndOuterTI(
+; POS-NEXT: %p = bitcast i8* [[PAIR]] to i8**
+; POS-NEXT: %fn = load i8*, i8** %p
+; POS-NEXT: [[OUT:%.*]] = load i8*, i8** %mtable.outer.ti
+; POS-NEXT: %v = call i8* @use_metadata(i8* %fn, i8* [[OUT]])
+; POS-NEXT: ret i8* %v
+declare i8* @use_metadata(i8*, i8*)
+define i8* @tail_both(i8* noundef %ti, i8* noundef %itf) gc "cangjie" {
+  %t = tail call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %p = bitcast i8* %t to i8**
+  %fn = load i8*, i8** %p
+  %o = tail call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  %v = call i8* @use_metadata(i8* %fn, i8* %o)
+  ret i8* %v
+}
+
+; POS-LABEL: define i8* @tail_table_only(
+; POS: %mtable.outer.ti = alloca i8*
+; POS-NEXT: {{%.*}} = call i8* @CJ_MCC_GetMTableAndOuterTI(
+; POS-NEXT: [[OUT:%.*]] = load i8*, i8** %mtable.outer.ti
+; POS-NEXT: ret i8* [[OUT]]
+define i8* @tail_table_only(i8* noundef %ti, i8* noundef %itf) gc "cangjie" {
+  %t = tail call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; POS-LABEL: define i8* @unrelated_tail(
+; POS: = call i8* @CJ_MCC_GetMTableAndOuterTI(
+; POS: [[OUT:%.*]] = load i8*, i8** %mtable.outer.ti
+; POS-NEXT: %v = tail call i8* @use_metadata(i8* [[OUT]], i8* %ti)
+; POS-NEXT: ret i8* %v
+define i8* @unrelated_tail(i8* noundef %ti, i8* noundef %itf) gc "cangjie" {
+  %t = tail call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %o = tail call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  %v = tail call i8* @use_metadata(i8* %o, i8* %ti)
+  ret i8* %v
+}
+
+; NEG-LABEL: define i8* @musttail_outer(
+; NEG-NOT: @CJ_MCC_GetMTableAndOuterTI
+; NEG: %t = call i8* @CJ_MCC_GetMTable(
+; NEG: %o = musttail call i8* @CJ_MCC_GetMethodOuterTI(
+; NEG-NEXT: ret i8* %o
+define i8* @musttail_outer(i8* noundef %ti, i8* noundef %itf, i64 %idx) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %o = musttail call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @notail_outer(
+; NEG-NOT: @CJ_MCC_GetMTableAndOuterTI
+; NEG: %t = call i8* @CJ_MCC_GetMTable(
+; NEG: %o = notail call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @notail_outer(i8* noundef %ti, i8* noundef %itf) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %o = notail call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @notail_table(
+; NEG-NOT: @CJ_MCC_GetMTableAndOuterTI
+; NEG: %t = notail call i8* @CJ_MCC_GetMTable(
+; NEG: %o = call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @notail_table(i8* noundef %ti, i8* noundef %itf) gc "cangjie" {
+  %t = notail call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @bundle_table(
+; NEG-NOT: @CJ_MCC_GetMTableAndOuterTI
+; NEG: %t = call i8* @CJ_MCC_GetMTable({{.*}}[ "deopt"(i32 1) ]
+; NEG: %o = call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @bundle_table(i8* noundef %ti, i8* noundef %itf) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf) [ "deopt"(i32 1) ]
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @bundle(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @bundle(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0) [ "deopt"(i32 1) ]
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @abi_attribute(
+; NEG-NOT: call i8* @CJ_MCC_GetMTableAndOuterTI
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @abi_attribute(i8* noundef %ti, i8* noundef %itf, i8* noundef %other, i8* %unknown, i64 %n, i8** %external) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* inreg %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+
+; NEG-LABEL: define i8* @cross_block(
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: call i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @cross_block(i8* noundef %ti, i8* noundef %itf) gc "cangjie" {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  br label %next
+next:
+  %o = call i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0)
+  ret i8* %o
+}
+; NEG-LABEL: define i8* @invoke_outer(
+; NEG: call i8* @CJ_MCC_GetMTable(
+; NEG: invoke i8* @CJ_MCC_GetMethodOuterTI(
+define i8* @invoke_outer(i8* noundef %ti, i8* noundef %itf) gc "cangjie" personality i32 (...)* @__gxx_personality_v0 {
+  %t = call i8* @CJ_MCC_GetMTable(i8* %ti, i8* %itf)
+  %o = invoke i8* @CJ_MCC_GetMethodOuterTI(i8* %ti, i8* %itf, i64 0) to label %ok unwind label %bad
+ok:
+  ret i8* %o
+bad:
+  %lp = landingpad { i8*, i32 } cleanup
+  resume { i8*, i32 } %lp
+}
+!0 = !{}
+!1 = !{i64 2}

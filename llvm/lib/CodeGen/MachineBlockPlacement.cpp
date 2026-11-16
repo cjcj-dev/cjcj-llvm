@@ -2037,6 +2037,15 @@ MachineBlockPlacement::FallThroughGains(
      }
    }
 
+   // With one predecessor and one successor, moving NewTop only exchanges
+   // its incoming fallthrough for its outgoing fallthrough. These carry the
+   // same flow, but independently rounded block and edge frequencies can
+   // make the exchange appear profitable. Preserve a tie when the incoming
+   // fallthrough is eligible and no alternative fallthrough is gained.
+   if (NewTop->pred_size() == 1 && NewTop->succ_size() == 1 &&
+       FallThroughFromPred > 0 && NewFreq == 0)
+     return 0;
+
    BlockFrequency Result = 0;
    BlockFrequency Gains = BackEdgeFreq + NewFreq;
    BlockFrequency Lost = FallThrough2Top + FallThrough2Exit +
