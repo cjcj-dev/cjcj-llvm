@@ -308,6 +308,9 @@ public:
         continue;
       }
 
+      // Remember the input before transfer modifies it. Duplicate worklist
+      // entries need no replay until a predecessor contributes a new pointer.
+      Ins[MBB] = Tmp;
       transferSPData(*MBB, Tmp);
       // assert: OldLiveOut is a subset of NewLiveOut
       if (Outs[MBB].size() != Tmp.size()) {
@@ -665,25 +668,18 @@ public:
     }
   }
 
-  void analyzeStatepointLiveness(const SetVector<MachineInstr *> &Statepoints,
-                                StatepointLives &Lives) {
-    SmallSetVector<MachineBasicBlock *, 16> Blocks;
-    for (MachineInstr *MI : Statepoints)
-      Blocks.insert(MI->getParent());
+  void analyzeStatepointLiveness(MachineInstr *MI, CJStackLives &Lives) {
+    MachineBasicBlock *MBB = MI->getParent();
 
-    for (MachineBasicBlock *MBB : Blocks) {
-      // Each statepoint needs the transfer of its block suffix applied to
-      // LiveOut. Share that transfer in reverse order instead of rescanning
-      // overlapping suffixes, keeping the original per-instruction rules.
-      assert(LiveOut.count(MBB));
-      SetVector<SlotInfo> LiveTmp = LiveOut[MBB];
-      for (auto I = MBB->rbegin(), E = MBB->rend(); I != E; ++I) {
-        computeStackLiveIn(I, std::next(I), LiveTmp);
-        if (Statepoints.contains(&*I))
-          Lives[&*I].Slots.remove_if(
-              [&](SlotInfo V) { return !LiveTmp.contains(V); });
-      }
-    }
+    // Note: The copy is intentional and required
+    assert(LiveOut.count(MBB));
+    SetVector<SlotInfo> LiveTmp = LiveOut[MBB];
+
+    computeStackLiveIn(MBB->rbegin(), ++MI->getIterator().getReverse(),
+                       LiveTmp);
+
+    // Records the alive stack pointer.
+    Lives.Slots.remove_if([&](SlotInfo V) { return !LiveTmp.contains(V); });
   }
 
 private:
@@ -972,9 +968,8 @@ bool CJStackPointerInserter::runOnMachineFunction(MachineFunction &MF) {
 
   StackLives Live(MF, ArgPtrs);
   Live.computeStackLiveness();
-  // Finish liveness queries before rewriting any machine instructions.
-  Live.analyzeStatepointLiveness(Statepoints, LiveData);
   for (auto *MI : Statepoints) {
+    Live.analyzeStatepointLiveness(MI, LiveData[MI]);
     if (rewriteStatepoint(MF, *MI, LiveData[MI], ArgPtrs)) {
       RemoveMI.push_back(MI);
     }
