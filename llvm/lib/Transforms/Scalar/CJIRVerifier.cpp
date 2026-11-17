@@ -602,6 +602,9 @@ public:
       if (auto *Copy = dyn_cast<MemTransferInst>(&Call))
         if (isPrimitiveStackToArrayElementTransfer(*Copy))
           break;
+      if (auto *Copy = dyn_cast<MemTransferInst>(&Call))
+        if (isConstantDataToPrimitiveArrayTransfer(*Copy))
+          break;
       // The typed-read helper runs immediately after this verifier.  Admit
       // only its exact hand-off shape here; every other reference-bearing
       // transfer remains rejected below.
@@ -1719,6 +1722,45 @@ private:
           return true;
       }
     return false;
+  }
+
+  // Immutable module data -> heap primitive ArrayLayout payload.  The
+  // destination element type has no managed-reference slots and the source is
+  // a constant global whose type holds no GC pointers, so the transfer needs
+  // no GC barrier.  The String literal materializer copies its packed bytes
+  // into a freshly allocated UInt8 RawArray this way.  The copied range must
+  // stay inside the constant initializer.
+  bool isConstantDataToPrimitiveArrayTransfer(const MemTransferInst &Copy) {
+    if (Copy.isVolatile())
+      return false;
+    Value *Dst = Copy.getRawDest();
+    Value *Src = Copy.getRawSource();
+    auto *CopySize = dyn_cast<ConstantInt>(Copy.getLength());
+    auto *DstPtrTy = dyn_cast<PointerType>(Dst->getType());
+    auto *SrcPtrTy = dyn_cast<PointerType>(Src->getType());
+    if (!CopySize || CopySize->isZero() ||
+        CopySize->getValue().getActiveBits() > 64 || !DstPtrTy || !SrcPtrTy ||
+        DstPtrTy->getAddressSpace() != 1 || SrcPtrTy->getAddressSpace() != 0)
+      return false;
+    Type *DstElementTy = getUniqueArrayLayoutElementType(Dst, true);
+    if (!DstElementTy || !DstElementTy->isSized() ||
+        containsGCPtrType(DstElementTy))
+      return false;
+    APInt Offset(DL.getIndexSizeInBits(0), 0);
+    auto *GV = dyn_cast<GlobalVariable>(
+        Src->stripAndAccumulateConstantOffsets(DL, Offset, true));
+    if (!GV || !GV->isConstant() || !GV->hasDefinitiveInitializer() ||
+        Offset.isNegative())
+      return false;
+    Type *SrcTy = GV->getValueType();
+    if (!SrcTy->isSized() || containsGCPtrType(SrcTy))
+      return false;
+    TypeSize SrcSize = DL.getTypeAllocSize(SrcTy);
+    if (SrcSize.isScalable())
+      return false;
+    uint64_t Begin = Offset.getZExtValue(), Size = CopySize->getZExtValue();
+    return Begin <= SrcSize.getFixedSize() &&
+           Size <= SrcSize.getFixedSize() - Begin;
   }
 
   bool isPrimitiveStackToArrayElementTransfer(const MemTransferInst &Copy) {
