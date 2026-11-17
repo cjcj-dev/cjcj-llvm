@@ -212,3 +212,80 @@ join:
   %offset = call i64 @llvm.cj.get.field.offset(i8* %ti, i64 0, i32 0)
   ret void
 }
+
+; Returning/observing a raw pointer does not prove a live metadata context.
+; CHECK-LABEL: define i8* @pointer_only(
+; CHECK: call void @worker(i8* %key)
+; CHECK: ret i8* %ti
+define i8* @pointer_only(i8* %key) gc "cangjie" {
+entry:
+  %a = alloca [1 x i8*], align 8
+  %p = getelementptr [1 x i8*], [1 x i8*]* %a, i64 0, i64 0
+  store i8* %key, i8** %p
+  %ti = call i8* @llvm.cj.get.type.info(i8* @A, i32 1, i8** %p)
+  call void @worker(i8* %key)
+  ret i8* %ti
+}
+
+; Match recursively through immutable generic arguments and nested TI terms.
+define internal void @nested_worker(i8** %outer) gc "cangjie" {
+entry:
+  %a = alloca [1 x i8*], align 8
+  %b = alloca [1 x i8*], align 8
+  %key = load i8*, i8** %outer, !invariant.load !0
+  %p = getelementptr [1 x i8*], [1 x i8*]* %a, i64 0, i64 0
+  %q = getelementptr [1 x i8*], [1 x i8*]* %b, i64 0, i64 0
+  store i8* %key, i8** %p
+  %inner = call i8* @llvm.cj.get.type.info(i8* @A, i32 1, i8** %p)
+  store i8* %inner, i8** %q
+  %outerti = call i8* @llvm.cj.get.type.info(i8* @B, i32 1, i8** %q)
+  call void @observe(i8* %outerti)
+  ret void
+}
+; CHECK-LABEL: define void @nested_context(
+; CHECK: call i8* @llvm.cj.get.type.info
+; CHECK: call i8* @llvm.cj.get.type.info
+; CHECK: call void @opaque()
+; CHECK-NOT: call i8* @llvm.cj.get.type.info
+; CHECK-NOT: call void @nested_worker
+; CHECK: call void @observe(i8* %outerti)
+; CHECK: ret void
+define void @nested_context(i8** %outer) gc "cangjie" {
+entry:
+  %a = alloca [1 x i8*], align 8
+  %b = alloca [1 x i8*], align 8
+  %key = load i8*, i8** %outer, !invariant.load !0
+  %p = getelementptr [1 x i8*], [1 x i8*]* %a, i64 0, i64 0
+  %q = getelementptr [1 x i8*], [1 x i8*]* %b, i64 0, i64 0
+  store i8* %key, i8** %p
+  %inner = call i8* @llvm.cj.get.type.info(i8* @A, i32 1, i8** %p)
+  store i8* %inner, i8** %q
+  %outerti = call i8* @llvm.cj.get.type.info(i8* @B, i32 1, i8** %q)
+  call void @opaque()
+  call void @nested_worker(i8** %outer)
+  %x = call i64 @llvm.cj.get.field.offset(i8* %inner, i64 0, i32 0)
+  %y = call i64 @llvm.cj.get.field.offset(i8* %outerti, i64 0, i32 0)
+  ret void
+}
+; Missing invariant annotation prevents matching mutable context loads.
+; CHECK-LABEL: define void @mutable_context(
+; CHECK: call void @nested_worker(i8** %outer)
+; CHECK: ret void
+define void @mutable_context(i8** %outer) gc "cangjie" {
+entry:
+  %a = alloca [1 x i8*], align 8
+  %b = alloca [1 x i8*], align 8
+  %key = load i8*, i8** %outer
+  %p = getelementptr [1 x i8*], [1 x i8*]* %a, i64 0, i64 0
+  %q = getelementptr [1 x i8*], [1 x i8*]* %b, i64 0, i64 0
+  store i8* %key, i8** %p
+  %inner = call i8* @llvm.cj.get.type.info(i8* @A, i32 1, i8** %p)
+  store i8* %inner, i8** %q
+  %outerti = call i8* @llvm.cj.get.type.info(i8* @B, i32 1, i8** %q)
+  call void @opaque()
+  call void @nested_worker(i8** %outer)
+  %x = call i64 @llvm.cj.get.field.offset(i8* %inner, i64 0, i32 0)
+  %y = call i64 @llvm.cj.get.field.offset(i8* %outerti, i64 0, i32 0)
+  ret void
+}
+!0 = !{}
