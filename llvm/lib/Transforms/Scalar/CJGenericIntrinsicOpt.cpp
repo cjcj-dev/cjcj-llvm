@@ -16,6 +16,7 @@
 #include "llvm/Transforms/Scalar/CJGenericIntrinsicOpt.h"
 
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/MemoryLocation.h"
@@ -1142,6 +1143,7 @@ static bool forwardTypeContext(CallInst &Site) {
   Function *Callee = Site.getCalledFunction();
   if (!Callee || !Callee->hasLocalLinkage() || Callee->isDeclaration() ||
       Callee == Site.getFunction() || Callee->isVarArg() ||
+      !Callee->hasCangjieGC() ||
       Callee->hasFnAttribute(Attribute::NoInline) || Callee->getInstructionCount() > 512 ||
       Site.hasOperandBundles() || Site.isMustTailCall())
     return false;
