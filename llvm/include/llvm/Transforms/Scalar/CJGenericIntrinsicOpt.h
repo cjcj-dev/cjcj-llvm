@@ -22,6 +22,12 @@
 namespace llvm {
 class Function;
 
+// Propagate already-live generic metadata across internal direct calls before
+// lowering erases the type-expression intrinsics. No runtime call is CSEd.
+struct CJTypeInfoContext : public PassInfoMixin<CJTypeInfoContext> {
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &) const;
+};
+
 struct CJGenericIntrinsicOpt : public PassInfoMixin<CJGenericIntrinsicOpt> {
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &) const;
 };

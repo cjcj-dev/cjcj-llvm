@@ -1266,6 +1266,8 @@ Error PassBuilder::parseModulePass(ModulePassManager &MPM,
       // Fill Klass at the beginning since related structs may be optimized
       // later.
       MPM.addPass(CJFillMetadata());
+      if (L.getSpeedupLevel() > 1)
+        MPM.addPass(CJTypeInfoContext());
       MPM.addPass(CJRuntimeLowering());
       if (EnableCJBarrierSplit)
         MPM.addPass(CJBarrierSplit());

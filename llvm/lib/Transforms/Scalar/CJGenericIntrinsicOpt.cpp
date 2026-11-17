@@ -15,6 +15,7 @@
 #include "llvm/CodeGen/CangjieRuntimeLayout.h"
 #include "llvm/Transforms/Scalar/CJGenericIntrinsicOpt.h"
 
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/MemoryLocation.h"
@@ -37,6 +38,7 @@
 #include "llvm/Transforms/Scalar/CJFillMetadata.h"
 #include "llvm/Transforms/Scalar/CJRSSCE.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/SSAUpdater.h"
 
 #define DEBUG_TYPE "cj-generic-intrinsic-opt"
@@ -959,3 +961,267 @@ FunctionPass *llvm::createCJGenericIntrinsicOptLegacyPass() {
 
 INITIALIZE_PASS(CJGenericIntrinsicOptLegacyPass, "cj-generic-intrinsic-opt",
                 "Cangjie Generic Intrinsics Optimize", false, false)
+
+namespace {
+// A context is a type expression, not the address of its temporary args array.
+// Only a private, single-assignment array can supply that expression. Reject
+// both writes and escapes anywhere in its lifetime (including after the query).
+static bool getContextArgs(CallInst &CI, DominatorTree &DT,
+                           SmallVectorImpl<Value *> &Args) {
+  auto *Count = dyn_cast<ConstantInt>(CI.getArgOperand(1));
+  if (!Count || Count->getZExtValue() == 0 || Count->getZExtValue() > 8)
+    return false;
+  const DataLayout &DL = CI.getModule()->getDataLayout();
+  int64_t BaseOffset = 0;
+  auto *AI = dyn_cast<AllocaInst>(GetPointerBaseWithConstantOffset(
+      CI.getArgOperand(2), BaseOffset, DL));
+  if (!AI || BaseOffset != 0 || !AI->isStaticAlloca())
+    return false;
+  SmallVector<Value *, 16> Work{AI};
+  SmallPtrSet<Value *, 16> Seen;
+  SmallDenseMap<int64_t, StoreInst *, 8> Stores;
+  while (!Work.empty()) {
+    Value *V = Work.pop_back_val();
+    if (!Seen.insert(V).second)
+      continue;
+    for (User *U : V->users()) {
+      if (isa<BitCastInst>(U) || isa<GetElementPtrInst>(U)) {
+        Work.push_back(cast<Value>(U));
+        continue;
+      }
+      if (auto *SI = dyn_cast<StoreInst>(U)) {
+        int64_t Offset = 0;
+        if (!SI->isSimple() || SI->getValueOperand() == V ||
+            GetPointerBaseWithConstantOffset(SI->getPointerOperand(), Offset,
+                                             DL) != AI ||
+            !DT.dominates(SI, &CI) || Stores.count(Offset))
+          return false;
+        Stores[Offset] = SI;
+        continue;
+      }
+      auto *II = dyn_cast<IntrinsicInst>(U);
+      if (!II || (II->getIntrinsicID() != Intrinsic::cj_get_type_info &&
+                  !II->isLifetimeStartOrEnd()))
+        return false;
+      if (II->getIntrinsicID() == Intrinsic::cj_get_type_info &&
+          (II->getArgOperand(2) != V || II != &CI))
+        return false;
+    }
+  }
+  unsigned N = Count->getZExtValue();
+  if (Stores.size() != N)
+    return false;
+  for (unsigned I = 0; I != N; ++I) {
+    auto It = Stores.find(I * DL.getPointerSize());
+    if (It == Stores.end() || !It->second->getValueOperand()->getType()->isPointerTy())
+      return false;
+    Args.push_back(It->second->getValueOperand());
+  }
+  return true;
+}
+
+static bool isTypeQuery(Value *V) {
+  auto *II = dyn_cast<IntrinsicInst>(V);
+  return II && II->getIntrinsicID() == Intrinsic::cj_get_type_info;
+}
+
+// Compare the callee expression with its actual caller arguments. Loads may be
+// compared across the call only when codegen already declares them invariant.
+// No name matching, general load CSE, memory attributes or runtime summaries.
+static bool sameContextValue(Value *L, Value *R, CallInst &Site,
+                             DominatorTree &CallerDT, DominatorTree &CalleeDT,
+                             unsigned Depth = 0) {
+  if (Depth > 24)
+    return false;
+  L = L->stripPointerCasts();
+  R = R->stripPointerCasts();
+  if (auto *A = dyn_cast<Argument>(L))
+    if (A->getParent() == Site.getCalledFunction())
+      L = Site.getArgOperand(A->getArgNo())->stripPointerCasts();
+  if (L == R)
+    return true;
+  if (auto *LI = dyn_cast<LoadInst>(L)) {
+    auto *RI = dyn_cast<LoadInst>(R);
+    return RI && LI->isSimple() && RI->isSimple() &&
+           LI->getType() == RI->getType() &&
+           LI->getMetadata(LLVMContext::MD_invariant_load) &&
+           RI->getMetadata(LLVMContext::MD_invariant_load) &&
+           sameContextValue(LI->getPointerOperand(), RI->getPointerOperand(),
+                            Site, CallerDT, CalleeDT, Depth + 1);
+  }
+  if (auto *LG = dyn_cast<GetElementPtrInst>(L)) {
+    auto *RG = dyn_cast<GetElementPtrInst>(R);
+    if (!RG || LG->getSourceElementType() != RG->getSourceElementType() ||
+        LG->getNumOperands() != RG->getNumOperands())
+      return false;
+    for (unsigned I = 0; I != LG->getNumOperands(); ++I)
+      if (!sameContextValue(LG->getOperand(I), RG->getOperand(I), Site,
+                            CallerDT, CalleeDT, Depth + 1))
+        return false;
+    return true;
+  }
+  if (!isTypeQuery(L) || !isTypeQuery(R))
+    return false;
+  auto &LQ = *cast<CallInst>(L), &RQ = *cast<CallInst>(R);
+  // The template itself must be an exact global identity, not a mutable load.
+  if (!isa<GlobalVariable>(LQ.getArgOperand(0)->stripPointerCasts()) ||
+      LQ.getArgOperand(0)->stripPointerCasts() !=
+          RQ.getArgOperand(0)->stripPointerCasts())
+    return false;
+  SmallVector<Value *, 8> LA, RA;
+  if (!getContextArgs(LQ, CalleeDT, LA) ||
+      !getContextArgs(RQ, CallerDT, RA) || LA.size() != RA.size())
+    return false;
+  for (unsigned I = 0; I != LA.size(); ++I)
+    if (!sameContextValue(LA[I], RA[I], Site, CallerDT, CalleeDT, Depth + 1))
+      return false;
+  return true;
+}
+
+// Limit substitutions to the unconditional metadata prologue. In particular,
+// do not skip an initializer, unknown call, poll, barrier, or observable store.
+static SmallVector<CallInst *, 8> contextPrologue(Function &F) {
+  SmallVector<CallInst *, 8> Queries;
+  BasicBlock *BB = &F.getEntryBlock();
+  unsigned Budget = 128;
+  while (BB) {
+    for (Instruction &I : *BB) {
+      if (!Budget--)
+        return Queries;
+      if (isTypeQuery(&I)) {
+        Queries.push_back(cast<CallInst>(&I));
+        continue;
+      }
+      if (auto *SI = dyn_cast<StoreInst>(&I)) {
+        if (SI->isSimple() && isa<AllocaInst>(getUnderlyingObject(SI->getPointerOperand())))
+          continue;
+      } else if (auto *LI = dyn_cast<LoadInst>(&I)) {
+        if (LI->isSimple() && LI->getMetadata(LLVMContext::MD_invariant_load))
+          continue;
+      } else if (isa<AllocaInst>(I) || isa<CastInst>(I) ||
+                 isa<GetElementPtrInst>(I) || isa<DbgInfoIntrinsic>(I) ||
+                 isa<BranchInst>(I)) {
+        continue;
+      }
+      return Queries;
+    }
+    auto *BI = dyn_cast<BranchInst>(BB->getTerminator());
+    if (!BI || !BI->isUnconditional() ||
+        BI->getSuccessor(0)->getSinglePredecessor() != BB)
+      break;
+    BB = BI->getSuccessor(0);
+  }
+  return Queries;
+}
+
+static bool remainsLiveAcross(CallInst &Query, CallInst &Site,
+                              DominatorTree &DT) {
+  // This is context propagation of metadata which the original caller already
+  // needs after the call. It must not extend a TI's lifetime, including through
+  // a safepoint/unload. A fresh query with no such live context is left alone.
+  SmallVector<Value *, 8> Work{&Query};
+  SmallPtrSet<Value *, 8> Seen;
+  while (!Work.empty()) {
+    Value *V = Work.pop_back_val();
+    if (!Seen.insert(V).second)
+      continue;
+    for (User *U : V->users()) {
+      if (isa<BitCastInst>(U)) {
+        Work.push_back(cast<Value>(U));
+        continue;
+      }
+      auto *I = dyn_cast<Instruction>(U);
+      if (I && I != &Site && !isa<PHINode>(I) && DT.dominates(&Site, I))
+        return true;
+    }
+  }
+  return false;
+}
+
+static bool forwardTypeContext(CallInst &Site) {
+  Function *Callee = Site.getCalledFunction();
+  if (!Callee || !Callee->hasLocalLinkage() || Callee->isDeclaration() ||
+      Callee == Site.getFunction() || Callee->isVarArg() ||
+      Callee->hasFnAttribute(Attribute::NoInline) || Callee->getInstructionCount() > 512 ||
+      Site.hasOperandBundles() || Site.isMustTailCall())
+    return false;
+  auto Queries = contextPrologue(*Callee);
+  if (Queries.empty())
+    return false;
+  DominatorTree CallerDT(*Site.getFunction()), CalleeDT(*Callee);
+  SmallVector<std::pair<CallInst *, CallInst *>, 8> Matches;
+  for (CallInst *Q : Queries) {
+    for (Instruction &I : instructions(*Site.getFunction())) {
+      if (!isTypeQuery(&I) || !CallerDT.dominates(&I, &Site) ||
+          !remainsLiveAcross(*cast<CallInst>(&I), Site, CallerDT))
+        continue;
+      if (sameContextValue(Q, &I, Site, CallerDT, CalleeDT)) {
+        Matches.emplace_back(Q, cast<CallInst>(&I));
+        break;
+      }
+    }
+  }
+  if (Matches.empty())
+    return false;
+
+  // Use a temporary internal specialization only as an inlining vehicle. It
+  // never reaches codegen, so no managed ABI or hidden-outerTI convention is
+  // changed. On inlining failure the original call is kept exactly as it was.
+  SmallVector<Type *, 16> Types(Callee->getFunctionType()->params());
+  SmallVector<Value *, 16> Args(Site.args());
+  for (auto Pair : Matches) {
+    Types.push_back(Pair.first->getType());
+    Args.push_back(Pair.second);
+  }
+  auto *FT = FunctionType::get(Callee->getReturnType(), Types, false);
+  Function *Clone = Function::Create(FT, GlobalValue::InternalLinkage,
+                                    Callee->getName() + ".ti.context", Callee->getParent());
+  Clone->copyAttributesFrom(Callee);
+  ValueToValueMapTy VMap;
+  auto NewArg = Clone->arg_begin();
+  for (Argument &A : Callee->args()) {
+    NewArg->setName(A.getName());
+    VMap[&A] = &*NewArg++;
+  }
+  SmallVector<ReturnInst *, 8> Returns;
+  CloneFunctionInto(Clone, Callee, VMap, CloneFunctionChangeType::LocalChangesOnly, Returns);
+  for (auto Pair : Matches) {
+    auto *Q = cast<Instruction>(VMap[Pair.first]);
+    NewArg->setName("ti.context");
+    Q->replaceAllUsesWith(&*NewArg++);
+    Q->eraseFromParent();
+  }
+  auto *Call = CallInst::Create(Clone, Args, "", &Site);
+  Call->setCallingConv(Site.getCallingConv());
+  Call->setAttributes(Site.getAttributes());
+  Call->setDebugLoc(Site.getDebugLoc());
+  InlineFunctionInfo IFI;
+  // Do not redirect the original call until the temporary call has inlined.
+  Site.replaceAllUsesWith(Call);
+  if (!InlineFunction(*Call, IFI).isSuccess()) {
+    Call->replaceAllUsesWith(&Site);
+    Call->eraseFromParent();
+    Clone->eraseFromParent();
+    return false;
+  }
+  Site.eraseFromParent();
+  Clone->eraseFromParent();
+  return true;
+}
+} // namespace
+
+PreservedAnalyses CJTypeInfoContext::run(Module &M,
+                                       ModuleAnalysisManager &) const {
+  SmallVector<WeakTrackingVH, 32> Sites;
+  for (Function &F : M)
+    if (!F.isDeclaration() && F.hasGC() && F.getGC() == "cangjie")
+      for (Instruction &I : instructions(F))
+        if (auto *CI = dyn_cast<CallInst>(&I))
+          if (CI->getCalledFunction() && !CI->getCalledFunction()->isIntrinsic())
+            Sites.push_back(CI);
+  bool Changed = false;
+  for (auto &V : Sites)
+    if (auto *CI = dyn_cast_or_null<CallInst>(V))
+      Changed |= forwardTypeContext(*CI);
+  return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
+}
