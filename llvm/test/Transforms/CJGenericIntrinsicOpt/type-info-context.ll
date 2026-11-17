@@ -432,6 +432,13 @@ entry:
 }
 ; This body is below the structural 512-instruction cap but exceeds the
 ; ordinary inliner cost. Context equality must not override that decision.
+; Keep a second real caller so ordinary inlining cannot claim the
+; last-call-to-static code-size benefit. This caller has no live TI context.
+define void @cost_second_use(i8* %key) gc "cangjie" {
+  call void @too_costly(i8* %key)
+  ret void
+}
+
 ; CHECK-LABEL: define void @cost_veto(
 ; CHECK: call void @too_costly(i8* %key)
 ; CHECK: ret void

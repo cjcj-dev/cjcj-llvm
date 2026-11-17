@@ -1196,6 +1196,20 @@ static bool forwardTypeContext(CallInst &Site, FunctionAnalysisManager &AM) {
   if (Matches.empty())
     return false;
 
+  // Check the real call before creating the temporary specialization. A
+  // single-use internal clone would receive the last-call-to-static bonus
+  // even when the real callee has other live callers. Use the conservative
+  // original cost, retaining the normal attribute and cost policy.
+  auto GetAC = [&AM](Function &F) -> AssumptionCache & {
+    return AM.getResult<AssumptionAnalysis>(F);
+  };
+  auto GetTLI = [&AM](Function &F) -> const TargetLibraryInfo & {
+    return AM.getResult<TargetLibraryAnalysis>(F);
+  };
+  if (!getInlineCost(Site, getInlineParams(),
+                     AM.getResult<TargetIRAnalysis>(*Callee), GetAC, GetTLI))
+    return false;
+
   // Use a temporary internal specialization only as an inlining vehicle. It
   // never reaches codegen, so no managed ABI or hidden-outerTI convention is
   // changed. On inlining failure the original call is kept exactly as it was.
@@ -1228,21 +1242,6 @@ static bool forwardTypeContext(CallInst &Site, FunctionAnalysisManager &AM) {
   Call->setCallingConv(Site.getCallingConv());
   Call->setAttributes(Site.getAttributes());
   Call->setDebugLoc(Site.getDebugLoc());
-  // Preserve the ordinary inliner's attribute and cost policy. Evaluate the
-  // specialized body, so the eliminated context queries contribute the saving.
-  auto GetAC = [&AM](Function &F) -> AssumptionCache & {
-    return AM.getResult<AssumptionAnalysis>(F);
-  };
-  auto GetTLI = [&AM](Function &F) -> const TargetLibraryInfo & {
-    return AM.getResult<TargetLibraryAnalysis>(F);
-  };
-  if (!getInlineCost(*Call, getInlineParams(),
-                     AM.getResult<TargetIRAnalysis>(*Clone), GetAC, GetTLI)) {
-    Call->eraseFromParent();
-    AM.clear(*Clone, Clone->getName());
-    Clone->eraseFromParent();
-    return false;
-  }
   InlineFunctionInfo IFI;
   // Do not redirect the original call until the temporary call has inlined.
   Site.replaceAllUsesWith(Call);
