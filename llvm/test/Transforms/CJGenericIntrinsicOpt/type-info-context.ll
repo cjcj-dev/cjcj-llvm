@@ -6,6 +6,7 @@ target datalayout = "e-m:e-p:64:64-i64:64-n8:16:32:64-S128"
 @A = external global i8
 @B = external global i8
 declare i8* @llvm.cj.get.type.info(i8*, i32, i8**)
+declare i64 @llvm.cj.get.field.offset(i8*, i64, i32)
 declare void @observe(i8*)
 declare void @opaque()
 declare void @escape(i8**)
@@ -48,7 +49,7 @@ entry:
   
   call void @opaque()
   call void @worker(i8* %key)
-  call void @observe(i8* %ti)
+  %offset = call i64 @llvm.cj.get.field.offset(i8* %ti, i64 0, i32 0)
   ret void
 }
 
@@ -65,7 +66,7 @@ entry:
   
   call void @opaque()
   call void @worker(i8* %key)
-  call void @observe(i8* %ti)
+  %offset = call i64 @llvm.cj.get.field.offset(i8* %ti, i64 0, i32 0)
   ret void
 }
 
@@ -82,7 +83,7 @@ entry:
   
   call void @opaque()
   call void @worker(i8* %other)
-  call void @observe(i8* %ti)
+  %offset = call i64 @llvm.cj.get.field.offset(i8* %ti, i64 0, i32 0)
   ret void
 }
 
@@ -99,7 +100,7 @@ entry:
   store i8* %other, i8** %p
   call void @opaque()
   call void @worker(i8* %key)
-  call void @observe(i8* %ti)
+  %offset = call i64 @llvm.cj.get.field.offset(i8* %ti, i64 0, i32 0)
   ret void
 }
 
@@ -116,7 +117,7 @@ entry:
   call void @escape(i8** %p)
   call void @opaque()
   call void @worker(i8* %key)
-  call void @observe(i8* %ti)
+  %offset = call i64 @llvm.cj.get.field.offset(i8* %ti, i64 0, i32 0)
   ret void
 }
 
@@ -150,7 +151,7 @@ entry:
   
   call void @opaque()
   call void @unknown(i8* %key)
-  call void @observe(i8* %ti)
+  %offset = call i64 @llvm.cj.get.field.offset(i8* %ti, i64 0, i32 0)
   ret void
 }
 
@@ -167,7 +168,7 @@ entry:
   
   call void @opaque()
   call void @after_effect(i8* %key)
-  call void @observe(i8* %ti)
+  %offset = call i64 @llvm.cj.get.field.offset(i8* %ti, i64 0, i32 0)
   ret void
 }
 
@@ -187,5 +188,27 @@ left:
   br label %join
 join:
   call void @worker(i8* %key)
+  ret void
+}
+
+; The LRU shape: the callee is conditional but its context consumer is at
+; the common normal-return join. The earlier query still dominates the call.
+; CHECK-LABEL: define void @conditional_live_context(
+; CHECK: call i8* @llvm.cj.get.type.info
+; CHECK-NOT: call void @worker
+; CHECK: call i64 @llvm.cj.get.field.offset(i8* %ti
+; CHECK: ret void
+define void @conditional_live_context(i8* %key, i1 %turn) gc "cangjie" {
+entry:
+  %a = alloca [1 x i8*], align 8
+  %p = getelementptr [1 x i8*], [1 x i8*]* %a, i64 0, i64 0
+  store i8* %key, i8** %p
+  %ti = call i8* @llvm.cj.get.type.info(i8* @A, i32 1, i8** %p)
+  br i1 %turn, label %yes, label %join
+yes:
+  call void @worker(i8* %key)
+  br label %join
+join:
+  %offset = call i64 @llvm.cj.get.field.offset(i8* %ti, i64 0, i32 0)
   ret void
 }

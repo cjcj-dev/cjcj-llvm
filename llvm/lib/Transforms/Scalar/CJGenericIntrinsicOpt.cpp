@@ -19,8 +19,12 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/CFG.h"
+#include "llvm/Analysis/InlineCost.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/MemorySSAUpdater.h"
+#include "llvm/Analysis/PostDominators.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/CJIntrinsics.h"
 #include "llvm/IR/DataLayout.h"
@@ -1116,7 +1120,7 @@ static SmallVector<CallInst *, 8> contextPrologue(Function &F) {
 }
 
 static bool remainsLiveAcross(CallInst &Query, CallInst &Site,
-                              DominatorTree &DT) {
+                              PostDominatorTree &PDT) {
   // This is context propagation of metadata which the original caller already
   // needs after the call. It must not extend a TI's lifetime, including through
   // a safepoint/unload. A fresh query with no such live context is left alone.
@@ -1127,35 +1131,60 @@ static bool remainsLiveAcross(CallInst &Query, CallInst &Site,
     if (!Seen.insert(V).second)
       continue;
     for (User *U : V->users()) {
-      if (isa<BitCastInst>(U)) {
+      if (isa<BitCastInst>(U) || isa<GetElementPtrInst>(U)) {
         Work.push_back(cast<Value>(U));
         continue;
       }
       auto *I = dyn_cast<Instruction>(U);
-      if (I && I != &Site && !isa<PHINode>(I) && DT.dominates(&Site, I))
+      auto *LI = dyn_cast<LoadInst>(U);
+      auto *II = dyn_cast<IntrinsicInst>(U);
+      // An arbitrary pointer use (comparison, store, return, opaque call) is
+      // not a metadata-lifetime witness. Require an existing layout consumer.
+      bool LayoutUse =
+          (LI && LI->isSimple() && LI->getPointerOperand() == V &&
+           LI->getMetadata(LLVMContext::MD_invariant_load)) ||
+          (II && II->getIntrinsicID() == Intrinsic::cj_get_field_offset &&
+           II->getArgOperand(0) == V);
+      if (LayoutUse && I != &Site &&
+          (I->getParent() == Site.getParent()
+               ? Site.comesBefore(I)
+               : PDT.dominates(I->getParent(), Site.getParent())))
         return true;
     }
   }
   return false;
 }
 
-static bool forwardTypeContext(CallInst &Site) {
+static bool forwardTypeContext(CallInst &Site, FunctionAnalysisManager &AM) {
   Function *Callee = Site.getCalledFunction();
   if (!Callee || !Callee->hasLocalLinkage() || Callee->isDeclaration() ||
       Callee == Site.getFunction() || Callee->isVarArg() ||
       !Callee->hasCangjieGC() ||
-      Callee->hasFnAttribute(Attribute::NoInline) || Callee->getInstructionCount() > 512 ||
+      Site.hasFnAttr(Attribute::NoInline) ||
+      Site.getFunction()->hasOptNone() || Callee->hasOptNone() ||
+      Callee->hasFnAttribute(Attribute::NoInline) ||
+      Callee->hasPrefixData() || Callee->hasPrologueData() ||
+      Callee->getInstructionCount() > 512 ||
       Site.hasOperandBundles() || Site.isMustTailCall())
+    return false;
+  Function &Caller = *Site.getFunction();
+  if (!isInlineViable(*Callee).isSuccess() ||
+      !AttributeFuncs::areInlineCompatible(Caller, *Callee) ||
+      !AM.getResult<TargetIRAnalysis>(Caller).areInlineCompatible(&Caller,
+                                                                Callee) ||
+      !AM.getResult<TargetLibraryAnalysis>(Caller).areInlineCompatible(
+          AM.getResult<TargetLibraryAnalysis>(*Callee), false))
     return false;
   auto Queries = contextPrologue(*Callee);
   if (Queries.empty())
     return false;
   DominatorTree CallerDT(*Site.getFunction()), CalleeDT(*Callee);
+  PostDominatorTree CallerPDT(*Site.getFunction());
   SmallVector<std::pair<CallInst *, CallInst *>, 8> Matches;
   for (CallInst *Q : Queries) {
     for (Instruction &I : instructions(*Site.getFunction())) {
       if (!isTypeQuery(&I) || !CallerDT.dominates(&I, &Site) ||
-          !remainsLiveAcross(*cast<CallInst>(&I), Site, CallerDT))
+          !remainsLiveAcross(*cast<CallInst>(&I), Site, CallerPDT))
         continue;
       if (sameContextValue(Q, &I, Site, CallerDT, CalleeDT)) {
         Matches.emplace_back(Q, cast<CallInst>(&I));
@@ -1169,8 +1198,9 @@ static bool forwardTypeContext(CallInst &Site) {
   // Use a temporary internal specialization only as an inlining vehicle. It
   // never reaches codegen, so no managed ABI or hidden-outerTI convention is
   // changed. On inlining failure the original call is kept exactly as it was.
-  SmallVector<Type *, 16> Types(Callee->getFunctionType()->params());
-  SmallVector<Value *, 16> Args(Site.args());
+  auto Params = Callee->getFunctionType()->params();
+  SmallVector<Type *, 16> Types(Params.begin(), Params.end());
+  SmallVector<Value *, 16> Args(Site.arg_begin(), Site.arg_end());
   for (auto Pair : Matches) {
     Types.push_back(Pair.first->getType());
     Args.push_back(Pair.second);
@@ -1213,7 +1243,8 @@ static bool forwardTypeContext(CallInst &Site) {
 } // namespace
 
 PreservedAnalyses CJTypeInfoContext::run(Module &M,
-                                       ModuleAnalysisManager &) const {
+                                       ModuleAnalysisManager &AM) const {
+  auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   SmallVector<WeakTrackingVH, 32> Sites;
   for (Function &F : M)
     if (!F.isDeclaration() && F.hasGC() && F.getGC() == "cangjie")
@@ -1223,7 +1254,12 @@ PreservedAnalyses CJTypeInfoContext::run(Module &M,
             Sites.push_back(CI);
   bool Changed = false;
   for (auto &V : Sites)
-    if (auto *CI = dyn_cast_or_null<CallInst>(V))
-      Changed |= forwardTypeContext(*CI);
+    if (auto *CI = dyn_cast_or_null<CallInst>(V)) {
+      Function *Caller = CI->getFunction();
+      if (forwardTypeContext(*CI, FAM)) {
+        FAM.invalidate(*Caller, PreservedAnalyses::none());
+        Changed = true;
+      }
+    }
   return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
 }
