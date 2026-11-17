@@ -18,6 +18,7 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/InlineCost.h"
 #include "llvm/Analysis/MemoryLocation.h"
@@ -1227,16 +1228,33 @@ static bool forwardTypeContext(CallInst &Site, FunctionAnalysisManager &AM) {
   Call->setCallingConv(Site.getCallingConv());
   Call->setAttributes(Site.getAttributes());
   Call->setDebugLoc(Site.getDebugLoc());
+  // Preserve the ordinary inliner's attribute and cost policy. Evaluate the
+  // specialized body, so the eliminated context queries contribute the saving.
+  auto GetAC = [&AM](Function &F) -> AssumptionCache & {
+    return AM.getResult<AssumptionAnalysis>(F);
+  };
+  auto GetTLI = [&AM](Function &F) -> const TargetLibraryInfo & {
+    return AM.getResult<TargetLibraryAnalysis>(F);
+  };
+  if (!getInlineCost(*Call, getInlineParams(),
+                     AM.getResult<TargetIRAnalysis>(*Clone), GetAC, GetTLI)) {
+    Call->eraseFromParent();
+    AM.clear(*Clone, Clone->getName());
+    Clone->eraseFromParent();
+    return false;
+  }
   InlineFunctionInfo IFI;
   // Do not redirect the original call until the temporary call has inlined.
   Site.replaceAllUsesWith(Call);
   if (!InlineFunction(*Call, IFI).isSuccess()) {
     Call->replaceAllUsesWith(&Site);
     Call->eraseFromParent();
+    AM.clear(*Clone, Clone->getName());
     Clone->eraseFromParent();
     return false;
   }
   Site.eraseFromParent();
+  AM.clear(*Clone, Clone->getName());
   Clone->eraseFromParent();
   return true;
 }
