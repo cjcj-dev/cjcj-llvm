@@ -17,6 +17,7 @@
 
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/CFG.h"
@@ -1264,6 +1265,19 @@ static bool forwardTypeContext(CallInst &Site, FunctionAnalysisManager &AM) {
 
 PreservedAnalyses CJTypeInfoContext::run(Module &M,
                                        ModuleAnalysisManager &AM) const {
+  // Reusing a TI across the inlined body requires its owning native images to
+  // remain loaded. The supported x86-64 GNU/Linux ELF runtime pins each image
+  // and namespace with NODELETE before publishing metadata and keeps them on
+  // logical close (ElfUnloadQuiescence::RetainsNativeImages). Linux alone does
+  // not imply that contract: musl, Android and OHOS do not retain images.
+  // Keep other architectures, ABIs and unspecified targets unchanged until
+  // their runtime retention contract is supported here. Check the module's
+  // target, not the compiler host, including for explicit pass invocation.
+  const Triple T(M.getTargetTriple());
+  if (T.getArch() != Triple::x86_64 || !T.isOSLinux() ||
+      T.getEnvironment() != Triple::GNU || !T.isOSBinFormatELF())
+    return PreservedAnalyses::all();
+
   auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   SmallVector<WeakTrackingVH, 32> Sites;
   for (Function &F : M)
