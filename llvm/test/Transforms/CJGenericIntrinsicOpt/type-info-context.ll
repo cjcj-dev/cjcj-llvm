@@ -289,3 +289,19 @@ entry:
   ret void
 }
 !0 = !{}
+
+; A later context has a layout use, but cannot initialize an earlier callee.
+; CHECK-LABEL: define void @late_context(
+; CHECK: call void @worker(i8* %key)
+; CHECK: call i8* @llvm.cj.get.type.info
+; CHECK: ret void
+define void @late_context(i8* %key) gc "cangjie" {
+entry:
+  %a = alloca [1 x i8*], align 8
+  %p = getelementptr [1 x i8*], [1 x i8*]* %a, i64 0, i64 0
+  store i8* %key, i8** %p
+  call void @worker(i8* %key)
+  %ti = call i8* @llvm.cj.get.type.info(i8* @A, i32 1, i8** %p)
+  %offset = call i64 @llvm.cj.get.field.offset(i8* %ti, i64 0, i32 0)
+  ret void
+}
