@@ -266,6 +266,11 @@ public:
   void computeStackPointerMap() {
     // Worklist containing pending BBs
     std::queue<MachineBasicBlock *> Worklist;
+    DenseSet<MachineBasicBlock *> InWorklist;
+    auto Enqueue = [&](MachineBasicBlock *MBB) {
+      if (InWorklist.insert(MBB).second)
+        Worklist.push(MBB);
+    };
     MapVector<MachineBasicBlock *, SetVector<SPType *>> Ins, Outs;
 
     // Calculate the livein register of each BB.
@@ -285,7 +290,7 @@ public:
       transferSPData(MBB, Outs[&MBB]);
       if (!Outs[&MBB].empty()) {
         for (auto *Succ : MBB.successors()) {
-          Worklist.push(Succ);
+          Enqueue(Succ);
         }
       }
     }
@@ -294,6 +299,8 @@ public:
     while (!Worklist.empty()) {
       MachineBasicBlock *MBB = Worklist.front();
       Worklist.pop();
+      // A changed output may enqueue this block again through a backedge.
+      InWorklist.erase(MBB);
       SetVector<SPType *> Tmp = Ins[MBB];
       const auto OldSize = Tmp.size();
       for (auto *Pred : MBB->predecessors()) {
@@ -316,7 +323,7 @@ public:
       if (Outs[MBB].size() != Tmp.size()) {
         Outs[MBB] = Tmp;
         for (auto *Succ : MBB->successors()) {
-          Worklist.push(Succ);
+          Enqueue(Succ);
         }
       }
     }

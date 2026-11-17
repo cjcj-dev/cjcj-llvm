@@ -104,3 +104,27 @@ exit:
   %second = load volatile i8*, i8** %second_slot, align 8
   ret i8* %second
 }
+
+; A block must leave the pending set before transfer. This self-edge needs
+; further visits: first_slot acquires a stack pointer, then second_slot does.
+; CHECK-LABEL: name: self_backedge
+; CHECK: STATEPOINT 9,{{.*}}%stack.1.first_slot, 0{{.*}}%stack.2.second_slot, 0
+define i8* @self_backedge(i1 %again) gc "cangjie" {
+entry:
+  %p = alloca i8, align 1
+  %first_slot = alloca i8*, align 8
+  %second_slot = alloca i8*, align 8
+  store volatile i8* null, i8** %first_slot, align 8
+  store volatile i8* null, i8** %second_slot, align 8
+  br label %loop
+loop:
+  %point = call token (...) @llvm.cj.gc.statepoint(i64 9, i32 0, void ()* @safepoint, i32 0, i32 0)
+  %previous = load volatile i8*, i8** %first_slot, align 8
+  store volatile i8* %previous, i8** %second_slot, align 8
+  store volatile i8* %p, i8** %first_slot, align 8
+  br i1 %again, label %loop, label %exit
+exit:
+  %first = load volatile i8*, i8** %first_slot, align 8
+  %second = load volatile i8*, i8** %second_slot, align 8
+  ret i8* %second
+}
