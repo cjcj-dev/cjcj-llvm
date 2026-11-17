@@ -18,6 +18,7 @@
 
 #include "llvm/CodeGen/CJStackPointerInserter.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -264,8 +265,26 @@ public:
   ~StackPointerAnalysis() { clearSPData(); }
 
   void computeStackPointerMap() {
-    // Worklist containing pending BBs
-    std::queue<MachineBasicBlock *> Worklist;
+    // Process predecessors before successors, including when a backedge
+    // changes an earlier block. FIFO can propagate each loop update through
+    // the whole remaining function before revisiting the loop header.
+    DenseMap<MachineBasicBlock *, unsigned> Order;
+    for (auto *MBB : ReversePostOrderTraversal<MachineFunction *>(&MF))
+      Order[MBB] = Order.size();
+    for (auto &MBB : MF)
+      if (!Order.count(&MBB))
+        Order[&MBB] = Order.size();
+    auto Later = [&](MachineBasicBlock *A, MachineBasicBlock *B) {
+      return Order.lookup(A) > Order.lookup(B);
+    };
+    std::priority_queue<MachineBasicBlock *, SmallVector<MachineBasicBlock *, 32>,
+                        decltype(Later)>
+        Worklist(Later);
+    DenseSet<MachineBasicBlock *> InWorklist;
+    auto Enqueue = [&](MachineBasicBlock *MBB) {
+      if (InWorklist.insert(MBB).second)
+        Worklist.push(MBB);
+    };
     MapVector<MachineBasicBlock *, SetVector<SPType *>> Ins, Outs;
 
     // Calculate the livein register of each BB.
@@ -285,15 +304,17 @@ public:
       transferSPData(MBB, Outs[&MBB]);
       if (!Outs[&MBB].empty()) {
         for (auto *Succ : MBB.successors()) {
-          Worklist.push(Succ);
+          Enqueue(Succ);
         }
       }
     }
 
     // Iterate until stable
     while (!Worklist.empty()) {
-      MachineBasicBlock *MBB = Worklist.front();
+      MachineBasicBlock *MBB = Worklist.top();
       Worklist.pop();
+      // A changed output may enqueue this block again through a backedge.
+      InWorklist.erase(MBB);
       SetVector<SPType *> Tmp = Ins[MBB];
       const auto OldSize = Tmp.size();
       for (auto *Pred : MBB->predecessors()) {
@@ -308,12 +329,15 @@ public:
         continue;
       }
 
+      // Remember the input before transfer modifies it. Duplicate worklist
+      // entries need no replay until a predecessor contributes a new pointer.
+      Ins[MBB] = Tmp;
       transferSPData(*MBB, Tmp);
       // assert: OldLiveOut is a subset of NewLiveOut
       if (Outs[MBB].size() != Tmp.size()) {
         Outs[MBB] = Tmp;
         for (auto *Succ : MBB->successors()) {
-          Worklist.push(Succ);
+          Enqueue(Succ);
         }
       }
     }
