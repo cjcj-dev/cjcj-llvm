@@ -305,3 +305,143 @@ entry:
   %offset = call i64 @llvm.cj.get.field.offset(i8* %ti, i64 0, i32 0)
   ret void
 }
+
+; Standard call-site noinline remains a veto despite an exact live context.
+; CHECK-LABEL: define void @noinline_site(
+; CHECK: call void @worker(i8* %key)
+; CHECK: ret void
+define void @noinline_site(i8* %key) gc "cangjie" {
+entry:
+  %a = alloca [1 x i8*], align 8
+  %p = getelementptr [1 x i8*], [1 x i8*]* %a, i64 0, i64 0
+  store i8* %key, i8** %p
+  %ti = call i8* @llvm.cj.get.type.info(i8* @A, i32 1, i8** %p)
+  call void @worker(i8* %key) noinline
+  %offset = call i64 @llvm.cj.get.field.offset(i8* %ti, i64 0, i32 0)
+  ret void
+}
+
+define internal void @too_costly(i8* %key) gc "cangjie" {
+entry:
+  %a = alloca [1 x i8*], align 8
+  %p = getelementptr [1 x i8*], [1 x i8*]* %a, i64 0, i64 0
+  store i8* %key, i8** %p
+  %ti = call i8* @llvm.cj.get.type.info(i8* @A, i32 1, i8** %p)
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @opaque()
+  call void @observe(i8* %ti)
+  ret void
+}
+; This body is below the structural 512-instruction cap but exceeds the
+; ordinary inliner cost. Context equality must not override that decision.
+; CHECK-LABEL: define void @cost_veto(
+; CHECK: call void @too_costly(i8* %key)
+; CHECK: ret void
+define void @cost_veto(i8* %key) gc "cangjie" {
+entry:
+  %a = alloca [1 x i8*], align 8
+  %p = getelementptr [1 x i8*], [1 x i8*]* %a, i64 0, i64 0
+  store i8* %key, i8** %p
+  %ti = call i8* @llvm.cj.get.type.info(i8* @A, i32 1, i8** %p)
+  call void @too_costly(i8* %key)
+  %offset = call i64 @llvm.cj.get.field.offset(i8* %ti, i64 0, i32 0)
+  ret void
+}
