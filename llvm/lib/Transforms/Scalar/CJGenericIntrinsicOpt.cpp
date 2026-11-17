@@ -1043,7 +1043,10 @@ static bool sameContextValue(Value *L, Value *R, CallInst &Site,
   R = R->stripPointerCasts();
   if (auto *A = dyn_cast<Argument>(L))
     if (A->getParent() == Site.getCalledFunction())
-      L = Site.getArgOperand(A->getArgNo())->stripPointerCasts();
+      // Actual metadata values are opaque identities in this context. Do not
+      // recursively compare two caller queries with the callee's DT or infer
+      // an equivalence between independently acquired runtime contexts.
+      return Site.getArgOperand(A->getArgNo())->stripPointerCasts() == R;
   if (L == R)
     return true;
   if (auto *LI = dyn_cast<LoadInst>(L)) {

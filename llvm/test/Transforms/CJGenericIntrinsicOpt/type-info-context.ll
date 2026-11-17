@@ -432,6 +432,35 @@ entry:
 }
 ; This body is below the structural 512-instruction cap but exceeds the
 ; ordinary inliner cost. Context equality must not override that decision.
+; A formal TI argument maps only by actual SSA identity. Independently
+; acquired caller queries do not provide an identity/lifetime fact, even if
+; their template and arguments appear equal.
+; CHECK-LABEL: define void @independent_actual_context(
+; CHECK: call i8* @llvm.cj.get.type.info
+; CHECK: call i8* @llvm.cj.get.type.info
+; CHECK: call i8* @llvm.cj.get.type.info
+; CHECK: call void @worker(i8* %second)
+; CHECK: ret void
+define void @independent_actual_context(i8* %key) gc "cangjie" {
+entry:
+  %a = alloca [1 x i8*], align 8
+  %ap = getelementptr [1 x i8*], [1 x i8*]* %a, i64 0, i64 0
+  store i8* %key, i8** %ap
+  %first = call i8* @llvm.cj.get.type.info(i8* @B, i32 1, i8** %ap)
+  %b = alloca [1 x i8*], align 8
+  %bp = getelementptr [1 x i8*], [1 x i8*]* %b, i64 0, i64 0
+  store i8* %first, i8** %bp
+  %context = call i8* @llvm.cj.get.type.info(i8* @A, i32 1, i8** %bp)
+  call void @opaque()
+  %c = alloca [1 x i8*], align 8
+  %cp = getelementptr [1 x i8*], [1 x i8*]* %c, i64 0, i64 0
+  store i8* %key, i8** %cp
+  %second = call i8* @llvm.cj.get.type.info(i8* @B, i32 1, i8** %cp)
+  call void @worker(i8* %second)
+  %offset = call i64 @llvm.cj.get.field.offset(i8* %context, i64 0, i32 0)
+  ret void
+}
+
 ; Keep a second real caller so ordinary inlining cannot claim the
 ; last-call-to-static code-size benefit. This caller has no live TI context.
 define void @cost_second_use(i8* %key) gc "cangjie" {
