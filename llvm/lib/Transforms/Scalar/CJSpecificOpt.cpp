@@ -38,7 +38,12 @@
 
 using namespace llvm;
 
-extern cl::opt<bool> CangjieLTOPreOpt;
+// Owned here (LLVMScalarOpts) and consumed by LLVMPasses' pipeline builders;
+// the lower library must define options that both layers read.
+cl::opt<bool>
+    CangjieLTOPreOpt("cangjie-lto", cl::init(false), cl::Hidden,
+                     cl::desc("cangjie lto pre-optimization phase, and some "
+                              "optimizations are not enabled at this time.."));
 
 #define DEBUG_TYPE "cj-specific-opt"
 

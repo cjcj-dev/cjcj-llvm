@@ -291,10 +291,9 @@ extern cl::opt<int> CountedLoopTripWidth;
 static const Regex DefaultAliasRegex(
     "^(default|thinlto-pre-link|thinlto|lto-pre-link|lto)<(O[0123sz])>$");
 
-cl::opt<bool>
-    CangjieLTOPreOpt("cangjie-lto", cl::init(false), cl::Hidden,
-                     cl::desc("cangjie lto pre-optimization phase, and some "
-                              "optimizations are not enabled at this time.."));
+// Defined in Transforms/Scalar/CJSpecificOpt.cpp so that LLVMScalarOpts does
+// not reference a symbol owned by the higher-level LLVMPasses library.
+extern cl::opt<bool> CangjieLTOPreOpt;
 cl::opt<bool> EnableConfigFlatten("control-flow-flatten",
                                   cl::desc("Flatten control flow"),
                                   cl::NotHidden, cl::init(false));
