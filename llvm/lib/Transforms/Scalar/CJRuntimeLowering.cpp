@@ -1091,13 +1091,6 @@ bool llvm::cjIntrinsicLowersToSafepointCapableCall(Intrinsic::ID ID) {
   return false;
 }
 
-static bool isCJBlockingFunc(Function &F) {
-  if (CJPipeline && F.getName().equals("system")) {
-    return true;
-  }
-  return false;
-}
-
 static bool hasC2NNoFPValueAttrs(AttributeSet AS) {
   for (Attribute A : AS) {
     if (!A.isEnumAttribute() && !A.isIntAttribute())
@@ -1155,18 +1148,14 @@ static bool proveC2NNoFPCallSites(const Function &F) {
   return true;
 }
 
-static void insertGVForNativeFunc(Module &M, Function &F,
-                                  const TargetLibraryInfo &TLI) {
-  LibFunc LF;
-  // For the libc library function, if it is in the trustlist, we do not need
-  // to generate C2N Stub for it.
-
-  if (F.hasFnAttribute("cj2c") && TLI.getLibFunc(F, LF)) {
-    if (!isCJBlockingFunc(F) && TLI.has(LF)) {
-      F.removeFnAttr("cj2c");
-      return;
-    }
-  }
+// Every ordinary foreign callee ("cj2c") keeps its C2N stub, including ones
+// TargetLibraryInfo recognizes as libc functions. A callee without the stub is
+// called outside any saferegion, so a stop-the-world pause must wait for it to
+// return; a libc name proves neither that it cannot block (read, flockfile,
+// pclose) nor which implementation is bound (malloc and strdup may reach an
+// interposed allocator). Calls that are known not to need the transition are
+// declared @FastNative and never carry "cj2c".
+static void insertGVForNativeFunc(Module &M, Function &F) {
   GlobalVariable *CJFuncGV = cast<GlobalVariable>(
       M.getOrInsertGlobal(F.getName().str() + ".CJStubGV", F.getType()));
   CJFuncGV->setInitializer(&F);
@@ -1436,7 +1425,6 @@ PreservedAnalyses CJRuntimeLowering::run(Module &M,
   }
   // Declarations and serialized registration call attributes are normalized.
   bool Changed = true;
-  auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   // Declaring MCC Functions for Backend Processing.
   declareRuntimeFunc(M);
   CJIntrinsicLowering CJLowering(M);
@@ -1446,10 +1434,9 @@ PreservedAnalyses CJRuntimeLowering::run(Module &M,
 
   // traversal Function-Instruction to lower intrinsic
   for (Function &F : M) {
-    auto &TLI = FAM.getResult<TargetLibraryAnalysis>(F);
     // Insert a gv for native Func
     if (F.hasFnAttribute("cj2c") || F.hasFnAttribute("c2cj")) {
-      insertGVForNativeFunc(M, F, TLI);
+      insertGVForNativeFunc(M, F);
       Changed = true;
     }
 
@@ -1485,11 +1472,9 @@ public:
 
     // traversal Function-Instruction to lower intrinsic
     for (Function &F : M) {
-      const TargetLibraryInfo &TLI =
-          getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
       // Insert a gv for native Func
       if (F.hasFnAttribute("cj2c") || F.hasFnAttribute("c2cj")) {
-        insertGVForNativeFunc(M, F, TLI);
+        insertGVForNativeFunc(M, F);
         Changed = true;
       }
 
