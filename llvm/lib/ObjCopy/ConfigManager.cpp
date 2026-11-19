@@ -54,7 +54,7 @@ Expected<const WasmConfig &> ConfigManager::getWasmConfig() const {
       !Common.SplitDWO.empty() || !Common.SymbolsPrefix.empty() ||
       !Common.AllocSectionsPrefix.empty() ||
       Common.DiscardMode != DiscardType::None || !Common.SymbolsToAdd.empty() ||
-      !Common.SymbolsToGlobalize.empty() || !Common.SymbolsToLocalize.empty() ||
+      !Common.SymbolsToGlobalize.empty() ||
       !Common.SymbolsToKeep.empty() || !Common.SymbolsToRemove.empty() ||
       !Common.UnneededSymbolsToRemove.empty() ||
       !Common.SymbolsToWeaken.empty() || !Common.SymbolsToKeepGlobal.empty() ||
@@ -62,8 +62,8 @@ Expected<const WasmConfig &> ConfigManager::getWasmConfig() const {
       !Common.SetSectionFlags.empty() || !Common.SetSectionType.empty() ||
       !Common.SymbolsToRename.empty())
     return createStringError(llvm::errc::invalid_argument,
-                             "only flags for section dumping, removal, and "
-                             "addition are supported");
+                             "only flags for section dumping, removal, "
+                             "addition and symbol localization are supported");
 
   return Wasm;
 }

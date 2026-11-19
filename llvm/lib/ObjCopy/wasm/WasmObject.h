@@ -35,6 +35,10 @@ struct Object {
   void addSectionWithOwnedContents(Section NewSection,
                                    std::unique_ptr<MemoryBuffer> &&Content);
   void removeSections(function_ref<bool(const Section &)> ToRemove);
+  // Keep a rewritten section body alive for the lifetime of the object.
+  void takeOwnership(std::unique_ptr<MemoryBuffer> &&Content) {
+    OwnedContents.emplace_back(std::move(Content));
+  }
 
 private:
   std::vector<std::unique_ptr<MemoryBuffer>> OwnedContents;
