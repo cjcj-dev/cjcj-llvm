@@ -893,7 +893,9 @@ void AsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
     OutStreamer->emitLabel(LocalAlias);
 
   bool IsReflectionGV = false;
-  if (ReflectOffset) {
+  // wasm32 keeps absolute references in reflection data: the PC-relative
+  // .LRef. offsets target the CJ metadata tables, which wasm32 does not emit.
+  if (ReflectOffset && !TM.getTargetTriple().isWasm()) {
     if (GV->hasAttribute("CFileReflect")) {
       IsReflectionGV = true;
     }
