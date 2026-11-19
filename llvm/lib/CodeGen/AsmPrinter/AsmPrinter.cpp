@@ -880,7 +880,9 @@ void AsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
   emitLinkage(GV, EmittedInitSym);
   emitAlignment(Alignment, GV);
 
-  if (GV->isCJMeta()) {
+  // The .LRef. label is only referenced by the CJ metadata tables, which are
+  // not emitted for wasm32 (and wasm data symbols need an explicit .size).
+  if (GV->isCJMeta() && !TM.getTargetTriple().isWasm()) {
     MCSymbol *RefSym =
         OutContext.getOrCreateSymbol(Twine(".LRef.") + GVSym->getName());
     OutStreamer->emitLabel(RefSym);
