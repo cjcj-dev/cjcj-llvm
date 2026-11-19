@@ -394,7 +394,18 @@ public:
   void replaceCallInst(Function *Callee, ArrayRef<Value *> Args,
                        IntrinsicInst *II) const {
     IRBuilder<> Builder(II);
-    CallInst *NewCI = Builder.CreateCall(Callee, Args);
+    // 32-bit targets declare the runtime size parameters as i32 while the
+    // intrinsics always carry i64 sizes; fit integer arguments to the callee.
+    SmallVector<Value *, 6> Fitted(Args.begin(), Args.end());
+    FunctionType *FTy = Callee->getFunctionType();
+    for (unsigned I = 0, E = Fitted.size(); I < E && I < FTy->getNumParams();
+         ++I) {
+      Type *PTy = FTy->getParamType(I);
+      if (PTy->isIntegerTy() && Fitted[I]->getType()->isIntegerTy() &&
+          PTy != Fitted[I]->getType())
+        Fitted[I] = Builder.CreateZExtOrTrunc(Fitted[I], PTy);
+    }
+    CallInst *NewCI = Builder.CreateCall(Callee, Fitted);
     II->replaceAllUsesWith(NewCI);
     II->eraseFromParent();
   }
