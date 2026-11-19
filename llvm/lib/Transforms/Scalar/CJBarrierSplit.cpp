@@ -425,6 +425,12 @@ static bool simplySplit(Function *F) {
 }
 
 static bool splitModuleBarrier(Module &M) {
+  // SplitBarrier assumes 8-byte managed references (the literal 8s below).
+  // With 4-byte references (wasm32) it would drop the bytes after each
+  // reference, so 32-bit modules keep the struct barriers, which
+  // CJBarrierLowering turns into the CJ_MCC_*StructField/StaticStruct calls.
+  if (M.getDataLayout().getPointerSize(1) != 8)
+    return false;
   auto C = &(M.getContext());
   int LongSize = M.getDataLayout().getPointerSizeInBits();
   auto IntptrTy = Type::getIntNTy(*C, LongSize);
