@@ -50,6 +50,14 @@ public:
 
   bool usesPhysRegsForValues() const override { return false; }
 
+  // Cangjie managed pointers are addrspace(1) values that address linear
+  // memory, so casts between the default space and AS1 do not change the
+  // bits. AS1 *global variables* (wasm globals) are still lowered separately
+  // via GlobalAddress; externref/funcref spaces are never no-op.
+  bool isNoopAddrSpaceCast(unsigned SrcAS, unsigned DestAS) const override {
+    return SrcAS <= 1 && DestAS <= 1;
+  }
+
   yaml::MachineFunctionInfo *createDefaultFuncInfoYAML() const override;
   yaml::MachineFunctionInfo *
   convertFuncInfoToYAML(const MachineFunction &MF) const override;
