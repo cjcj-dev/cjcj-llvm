@@ -1166,7 +1166,7 @@ void StructLiveAnalysis::visitMemoryStore(StoreInst *SI,
   // a partial store and the GC scans stale data (SIGSEGV on a null gctib).
   const Triple TT(SI->getModule()->getTargetTriple());
   if (ValType->isPointerTy() || ValType->isIntegerTy(64) ||
-      (TT.isARM() && ValType->isIntegerTy(32))) {
+      (TT.isArch32Bit() && ValType->isIntegerTy(32))) {
     FieldInfo *Field = getFieldInfoByValue(Ptr);
     Value *Base = Field->V;
     if (isa<AllocaInst>(Base) || isa<Argument>(Base))

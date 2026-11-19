@@ -218,7 +218,7 @@ struct LowerGetFieldOffset {
     Value *ElemSizeI64 = IRB.CreateZExt(ElemSizeI32, IRB.getInt64Ty());
     const Triple TT(CI->getModule()->getTargetTriple());
     Value *ElemSize =
-        IRB.CreateSelect(IsRef, TT.isARM() ? IRB.getInt64(4) : IRB.getInt64(8),
+        IRB.CreateSelect(IsRef, TT.isArch32Bit() ? IRB.getInt64(4) : IRB.getInt64(8),
                          ElemSizeI64); // 4|8:ref size
     Offset = IRB.CreateMul(ElemSize, FieldIndex);
     return IRB.CreateAdd(Offset, IRB.getInt64(AttachedInt));
@@ -1011,7 +1011,7 @@ private:
     if (isPrimitiveTypeInfo(GV)) {
       SmallVector<Type *> ElemTypes;
       ElemTypes.push_back(TIType->getPointerTo());
-      if (TT.isARM())
+      if (TT.isArch32Bit())
         ElemTypes.push_back(IRB.getInt32Ty());
       ElemTypes.push_back(IRB.getInt64Ty());
       AI = IRB.CreateAlloca(StructType::get(C, ElemTypes));
@@ -1024,7 +1024,7 @@ private:
       assert(ST && "alloca.generic layout info missing!");
       SmallVector<Type *> ElemTypes;
       ElemTypes.push_back(TIType->getPointerTo());
-      if (TT.isARM())
+      if (TT.isArch32Bit())
         ElemTypes.push_back(IRB.getInt32Ty());
       ElemTypes.push_back(ST);
       StructType *AllocaTy = StructType::get(C, ElemTypes);
@@ -1037,7 +1037,7 @@ private:
       // starts at the payload @8, not the padding @4.
       uint64_t HeaderSize =
           DL.getTypeAllocSize(TIType->getPointerTo()).getFixedSize() +
-          (TT.isARM() ? 4 : 0);
+          (TT.isArch32Bit() ? 4 : 0);
       uint64_t MemSize = AllocaSL->getSizeInBytes() - HeaderSize;
       // %x.payload = getelementptr i8*, %x.i, HeaderSize
       // call @memset(%x.payload, 0, MemSize)

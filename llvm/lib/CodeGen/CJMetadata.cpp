@@ -128,7 +128,7 @@ void CJMetadataInfo::init() {
   SplitedMangledStr.Items.clear();
   StrPoolDictOffsetsSym = Context.getOrCreateSymbol(".Lstr_pool_dict_offsets");
   StrPoolIdx = 0;
-  FuncPtrSize = SM.isARM() ? 4 : 8; // method pc size, arm: 4 byte, other: 8 byte
+  FuncPtrSize = (SM.isARM() || AP.TM.getTargetTriple().isArch32Bit()) ? 4 : 8; // method pc size, arm: 4 byte, other: 8 byte
 }
 
 void CJMetadataInfo::recordKlass(const GlobalVariable *GV) {

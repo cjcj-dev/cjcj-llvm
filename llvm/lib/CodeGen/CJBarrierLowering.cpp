@@ -429,7 +429,7 @@ private:
     // add dstLen to runtime API
     FunctionType *FuncType = nullptr;
     const Triple TT(II->getModule()->getTargetTriple());
-    auto isARM = TT.isARM();
+    auto isARM = TT.isArch32Bit();
     switch (II->getIntrinsicID()) {
     case Intrinsic::cj_gcwrite_generic_payload:
     case Intrinsic::cj_gcread_generic_payload:
@@ -1652,7 +1652,7 @@ bool CJBarrierLowering::runOnFunction(Function &F) {
     return Changed;
 
   const Triple TT(F.getParent()->getTargetTriple());
-  if (TT.isARM()){
+  if (TT.isArch32Bit()){
     EnableTaggedPointer = false;
     EnableGCFastPath = false;
   }
