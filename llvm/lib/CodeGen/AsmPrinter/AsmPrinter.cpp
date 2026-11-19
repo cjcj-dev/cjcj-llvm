@@ -1011,7 +1011,10 @@ void AsmPrinter::emitFunctionHeader() {
     emitFunctionDescriptor();
 
   const Triple TT(F.getParent()->getTargetTriple());
-  if (CJPipeline && F.hasCangjieGC() && !TT.isOSBinFormatMachO()) {
+  // WebAssembly code is not addressable data, so the PC-relative descriptor
+  // word cannot precede the entry; wasm resolves descriptors without PCs.
+  if (CJPipeline && F.hasCangjieGC() && !TT.isOSBinFormatMachO() &&
+      !TT.isWasm()) {
     // Every managed entry refers to its function descriptor.
     MCSymbol *DescSymbol = OutContext.getOrCreateSymbol(
         ".Lmethod_desc." + CurrentFnSym->getName());

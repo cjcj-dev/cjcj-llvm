@@ -957,7 +957,11 @@ static bool callingConvSupported(CallingConv::ID CallConv) {
          CallConv == CallingConv::PreserveAll ||
          CallConv == CallingConv::CXX_FAST_TLS ||
          CallConv == CallingConv::WASM_EmscriptenInvoke ||
-         CallConv == CallingConv::Swift;
+         CallConv == CallingConv::Swift ||
+         // Cangjie runtime-hook convention: on native targets it only changes
+         // which registers the callee preserves. WebAssembly has no
+         // callee-saved registers (locals are per frame), so it lowers like C.
+         CallConv == CallingConv::CangjieGC;
 }
 
 SDValue

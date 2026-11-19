@@ -132,6 +132,11 @@ PreservedAnalyses CJRewriteStatepoint::run(Module &M,
   if (DisableCJRewrite) {
     return PreservedAnalyses::all();
   }
+  // WebAssembly has no machine stack walk and no statepoint lowering: roots on
+  // wasm come from the shadow root stack instead (CJ wasm runtime), so no
+  // statepoints/polls are placed for wasm modules.
+  if (Triple(M.getTargetTriple()).isWasm())
+    return PreservedAnalyses::all();
   Metadata *MD = M.getModuleFlag("HasRewrittenStatepoint");
   if (MD != nullptr)
     report_fatal_error("Module has done CJRewriteStatepoint before!");
@@ -190,9 +195,11 @@ public:
   }
 
   bool runOnModule(Module &M) override {
-    if (DisableCJRewrite) {
+    if (DisableCJRewrite)
       return false;
-    }
+    // See CJRewriteStatepoint::run.
+    if (Triple(M.getTargetTriple()).isWasm())
+      return false;
     Metadata *MD = M.getModuleFlag("HasRewrittenStatepoint");
     if (MD != nullptr)
       report_fatal_error("Module has done CJRewriteStatepoint before!");

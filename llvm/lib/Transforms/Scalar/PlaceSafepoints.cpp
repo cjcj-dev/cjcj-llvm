@@ -231,9 +231,11 @@ public:
   bool runOnModule(Module &M) override {
     bool Changed = false;
 
-    if (DisableGCSupport || EnableBarrierOnly) {
+    if (DisableGCSupport || EnableBarrierOnly)
       return Changed;
-    }
+    // See PlaceSafepoints::run.
+    if (Triple(M.getTargetTriple()).isWasm())
+      return Changed;
 
     // create gc.safepoint_poll for PlaceSafepoints pass.
     bool IsCreated = createGCSafepointPoll(M);
@@ -804,6 +806,11 @@ bool placeSafepoint(Function &F, const TargetLibraryInfo &TLI) {
 PreservedAnalyses PlaceSafepoints::run(Module &M,
                                        ModuleAnalysisManager &AM) const {
   if (DisableGCSupport || EnableBarrierOnly)
+    return PreservedAnalyses::all();
+  // WebAssembly has no machine stack walk and no statepoint lowering: roots on
+  // wasm come from the shadow root stack instead (CJ wasm runtime), so no
+  // statepoints/polls are placed for wasm modules.
+  if (Triple(M.getTargetTriple()).isWasm())
     return PreservedAnalyses::all();
 
   bool Changed = false;
