@@ -12,6 +12,7 @@ add_llvm_component_library(LLVMScalarOpts
   CJDevirtualOpt.cpp
   CJExceptionTailOutline.cpp
   CJRuntimeLowering.cpp
+  CJWasmRoots.cpp
   CJTypedReadHelper.cpp
   CallSiteSplitting.cpp
   ConstantHoisting.cpp

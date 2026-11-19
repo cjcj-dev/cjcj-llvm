@@ -14,6 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/Scalar/CJRuntimeLowering.h"
+#include "CJWasmRoots.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Triple.h"
@@ -327,7 +328,16 @@ struct EscapeScope {
 class CJIntrinsicLowering {
 public:
   explicit CJIntrinsicLowering(Module &M)
-      : M(M), C(M.getContext()), DL(M.getDataLayout()) {}
+      : WasmRoots(checkCJWasmRootContract(M)), M(M), C(M.getContext()),
+        DL(M.getDataLayout()) {}
+
+  bool WasmRoots;
+  SmallVector<Value *, 8> HeapObjects, StackObjects;
+
+  void recordHeapObject(Value *V) {
+    if (WasmRoots)
+      HeapObjects.push_back(V);
+  }
 
   void replaceWithRuntimeFunc(CallBase *CI, bool GCLeafFunc, bool GCMalloc) {
     CI->setCalledFunction(getOrInsertRuntimeFunc(CI, GCLeafFunc, GCMalloc));
@@ -420,6 +430,7 @@ public:
     replaceWithRuntimeFunc(CI, false, true);
     CI->addRetAttr(Attribute::NoAlias);
     setMetadata(CI, "new_gen");
+    recordHeapObject(CI);
   }
 
   void replaceIsReference(CallBase *CI) {
@@ -1048,6 +1059,8 @@ private:
       IRB.CreateMemSet(Data, IRB.getInt8(0), MemSize, Align(8));
     }
     Value *ASC = IRB.CreateAddrSpaceCast(AI, IRB.getInt8PtrTy(1));
+    if (WasmRoots)
+      StackObjects.push_back(ASC);
     CI->replaceAllUsesWith(ASC);
     // Set terminator for invoke instruction.
     if (auto *II = dyn_cast<InvokeInst>(CI)) {
@@ -1381,6 +1394,7 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
       break;
     case Intrinsic::cj_malloc_object: {
       Lowering.loweringMallocObject(CI);
+      Lowering.recordHeapObject(CI);
       Changed = true;
       break;
     }
@@ -1391,11 +1405,13 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
       break;
     case Intrinsic::cj_malloc_array:
       Lowering.replaceNewArray(CI);
+      Lowering.recordHeapObject(CI);
       CI->addRetAttr(Attribute::NoAlias);
       Changed = true;
       break;
     case Intrinsic::cj_malloc_array_generic:
       Lowering.replaceWithRuntimeFunc(CI, false, true);
+      Lowering.recordHeapObject(CI);
       CI->addRetAttr(Attribute::NoAlias);
       Changed = true;
       break;
@@ -1413,6 +1429,11 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
     }
   }
   Lowering.finishAll();
+  if (Lowering.WasmRoots && !F.isDeclaration()) {
+    Changed |= emitCJWasmRoots(F, Lowering.HeapObjects, Lowering.StackObjects);
+    Lowering.HeapObjects.clear();
+    Lowering.StackObjects.clear();
+  }
   return Changed;
 }
 

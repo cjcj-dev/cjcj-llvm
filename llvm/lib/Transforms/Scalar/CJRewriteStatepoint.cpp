@@ -2046,11 +2046,6 @@ static void insertUseHolderAfter(CallBase *Call, const ArrayRef<Value *> Values,
       Func, Values, "", &*II->getUnwindDest()->getFirstInsertionPt()));
 }
 
-static unsigned computeStructTypeOffsets(StructType *ST,
-                                         MapVector<uint64_t, bool> &StructDL,
-                                         const DataLayout &DL,
-                                         uint64_t BaseOff = 0);
-
 static unsigned computeArrayTypeOffsets(ArrayType *AT,
                                         MapVector<uint64_t, bool> &StructDL,
                                         const DataLayout &DL,
@@ -2082,7 +2077,7 @@ static unsigned computeArrayTypeOffsets(ArrayType *AT,
 // StructDL: <Offset(Int64), IsGCPointer(Bool)>
 // Given a StrcutType and Calculate the GCPointer layout and return the
 // number of gcptr fields.
-static unsigned computeStructTypeOffsets(StructType *ST,
+unsigned llvm::computeStructTypeOffsets(StructType *ST,
                                          MapVector<uint64_t, bool> &StructDL,
                                          const DataLayout &DL,
                                          uint64_t BaseOff) {

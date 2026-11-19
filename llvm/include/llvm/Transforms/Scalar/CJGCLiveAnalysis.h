@@ -140,6 +140,9 @@ enum MemoryAccess {
 void checkFailed(const Twine &Message, Instruction *I);
 
 namespace llvm {
+unsigned computeStructTypeOffsets(StructType *ST, MapVector<uint64_t, bool> &Offsets,
+                                  const DataLayout &DL, uint64_t BaseOff = 0);
+
 // Check whether the base of the gcptr is from the alloca struct or argument
 // instruction.
 bool findAllocaInsts(Value *V, SetVector<Value *> &BaseSet,
