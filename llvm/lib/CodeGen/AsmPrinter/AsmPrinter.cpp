@@ -2059,8 +2059,14 @@ bool AsmPrinter::doFinalization(Module &M) {
   computeGlobalGOTEquivs(M);
 
   // Emit global variables.
+  // wasm32 has no CJMetadataInfo emitter (no stackmap / method-info / GC-root
+  // / reflection tables; the wasm runtime does not consume them), so Cangjie
+  // metadata globals (TypeInfo, TypeTemplate, names, offsets, fields, ...) are
+  // emitted as ordinary data symbols there instead of being dropped.
+  const bool EmitCJMetaAsData = TM.getTargetTriple().isWasm();
   for (const auto &G : M.globals()) {
-    if (G.isCJGlobalValue() || G.isCJSDKVersion() || !G.isCJMeta()) {
+    if (G.isCJGlobalValue() || G.isCJSDKVersion() || !G.isCJMeta() ||
+        EmitCJMetaAsData) {
       emitGlobalVariable(&G);
     }
   }
