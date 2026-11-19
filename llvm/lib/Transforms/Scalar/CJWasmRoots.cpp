@@ -7,13 +7,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "CJWasmRoots.h"
+#include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Transforms/Scalar/CJGCLiveAnalysis.h"
-#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 using namespace llvm;
@@ -49,6 +50,7 @@ using RootMap = DenseMap<Value *, Value *>;
 struct Site {
   CallInst *Call;
   SmallVector<Value *, 8> Roots;
+  SmallVector<std::pair<Value *, uint64_t>, 4> Fields;
 };
 
 bool projection(const Instruction &I) {
@@ -104,8 +106,9 @@ public:
   }
 };
 
-void addProjections(Value *Base, RootMap &Owners) {
-  SmallVector<Value *, 8> Work{Base};
+void addProjections(Value *V, RootMap &Owners) {
+  Value *Base = Owners.lookup(V);
+  SmallVector<Value *, 8> Work{V};
   while (!Work.empty()) {
     Value *V = Work.pop_back_val();
     for (User *U : V->users()) {
@@ -117,13 +120,179 @@ void addProjections(Value *Base, RootMap &Owners) {
   }
 }
 
+// A live aggregate need not have all its fields live. Starting at the
+// safepoint, follow successors until a read, a complete overwrite, or the
+// next initialization of this stack object. At an opaque use (e.g. sret),
+// the callee can observe the whole typed payload.
+bool liveFieldAt(CallInst *Site, Value *Object, uint64_t Field,
+                 const RootMap &Owners, const DataLayout &DL) {
+  auto *Storage = cast<AddrSpaceCastInst>(Object)->getOperand(0);
+  const uint64_t Width = DL.getPointerSize(1);
+  auto access = [&](Value *Ptr, uint64_t Bytes, bool Write) {
+    if (Owners.lookup(Ptr) != Object)
+      return 0;
+    APInt Off(DL.getIndexSizeInBits(0), 0);
+    if (Ptr->stripAndAccumulateConstantOffsets(DL, Off, true) != Storage)
+      return Write ? 0 : 1;
+    int64_t Start = Off.getSExtValue();
+    int64_t End = Start + static_cast<int64_t>(Bytes);
+    if (Write)
+      return Start <= int64_t(Field) && End >= int64_t(Field + Width) ? -1 : 0;
+    return End > int64_t(Field) && Start < int64_t(Field + Width) ? 1 : 0;
+  };
+  SmallVector<Instruction *, 8> Work{Site};
+  SmallPtrSet<BasicBlock *, 16> Seen;
+  while (!Work.empty()) {
+    Instruction *Start = Work.pop_back_val();
+    BasicBlock *BB = Start->getParent();
+    bool Killed = false;
+    for (Instruction &I : make_range(Start->getIterator(), BB->end())) {
+      if (&I == Object) {
+        Killed = true;
+        break;
+      }
+      if (projection(I) || isa<DbgInfoIntrinsic>(I))
+        continue;
+      int Effect = 0;
+      if (auto *LI = dyn_cast<LoadInst>(&I)) {
+        Effect = access(LI->getPointerOperand(), DL.getTypeStoreSize(LI->getType()), false);
+      } else if (auto *SI = dyn_cast<StoreInst>(&I)) {
+        if (Owners.lookup(SI->getValueOperand()) == Object)
+          return true;
+        Effect = access(SI->getPointerOperand(),
+                        DL.getTypeStoreSize(SI->getValueOperand()->getType()), true);
+      } else if (auto *MI = dyn_cast<MemIntrinsic>(&I)) {
+        auto *Size = dyn_cast<ConstantInt>(MI->getLength());
+        if (auto *Copy = dyn_cast<MemTransferInst>(MI))
+          if (Owners.lookup(Copy->getRawSource()) == Object &&
+              (!Size || access(Copy->getRawSource(), Size->getLimitedValue(UINT32_MAX), false)))
+            return true;
+        if (Size)
+          Effect = access(MI->getRawDest(), Size->getLimitedValue(UINT32_MAX), true);
+      } else {
+        for (Use &U : I.operands())
+          if (Owners.lookup(U) == Object)
+            return true;
+      }
+      if (Effect > 0)
+        return true;
+      if (Effect < 0) {
+        Killed = true;
+        break;
+      }
+    }
+    if (!Killed)
+      for (BasicBlock *Succ : successors(BB))
+        if (Seen.insert(Succ).second)
+          Work.push_back(&Succ->front());
+  }
+  return false;
+}
+
+// A merge can select a proven interior on one edge and an unknown pointer
+// on another. Select the root, byte displacement and unknown alternative on
+// precisely the original edges. The unknown arm contributes a null slot.
+struct MergedPointer {
+  Value *Offset;
+  Value *Fallback;
+  Value *Known;
+};
+using Merges = DenseMap<Value *, MergedPointer>;
+using StackFields = DenseMap<Value *, SmallVector<uint64_t, 4>>;
+
+void collectMerges(Function &F, DominatorTree &DT, RootMap &Owners,
+                   const StackFields &Fields, Merges &Recipes) {
+  SmallVector<Instruction *, 16> Work;
+  for (BasicBlock *BB : ReversePostOrderTraversal<Function *>(&F))
+    for (Instruction &I : *BB)
+      if (managed(&I) && isa<PHINode, SelectInst>(I) && !Owners.count(&I))
+        Work.push_back(&I);
+  for (Instruction *I : Work) {
+    auto *P = dyn_cast<PHINode>(I);
+    auto *S = dyn_cast<SelectInst>(I);
+    SmallVector<Value *, 4> Inputs, Bases, Offsets, Unknown, Valid;
+    if (P) {
+      // A loop recurrence is not an acyclic proof of its own provenance.
+      if (llvm::any_of(P->blocks(), [&](BasicBlock *B) {
+            return DT.dominates(P->getParent(), B);
+          }))
+        continue;
+      Inputs.append(P->incoming_values().begin(), P->incoming_values().end());
+    } else {
+      Inputs = {S->getTrueValue(), S->getFalseValue()};
+    }
+    auto heap = [&](Value *V) -> Value * {
+      Value *R = Owners.lookup(V);
+      return Fields.count(R) ? nullptr : R;
+    };
+    if (llvm::none_of(Inputs, heap))
+      continue;
+    IRBuilder<> B(I);
+    auto *Ref = B.getInt8PtrTy(1);
+    auto *Int = B.getInt32Ty();
+    for (unsigned J = 0; J != Inputs.size(); ++J) {
+      Value *V = Inputs[J];
+      Value *R = heap(V);
+      B.SetInsertPoint(P ? P->getIncomingBlock(J)->getTerminator() : I);
+      Bases.push_back(R ? B.CreateBitCast(R, Ref) : ConstantPointerNull::get(Ref));
+      Offsets.push_back(R && R != V
+          ? B.CreateSub(B.CreatePtrToInt(V, Int), B.CreatePtrToInt(R, Int))
+          : B.getInt32(0));
+      Value *Known = B.getInt1(R != nullptr);
+      for (Value *D = V; R && D != R;) {
+        auto It = Recipes.find(D);
+        if (It != Recipes.end()) {
+          Known = It->second.Known;
+          break;
+        }
+        auto *Step = dyn_cast<Instruction>(D);
+        if (!Step || !projection(*Step))
+          break;
+        D = Step->getOperand(0);
+      }
+      Unknown.push_back(B.CreateSelect(Known, Constant::getNullValue(I->getType()), V));
+      Valid.push_back(Known);
+    }
+    B.SetInsertPoint(I);
+    auto merge = [&](ArrayRef<Value *> Vs, StringRef Name) -> Value * {
+      if (llvm::all_of(Vs, [&](Value *V) { return V == Vs.front(); }))
+        return Vs.front();
+      if (S)
+        return B.CreateSelect(S->getCondition(), Vs[0], Vs[1], Name);
+      auto *Phi = B.CreatePHI(Vs.front()->getType(), Vs.size(), Name);
+      for (unsigned J = 0; J < Vs.size(); ++J)
+        Phi->addIncoming(Vs[J], P->getIncomingBlock(J));
+      return Phi;
+    };
+    Value *Base = merge(Bases, "wasm.root.base");
+    if (auto *Origin = Owners.lookup(Base))
+      Base = Origin;
+    else
+      Owners[Base] = Base;
+    Owners[I] = Base;
+    Recipes[I] = {merge(Offsets, "wasm.root.offset"),
+                  merge(Unknown, "wasm.root.unknown"), merge(Valid, "wasm.root.known")};
+    addProjections(I, Owners);
+
+  }
+}
+
 // Rebuild a chain of casts/GEPs at its consumer. Dynamic indices are the
 // original SSA values; no heap interior is ever placed in a frame slot.
-Value *materialize(Value *V, Value *Base, AllocaInst *Current, Instruction *At) {
+Value *materialize(Value *V, Value *Base, AllocaInst *Current, Instruction *At,
+                   const Merges &Recipes) {
   IRBuilder<> B(At);
   Value *Result = B.CreateLoad(Base->getType(), Current);
   SmallVector<Instruction *, 4> Steps;
   while (V != Base) {
+    auto It = Recipes.find(V);
+    if (It != Recipes.end()) {
+      auto &R = It->second;
+      Result = B.CreateGEP(B.getInt8Ty(), B.CreateBitCast(Result, B.getInt8PtrTy(1)),
+                           R.Offset, "wasm.root.interior");
+      Result = B.CreateSelect(R.Known, B.CreateBitCast(Result, V->getType()), R.Fallback);
+      break;
+    }
     auto *I = cast<Instruction>(V);
     Steps.push_back(I);
     V = I->getOperand(0);
@@ -141,7 +310,7 @@ bool llvm::emitCJWasmRoots(Function &F, ArrayRef<Value *> HeapObjects,
                            ArrayRef<Value *> StackObjects) {
   Module &M = *F.getParent();
   RootMap Owners;
-  DenseMap<Value *, SmallVector<uint64_t, 4>> Fields;
+  StackFields Fields;
   for (Value *V : HeapObjects)
     Owners[V] = V;
   for (Argument &A : F.args())
@@ -206,6 +375,8 @@ bool llvm::emitCJWasmRoots(Function &F, ArrayRef<Value *> HeapObjects,
   for (Value *Base : Bases)
     addProjections(Base, Owners);
   DominatorTree DT(F);
+  Merges Recipes;
+  collectMerges(F, DT, Owners, Fields, Recipes);
   RootLiveness L(F, DT, Owners);
   L.computeLiveness();
   SmallVector<Site, 16> Sites;
@@ -219,19 +390,27 @@ bool llvm::emitCJWasmRoots(Function &F, ArrayRef<Value *> HeapObjects,
       L.transfer(I, Live);
       if (!mayCollect(I) || Live.empty())
         continue;
-      Sites.push_back({cast<CallInst>(&I), {Live.begin(), Live.end()}});
-      size_t N = 0;
+      Site S{cast<CallInst>(&I), {}, {}};
       for (Value *V : Live) {
         auto It = Fields.find(V);
-        N += It == Fields.end() ? 1 : It->second.size();
-        if (It == Fields.end())
+        if (It == Fields.end()) {
+          S.Roots.push_back(V);
           Needed.insert(V);
+        } else {
+          for (uint64_t Field : It->second)
+            if (liveFieldAt(S.Call, V, Field, Owners, M.getDataLayout()))
+              S.Fields.emplace_back(V, Field);
+        }
       }
-      Capacity = std::max(N, Capacity);
+      size_t Count = S.Roots.size() + S.Fields.size();
+      if (Count) {
+        Capacity = std::max(Count, Capacity);
+        Sites.push_back(std::move(S));
+      }
     }
   }
   if (Sites.empty())
-    return false;
+    return !Recipes.empty();
 
   // Snapshot original consumers before inserting any frame/spill operands.
   SmallVector<Use *, 32> Uses;
@@ -271,7 +450,7 @@ bool llvm::emitCJWasmRoots(Function &F, ArrayRef<Value *> HeapObjects,
     if (auto *P = dyn_cast<PHINode>(At))
       At = P->getIncomingBlock(*U)->getTerminator();
     Value *Base = Owners.lookup(U->get());
-    U->set(materialize(U->get(), Base, Current.lookup(Base), At));
+    U->set(materialize(U->get(), Base, Current.lookup(Base), At, Recipes));
   }
   // Reuse the frame storage across disjoint calls, with exactly the live
   // prefix visible. The call result is defined after its own frame is popped.
@@ -281,7 +460,7 @@ bool llvm::emitCJWasmRoots(Function &F, ArrayRef<Value *> HeapObjects,
     struct Slot { Value *Address, *Cell, *Original; bool IsField; };
     SmallVector<Slot, 8> Published;
     auto publish = [&](Value *Cell, bool IsField) {
-      Type *T = Cell->getType()->getPointerElementType();
+      Type *T = Cell->getType()->getNonOpaquePointerElementType();
       Value *V = B.CreateAlignedLoad(T, Cell, Align(1));
       Value *Address = B.CreateInBoundsGEP(Ty, Frame,
           {B.getInt32(0), B.getInt32(3), B.getInt32(Published.size())});
@@ -289,17 +468,13 @@ bool llvm::emitCJWasmRoots(Function &F, ArrayRef<Value *> HeapObjects,
       B.CreateStore(V, Address, true);
       Published.push_back({Address, Cell, V, IsField});
     };
-    for (Value *V : S.Roots) {
-      auto It = Fields.find(V);
-      if (It == Fields.end()) {
-        publish(Current.lookup(V), false);
-      } else {
-        auto *AI = cast<AddrSpaceCastInst>(V)->getOperand(0);
-        for (uint64_t Offset : It->second) {
-          Value *P = B.CreateConstGEP1_64(B.getInt8Ty(), B.CreateBitCast(AI, Raw), Offset);
-          publish(B.CreateBitCast(P, Ref->getPointerTo()), true);
-        }
-      }
+    for (Value *V : S.Roots)
+      publish(Current.lookup(V), false);
+    for (const auto &Field : S.Fields) {
+      auto *AI = cast<AddrSpaceCastInst>(Field.first)->getOperand(0);
+      Value *P = B.CreateConstGEP1_64(B.getInt8Ty(), B.CreateBitCast(AI, Raw),
+                                      Field.second);
+      publish(B.CreateBitCast(P, Ref->getPointerTo()), true);
     }
     B.CreateStore(B.getInt32(Published.size()), B.CreateStructGEP(Ty, Frame, 2));
     B.CreateCall(Push, Handle);

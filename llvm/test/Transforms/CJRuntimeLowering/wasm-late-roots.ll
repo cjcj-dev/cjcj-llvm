@@ -88,8 +88,63 @@ define void @ref_stack() {
   ret void
 }
 
+; Only the first field is read on a successor. The second reference is
+; overwritten before it can be observed; the container address never escapes.
+%Two = type { i8 addrspace(1)*, i8 addrspace(1)* }
+@Pair.ti = external global %TypeInfo, !RelatedType !4
+; CHECK-LABEL: define i8 addrspace(1)* @one_live_field(
+; CHECK: alloca { i8*, i8*, i32, [1 x i8 addrspace(1)*] }
+; CHECK: store volatile i8 addrspace(1)*
+; CHECK-NOT: store volatile
+; CHECK: store i32 1,
+; CHECK: call void @cjw_root_frame_push
+; CHECK: call void @collect()
+; CHECK: call void @cjw_root_frame_pop
+define i8 addrspace(1)* @one_live_field(i8 addrspace(1)* %v) {
+  %s = call i8 addrspace(1)* @llvm.cj.alloca.generic(i8* bitcast (%TypeInfo* @Pair.ti to i8*), i32 8), !TrustedSize !1
+  %p = getelementptr i8, i8 addrspace(1)* %s, i32 8
+  %first = bitcast i8 addrspace(1)* %p to i8 addrspace(1)* addrspace(1)*
+  %second = getelementptr i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)* %first, i32 1
+  store i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %first
+  store i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %second
+  call void @collect()
+  br label %exit
+exit:
+  store i8 addrspace(1)* null, i8 addrspace(1)* addrspace(1)* %second
+  %result = load i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)* %first
+  ret i8 addrspace(1)* %result
+}
+
+; On the unknown incoming edge the shadow base is null; the unknown pointer
+; itself is retained untouched. On the other edge the original offset is
+; applied to the post-call object, even when the caller uses only the join.
+; CHECK-LABEL: define i8 @mixed(
+; CHECK: [[BASE:%[^ ]+]] = phi i8 addrspace(1)* [ %object, %left ], [ null, %right ]
+; CHECK: [[FALLBACK:%[^ ]+]] = phi i8 addrspace(1)* [ null, %left ], [ %unknown, %right ]
+; CHECK: store volatile i8 addrspace(1)* [[BASE]],
+; CHECK: call void @collect()
+; CHECK: [[RELOAD:%[^ ]+]] = load volatile i8 addrspace(1)*
+; CHECK: call void @cjw_root_frame_pop
+; CHECK: [[ADDR:%[^ ]+]] = getelementptr i8, i8 addrspace(1)* [[RELOAD]], i32
+; CHECK: [[MERGE:%[^ ]+]] = select i1 {{.*}}, i8 addrspace(1)* [[ADDR]], i8 addrspace(1)* [[FALLBACK]]
+; CHECK: load i8, i8 addrspace(1)* [[MERGE]]
+define i8 @mixed(i1 %which, i8 addrspace(1)* "cj.wasm.base" %object, i8 addrspace(1)* %unknown, i32 %offset) {
+  br i1 %which, label %left, label %right
+left:
+  %field = getelementptr i8, i8 addrspace(1)* %object, i32 %offset
+  br label %join
+right:
+  br label %join
+join:
+  %maybe = phi i8 addrspace(1)* [ %field, %left ], [ %unknown, %right ]
+  call void @collect()
+  %byte = load i8, i8 addrspace(1)* %maybe
+  ret i8 %byte
+}
+
 !llvm.module.flags = !{!0}
 !0 = !{i32 1, !"cj.wasm.root.version", i32 1}
 !1 = !{}
 !2 = !{!"Int64.Type"}
 !3 = !{!"RefPayload"}
+!4 = !{!"Two"}
