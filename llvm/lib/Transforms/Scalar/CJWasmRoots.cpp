@@ -250,7 +250,11 @@ void collectMerges(Function &F, DominatorTree &DT, RootMap &Owners,
           break;
         D = Step->getOperand(0);
       }
-      Unknown.push_back(B.CreateSelect(Known, Constant::getNullValue(I->getType()), V));
+      auto *Null = Constant::getNullValue(I->getType());
+      if (auto *C = dyn_cast<ConstantInt>(Known))
+        Unknown.push_back(C->isOne() ? Null : V);
+      else
+        Unknown.push_back(B.CreateSelect(Known, Null, V));
       Valid.push_back(Known);
     }
     B.SetInsertPoint(I);
@@ -273,7 +277,6 @@ void collectMerges(Function &F, DominatorTree &DT, RootMap &Owners,
     Recipes[I] = {merge(Offsets, "wasm.root.offset"),
                   merge(Unknown, "wasm.root.unknown"), merge(Valid, "wasm.root.known")};
     addProjections(I, Owners);
-
   }
 }
 
