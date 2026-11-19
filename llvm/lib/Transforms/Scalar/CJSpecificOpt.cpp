@@ -808,7 +808,10 @@ static bool processCangjieIR(Module &M, unsigned OptLevel) {
   llvm::Triple T(M.getTargetTriple());
   if (T.isOSBinFormatELF() && EnableCJLocalAlias) {
     Changed |= generateLocalAliasForTIMetadata(M);
-  } else if (!T.isOSWindows()) {
+  } else if (!T.isOSWindows() && !T.isWasm()) {
+    // wasm32 links statically with no symbol interposition, so TypeInfo
+    // references already bind locally; WasmObjectWriter also cannot emit a
+    // private alias to a data symbol. (FullLTO is not supported on wasm.)
     // Legacy path: on non-ELF platforms this is the only implementation;
     // on ELF it serves as the --cj-local-alias=false escape hatch (exactly
     // the pre-feature behavior).
