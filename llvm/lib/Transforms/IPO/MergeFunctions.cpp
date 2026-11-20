@@ -407,7 +407,8 @@ bool MergeFunctions::doFunctionalCheck(std::vector<WeakTrackingVH> &Worklist) {
 
 /// Check whether \p F is eligible for function merging.
 static bool isEligibleForMerging(Function &F) {
-  return !F.isDeclaration() && !F.hasAvailableExternallyLinkage();
+  return !F.isDeclaration() && !F.hasAvailableExternallyLinkage() &&
+         !F.hasFnAttribute(llvm::Attribute::NoMerge);
 }
 
 static bool isBBEligibleForOutline(llvm::BasicBlock *BB) {
