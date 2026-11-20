@@ -1,0 +1,15 @@
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+# 仓颉社区统一提交校验：Conventional Commits + DCO
+# 使用说明：https://gitcode.com/Cangjie/cangjie_build/blob/main/docs/pre-commit.md
+default_install_hook_types: [commit-msg]
+
+repos:
+  - repo: https://gitcode.com/Cangjie/cangjie_build
+    rev: b69cd3fb78345d7c85dd3b198a88b37df8ec0453
+    hooks:
+      - id: cangjie-commitlint
+      - id: cangjie-dco
