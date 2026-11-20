@@ -147,7 +147,7 @@ bool scalarSlot(const AllocaInst &AI) {
     } else if (const auto *SI = dyn_cast<StoreInst>(U)) {
       if (SI->getPointerOperand() != &AI ||
           SI->getValueOperand()->getType() != T ||
-          trackedRoot(rootOf(SI->getValueOperand())))
+          trackedRoot(rootOf(const_cast<Value *>(SI->getValueOperand()))))
         return false;
     } else if (const auto *II = dyn_cast<IntrinsicInst>(U)) {
       if (!II->isLifetimeStartOrEnd() && !isa<DbgInfoIntrinsic>(II))
