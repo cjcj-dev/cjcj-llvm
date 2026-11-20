@@ -16,6 +16,7 @@
 #include "llvm/Transforms/Scalar/CJRuntimeLowering.h"
 #include "CJWasmRoots.h"
 
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -39,6 +40,8 @@
 #include <unordered_map>
 
 using namespace llvm;
+
+extern cl::opt<bool> CangjieLTOPreOpt;
 
 namespace llvm {
 extern cl::opt<bool> CJLTOOpt;
@@ -1271,7 +1274,26 @@ static bool lowerNativeCopyEarly(CallBase *Call) {
   return true;
 }
 
-static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
+// Keep these intrinsics until the late wasm phase when return-base exchange
+// is active. Calling an allocator by name is not evidence of its origin;
+// reclassify the optimized calls here with the normal heap/stack lowering.
+static bool isWasmRootAllocation(unsigned IID) {
+  switch (IID) {
+  case Intrinsic::cj_malloc_object:
+  case Intrinsic::cj_alloca_generic:
+  case Intrinsic::cj_malloc_array:
+  case Intrinsic::cj_malloc_array_generic:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static bool runtimeLoweringFunc(
+    Function &F, CJIntrinsicLowering &Lowering,
+    CJRuntimeLowering::Stage Stage = CJRuntimeLowering::Stage::All,
+    CJWasmReturnBases *ReturnBases = nullptr) {
+  using Phase = CJRuntimeLowering::Stage;
   bool Changed = false;
   EscapeScope ES(F);
 
@@ -1282,6 +1304,9 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
       continue;
     }
     unsigned IID = CI->getIntrinsicID();
+    if ((Stage == Phase::BeforeWasmRoots && isWasmRootAllocation(IID)) ||
+        (Stage == Phase::WasmRoots && !isWasmRootAllocation(IID)))
+      continue;
     switch (IID) {
     default:
       break;
@@ -1429,43 +1454,71 @@ static bool runtimeLoweringFunc(Function &F, CJIntrinsicLowering &Lowering) {
     }
   }
   Lowering.finishAll();
-  if (Lowering.WasmRoots && !F.isDeclaration()) {
-    Changed |= emitCJWasmRoots(F, Lowering.HeapObjects, Lowering.StackObjects);
+  if (Lowering.WasmRoots && Stage != Phase::BeforeWasmRoots &&
+      !F.isDeclaration()) {
+    if (ReturnBases)
+      ReturnBases->collect(F, Lowering.HeapObjects);
+    Changed |= emitCJWasmRoots(F, Lowering.HeapObjects, Lowering.StackObjects,
+                               ReturnBases);
     Lowering.HeapObjects.clear();
     Lowering.StackObjects.clear();
   }
   return Changed;
 }
 
+bool llvm::cjWasmReturnBasesRequested() {
+  return CJWasmReturnBases::requested();
+}
+
 PreservedAnalyses CJRuntimeLowering::run(Module &M,
                                          ModuleAnalysisManager &AM) const {
-  if (!hasRunCangjieOpt(M)) {
-    M.setModuleFlag(Module::Warning, "Cangjie_OPT",
-                    ConstantAsMetadata::get(ConstantInt::get(
-                        Type::getInt32Ty(M.getContext()), 1)));
+  const bool Late = S == Stage::WasmRoots;
+  const bool Exchange =
+      CJWasmReturnBases::requested() && !CJLTOOpt && !CangjieLTOPreOpt &&
+      CJWasmReturnBases::applies(M);
+  const Stage EffectiveStage = Exchange ? S : Stage::All;
+  Optional<CJWasmReturnBases> ReturnBases;
+  if (S != Stage::BeforeWasmRoots && CJWasmReturnBases::requested()) {
+    if (Exchange)
+      checkCJWasmRootContract(M);
+    ReturnBases.emplace(M, Exchange);
   }
-  // Declarations and serialized registration call attributes are normalized.
-  bool Changed = true;
-  // Declaring MCC Functions for Backend Processing.
-  declareRuntimeFunc(M);
+  if (Late && !Exchange) {
+    if (ReturnBases)
+      ReturnBases->write();
+    return PreservedAnalyses::all();
+  }
+
+  if (!Late) {
+    if (!hasRunCangjieOpt(M))
+      M.setModuleFlag(Module::Warning, "Cangjie_OPT",
+                      ConstantAsMetadata::get(ConstantInt::get(
+                          Type::getInt32Ty(M.getContext()), 1)));
+    // Declare MCC functions and normalize serialized registration attributes.
+    declareRuntimeFunc(M);
+    if (Triple(M.getTargetTriple()).isARM())
+      for (Function &F : M)
+        F.setAlignment(Align(16));
+  }
+  bool Changed = !Late;
   CJIntrinsicLowering CJLowering(M);
-  if (Triple(M.getTargetTriple()).isARM())
-    for (Function &F : M)
-      F.setAlignment(Align(16));
 
   // traversal Function-Instruction to lower intrinsic
   for (Function &F : M) {
     // Insert a gv for native Func
-    if (F.hasFnAttribute("cj2c") || F.hasFnAttribute("c2cj")) {
+    if (!Late && (F.hasFnAttribute("cj2c") || F.hasFnAttribute("c2cj"))) {
       insertGVForNativeFunc(M, F);
       Changed = true;
     }
 
     if (!CJLTOOpt) {
-      Changed |= runtimeLoweringFunc(F, CJLowering);
+      Changed |= runtimeLoweringFunc(F, CJLowering, EffectiveStage,
+                                     ReturnBases ? &*ReturnBases : nullptr);
     }
   }
 
+  if (ReturnBases)
+    ReturnBases->write();
   if (!Changed)
     return PreservedAnalyses::all();
 

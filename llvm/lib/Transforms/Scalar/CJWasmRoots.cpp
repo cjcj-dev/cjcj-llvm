@@ -11,11 +11,13 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/DiagnosticHandler.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar/CJGCLiveAnalysis.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
@@ -24,6 +26,12 @@ using namespace llvm;
 
 static cl::opt<unsigned> RequestedVersion("cj-wasm-root-version", cl::Hidden,
     cl::desc("Require a matching wasm Cangjie partition root contract"));
+static cl::opt<std::string> ExportReturnBases(
+    "cj-wasm-export-return-bases", cl::Hidden,
+    cl::desc("Write the per-partition wasm return-base records"));
+static cl::opt<std::string> ImportReturnBases(
+    "cj-wasm-import-return-bases", cl::Hidden,
+    cl::desc("Read return-base records from the selected wasm archive member"));
 
 bool llvm::checkCJWasmRootContract(Module &M) {
   Metadata *Version = M.getModuleFlag("cj.wasm.root.version");
@@ -43,11 +51,117 @@ bool llvm::checkCJWasmRootContract(Module &M) {
 
 namespace {
 constexpr char RootRemarkPass[] = "cj-wasm-roots";
+constexpr StringLiteral ReturnBaseHeader = "cj-wasm-return-bases-v1\n";
+constexpr size_t MaxReturnBaseBytes = 1024 * 1024;
 
-bool managed(Value *V) {
-  auto *PT = dyn_cast<PointerType>(V->getType());
+bool managed(Type *T) {
+  auto *PT = dyn_cast<PointerType>(T);
   return PT && PT->getAddressSpace() == 1;
 }
+
+bool managed(const Value *V) { return managed(V->getType()); }
+
+bool isRecordName(StringRef Name) {
+  return !Name.empty() && Name.find_first_not_of(
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.$-") ==
+      StringRef::npos;
+}
+
+bool hasOrdinaryABI(AttributeList Attrs) {
+  for (auto Kind : {Attribute::ByVal, Attribute::ByRef, Attribute::InAlloca,
+                    Attribute::Preallocated, Attribute::StructRet,
+                    Attribute::InReg, Attribute::Nest, Attribute::SwiftSelf,
+                    Attribute::SwiftError, Attribute::SwiftAsync,
+                    Attribute::SExt, Attribute::ZExt, Attribute::ReturnsTwice,
+                    Attribute::Naked})
+    if (Attrs.hasAttrSomewhere(Kind))
+      return false;
+  return true;
+}
+
+bool ordinaryWasmReturn(const Function &F) {
+  return !F.isIntrinsic() && !F.hasComdat() && F.getAddressSpace() == 0 &&
+         !F.hasDLLImportStorageClass() && !F.hasDLLExportStorageClass() &&
+         !F.hasFnAttribute("wasm-import-module") &&
+         !F.hasFnAttribute("wasm-import-name") &&
+         !F.hasFnAttribute("wasm-export-name") &&
+         F.getCallingConv() == CallingConv::C && !F.isVarArg() &&
+         managed(F.getReturnType()) && hasOrdinaryABI(F.getAttributes());
+}
+
+Function *ordinaryWasmCallee(const CallInst &Call) {
+  Function *Callee = Call.getCalledFunction();
+  if (!Callee || Call.isMustTailCall() || Call.hasOperandBundles() ||
+      Call.getCallingConv() != CallingConv::C ||
+      Call.getFunctionType() != Callee->getFunctionType() ||
+      !hasOrdinaryABI(Call.getAttributes()) || !ordinaryWasmReturn(*Callee))
+    return nullptr;
+  return Callee;
+}
+
+bool hasUnsupportedWasmControlFlow(const Instruction &I) {
+  return I.isEHPad() || isa<InvokeInst, ResumeInst, CallBrInst>(I);
+}
+
+bool isConstructorCall(const CallInst &Call) {
+  return Call.arg_size() && managed(Call.getArgOperand(0)) &&
+         Call.getMetadata("cj.wasm.constructor_receiver");
+}
+
+// Establish only identity edges. In particular a projection that was valid
+// as a liveness owner need not be an object base at the return boundary.
+class ReturnValueProof {
+  const SmallPtrSetImpl<Value *> &Origins;
+  const SmallPtrSetImpl<const Function *> &ReceiverIdentities;
+  bool AllowNull;
+  DenseMap<const Value *, bool> Proven;
+
+public:
+  ReturnValueProof(const SmallPtrSetImpl<Value *> &Origins,
+                   const SmallPtrSetImpl<const Function *> &ReceiverIdentities,
+                   bool AllowNull)
+      : Origins(Origins), ReceiverIdentities(ReceiverIdentities),
+        AllowNull(AllowNull) {}
+
+  bool proves(Value *V, unsigned Depth = 0) {
+    if (!managed(V) || Depth == 64)
+      return false;
+    if (Origins.contains(V) || (AllowNull && isa<ConstantPointerNull>(V)))
+      return true;
+    auto Entry = Proven.try_emplace(V, false);
+    if (!Entry.second)
+      return Entry.first->second; // Reject a cycle while proving it.
+    auto Proves = [&](Value *Incoming) { return proves(Incoming, Depth + 1); };
+    bool Result = false;
+    if (auto *Cast = dyn_cast<BitCastOperator>(V))
+      Result = Proves(Cast->getOperand(0));
+    else if (auto *Phi = dyn_cast<PHINode>(V))
+      Result = llvm::all_of(Phi->incoming_values(), Proves);
+    else if (auto *Select = dyn_cast<SelectInst>(V))
+      Result = isGuaranteedNotToBeUndefOrPoison(Select->getCondition()) &&
+               Proves(Select->getTrueValue()) && Proves(Select->getFalseValue());
+    else if (auto *Call = dyn_cast<CallInst>(V))
+      if (isConstructorCall(*Call) &&
+          ReceiverIdentities.contains(ordinaryWasmCallee(*Call)))
+        Result = Proves(Call->getArgOperand(0));
+    Proven[V] = Result;
+    return Result;
+  }
+
+  bool provesReturns(Function &F) {
+    bool SawReturn = false;
+    for (Instruction &I : instructions(F)) {
+      if (hasUnsupportedWasmControlFlow(I))
+        return false;
+      if (auto *Ret = dyn_cast<ReturnInst>(&I)) {
+        SawReturn = true;
+        if (!proves(Ret->getReturnValue()))
+          return false;
+      }
+    }
+    return SawReturn;
+  }
+};
 
 // A root is either an actual heap base or the initialized AS1 view returned
 // by stack allocation lowering. Only the latter's typed fields go into C6.
@@ -373,8 +487,123 @@ Value *materialize(Value *V, Value *Base, AllocaInst *Current, Instruction *At,
 }
 } // namespace
 
+bool CJWasmReturnBases::requested() {
+  return ExportReturnBases.getNumOccurrences() ||
+         ImportReturnBases.getNumOccurrences();
+}
+
+bool CJWasmReturnBases::applies(const Module &M) {
+  Triple Target(M.getTargetTriple());
+  return Target.getArch() == Triple::wasm32 && Target.isOSWASI() &&
+         M.getModuleFlag("cj.wasm.root.version") &&
+         M.getContext().supportsTypedPointers();
+}
+
+CJWasmReturnBases::CJWasmReturnBases(Module &M, bool Enabled) {
+  if (Enabled && ImportReturnBases.getNumOccurrences()) {
+    auto File = MemoryBuffer::getFile(ImportReturnBases.getValue());
+    if (!File)
+      report_fatal_error(Twine("cannot read wasm return bases: ") +
+                         File.getError().message());
+    StringRef Records = (*File)->getBuffer();
+    if (Records.size() > MaxReturnBaseBytes || !Records.endswith("\n") ||
+        !Records.consume_front(ReturnBaseHeader))
+      report_fatal_error("invalid wasm return-base records");
+    while (!Records.empty()) {
+      auto Line = Records.split('\n');
+      if (!isRecordName(Line.first))
+        report_fatal_error("invalid wasm return-base symbol");
+      Imports.insert(Line.first);
+      Records = Line.second;
+    }
+  }
+  if (!ExportReturnBases.getNumOccurrences())
+    return;
+  Exports = ReturnBaseHeader.str();
+  ExportEnabled = Enabled;
+  if (!ExportEnabled)
+    return;
+
+  // Check the actual receiver bodies before root lowering can rewrite their
+  // returns to reloads. The mark selects candidate calls, not trusted bodies.
+  SmallPtrSet<Function *, 8> Candidates;
+  for (Function &F : M)
+    for (Instruction &I : instructions(F)) {
+      const auto *Call = dyn_cast<CallInst>(&I);
+      if (!Call || !isConstructorCall(*Call))
+        continue;
+      auto *Callee = ordinaryWasmCallee(*Call);
+      if (Callee && !Callee->isDeclaration() &&
+          (Callee->hasLocalLinkage() || Callee->hasExternalLinkage()))
+        Candidates.insert(Callee);
+    }
+  bool Grew;
+  do {
+    Grew = false;
+    for (Function *Callee : Candidates) {
+      if (ReceiverIdentities.contains(Callee))
+        continue;
+      SmallPtrSet<Value *, 1> Receiver{Callee->getArg(0)};
+      if (ReturnValueProof(Receiver, ReceiverIdentities, false)
+              .provesReturns(*Callee))
+        Grew |= ReceiverIdentities.insert(Callee).second;
+    }
+  } while (Grew);
+}
+
+bool CJWasmReturnBases::imports(const CallInst &Call) const {
+  if (Imports.empty())
+    return false;
+  const Function *Callee = ordinaryWasmCallee(Call);
+  return Callee && Callee->isDeclaration() && Callee->hasExternalLinkage() &&
+         Imports.contains(Callee->getName());
+}
+
+void CJWasmReturnBases::collect(Function &F, ArrayRef<Value *> HeapObjects) {
+  if (!ExportEnabled || !F.hasExternalLinkage() || F.isDeclaration() ||
+      !isRecordName(F.getName()) || !ordinaryWasmReturn(F))
+    return;
+  SmallPtrSet<Value *, 8> Origins;
+  for (Value *V : HeapObjects) {
+    auto *Call = dyn_cast<CallInst>(V);
+    Function *Callee = Call ? ordinaryWasmCallee(*Call) : nullptr;
+    if (Callee && Callee->isDeclaration() && Callee->hasExternalLinkage())
+      Origins.insert(Call);
+  }
+  if (!ReturnValueProof(Origins, ReceiverIdentities, true).provesReturns(F))
+    return;
+  // The driver limits v1 records to 1 MiB. An oversized partition exports
+  // no facts rather than passing an incomplete or rejected record set.
+  if (F.getName().size() >= MaxReturnBaseBytes - Exports.size()) {
+    Exports = ReturnBaseHeader.str();
+    ExportEnabled = false;
+    return;
+  }
+  Exports.append(F.getName().data(), F.getName().size());
+  Exports.push_back('\n');
+}
+
+void CJWasmReturnBases::write() const {
+  if (Exports.empty())
+    return;
+  std::error_code Error;
+  raw_fd_ostream Out(ExportReturnBases.getValue(), Error);
+  if (Error)
+    report_fatal_error(Twine("cannot open wasm return-base output: ") +
+                       Error.message());
+  Out << Exports;
+  Out.close();
+  if (Out.has_error()) {
+    Error = Out.error();
+    Out.clear_error();
+    report_fatal_error(Twine("cannot write wasm return bases: ") +
+                       Error.message());
+  }
+}
+
 bool llvm::emitCJWasmRoots(Function &F, ArrayRef<Value *> HeapObjects,
-                           ArrayRef<Value *> StackObjects) {
+                           ArrayRef<Value *> StackObjects,
+                           const CJWasmReturnBases *ReturnBases) {
   Module &M = *F.getParent();
   RootMap Owners;
   StackFields Fields;
@@ -397,13 +626,14 @@ bool llvm::emitCJWasmRoots(Function &F, ArrayRef<Value *> HeapObjects,
   SmallVector<CallInst *, 4> Constructors;
   for (Instruction &I : instructions(F)) {
     // C6 has no EH cleanup path. Match the scope of the existing wasm ABI.
-    if (I.isEHPad() || isa<InvokeInst, ResumeInst, CallBrInst>(I))
+    if (hasUnsupportedWasmControlFlow(I))
       return false;
     auto *CI = dyn_cast<CallInst>(&I);
     if (!CI || !managed(CI))
       continue;
     Function *Fn = CI->getCalledFunction();
-    if (Fn && Fn->getAttributes().hasRetAttr("cj.wasm.base"))
+    if ((Fn && Fn->getAttributes().hasRetAttr("cj.wasm.base")) ||
+        (ReturnBases && ReturnBases->imports(*CI)))
       Owners[CI] = CI;
     else if (Fn && CI->arg_size() && CI->getMetadata("cj.wasm.constructor_receiver"))
       Constructors.push_back(CI);

@@ -1226,6 +1226,9 @@ Error PassBuilder::parseModulePass(ModulePassManager &MPM,
                               .Case("Os", OptimizationLevel::Os)
                               .Case("Oz", OptimizationLevel::Oz);
 
+    const bool LateWasmRoots =
+        CJPipeline && Matches[1] == "default" && !CangjieLTOPreOpt &&
+        cjWasmReturnBasesRequested();
     if (CJPipeline) {
       // Customize parameters for cangjie-pipeline.
       if (L.getSpeedupLevel() > 1 && !MaxRecursionInl.getPosition()) {
@@ -1267,7 +1270,9 @@ Error PassBuilder::parseModulePass(ModulePassManager &MPM,
       MPM.addPass(CJFillMetadata());
       if (L.getSpeedupLevel() > 1)
         MPM.addPass(CJTypeInfoContext());
-      MPM.addPass(CJRuntimeLowering());
+      MPM.addPass(CJRuntimeLowering(
+          LateWasmRoots ? CJRuntimeLowering::Stage::BeforeWasmRoots
+                        : CJRuntimeLowering::Stage::All));
       if (EnableCJBarrierSplit)
         MPM.addPass(CJBarrierSplit());
       if (CJPipeline && L.getSpeedupLevel() == 2 && EnableCJGCInstrTransform) {
@@ -1316,6 +1321,8 @@ Error PassBuilder::parseModulePass(ModulePassManager &MPM,
         if (EnableObfLayout)
           MPM.addPass(LayoutObfuscator());
       }
+      if (LateWasmRoots)
+        MPM.addPass(CJRuntimeLowering(CJRuntimeLowering::Stage::WasmRoots));
     };
 
     if (L == OptimizationLevel::O0 && Matches[1] != "thinlto" &&
@@ -1813,6 +1820,15 @@ Error PassBuilder::parseModulePassPipeline(ModulePassManager &MPM,
 // pre-populate the analysis managers with target-specific stuff?
 Error PassBuilder::parsePassPipeline(ModulePassManager &MPM,
                                      StringRef PipelineText) {
+  // The driver binds facts to the result of this default pipeline. Do not
+  // carry them through appended passes that can replace a selected definition.
+  if (CJPipeline && cjWasmReturnBasesRequested() &&
+      (!PipelineText.startswith("default<") ||
+       !DefaultAliasRegex.match(PipelineText)))
+    return make_error<StringError>(
+        "wasm return bases require the default non-LTO Cangjie pipeline",
+        inconvertibleErrorCode());
+
   auto Pipeline = parsePipelineText(PipelineText);
   if (!Pipeline || Pipeline->empty())
     return make_error<StringError>(

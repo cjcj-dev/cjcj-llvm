@@ -30,8 +30,15 @@ class Module;
 /// apply the same policy as the post-lowering statepoint pass.
 bool cjIntrinsicLowersToSafepointCapableCall(Intrinsic::ID ID);
 
+bool cjWasmReturnBasesRequested();
+
 struct CJRuntimeLowering : public PassInfoMixin<CJRuntimeLowering> {
+  enum class Stage { All, BeforeWasmRoots, WasmRoots };
+  explicit CJRuntimeLowering(Stage S = Stage::All) : S(S) {}
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) const;
+
+private:
+  Stage S;
 };
 } // namespace llvm
 
