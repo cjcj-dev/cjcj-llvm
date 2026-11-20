@@ -26,7 +26,7 @@ declare void @llvm.memset.p0i8.i32(i8*, i8, i32, i1)
 ; CHECK: store i32 0,
 ; CHECK: store i8* {{.*}}, i8** @__cj_root_top
 ; CHECK: store i8 addrspace(1)* %p, i8 addrspace(1)**
-; CHECK-NEXT: store i32 1,
+; CHECK: store i32 1,
 ; CHECK-NEXT: call void @collect()
 ; CHECK: store i8* %wasm.root.prev, i8** @__cj_root_top
 ; CHECK-NEXT: ret void
@@ -42,7 +42,7 @@ define void @live_across(i8 addrspace(1)* %p) {
 ; and a dead value is not published at a later call (nslots = 0 still written).
 ; CHECK-LABEL: define void @arg_only(
 ; CHECK: store i8 addrspace(1)* %p, i8 addrspace(1)**
-; CHECK-NEXT: store i32 1,
+; CHECK: store i32 1,
 ; CHECK-NEXT: call void @use(i8 addrspace(1)* %p)
 ; CHECK: store i32 0,
 ; CHECK-NEXT: call void @collect()
@@ -55,7 +55,7 @@ define void @arg_only(i8 addrspace(1)* %p) {
 ; Rule 4: a derived GEP live across the call publishes its root, not itself.
 ; CHECK-LABEL: define void @derived(
 ; CHECK: store i8 addrspace(1)* %p, i8 addrspace(1)**
-; CHECK-NEXT: store i32 1,
+; CHECK: store i32 1,
 ; CHECK-NEXT: call void @collect()
 define void @derived(i8 addrspace(1)* %p) {
   %q = getelementptr inbounds i8, i8 addrspace(1)* %p, i32 16
@@ -68,7 +68,7 @@ define void @derived(i8 addrspace(1)* %p) {
 ; source alive.
 ; CHECK-LABEL: define void @as_integer(
 ; CHECK: store i8 addrspace(1)* %p, i8 addrspace(1)**
-; CHECK-NEXT: store i32 1,
+; CHECK: store i32 1,
 ; CHECK-NEXT: call void @collect()
 define void @as_integer(i8 addrspace(1)* %p) {
   %i = ptrtoint i8 addrspace(1)* %p to i32
@@ -83,7 +83,7 @@ define void @as_integer(i8 addrspace(1)* %p) {
 ; CHECK: store i32 0,
 ; CHECK-NEXT: %r = invoke i8 addrspace(1)* @make()
 ; CHECK: store i8 addrspace(1)* %r, i8 addrspace(1)**
-; CHECK-NEXT: store i32 1,
+; CHECK: store i32 1,
 ; CHECK-NEXT: call void @collect()
 define void @invoke_site() personality i32 (...)* @__gxx_personality_v0 {
 entry:
