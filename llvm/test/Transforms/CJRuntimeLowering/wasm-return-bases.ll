@@ -4,8 +4,8 @@
 ; RUN: echo varargsSupplied >> %t.in
 ; RUN: opt -passes=cj-runtime-lowering,verify -cj-wasm-root-version=1 -cj-wasm-export-return-bases=%t.out -cj-wasm-import-return-bases=%t.in -S %s -o %t.ll
 ; RUN: FileCheck %s --check-prefix=FACT --match-full-lines --input-file=%t.out
-; RUN: FileCheck %s --check-prefix=IMPORT --input-file=%t.ll
-; RUN: opt -passes=cj-runtime-lowering,verify -cj-wasm-root-version=1 -S %s -o - | FileCheck %s --check-prefix=DEFAULT
+; RUN: FileCheck %s --check-prefixes=ROOTS,IMPORT --input-file=%t.ll
+; RUN: opt -passes=cj-runtime-lowering,verify -cj-wasm-root-version=1 -S %s -o - | FileCheck %s --check-prefix=ROOTS
 ; RUN: not opt -passes='default<O2>,verify' -cangjie-pipeline -cj-wasm-export-return-bases=%t.extra -disable-output %s 2>&1 | FileCheck %s --check-prefix=PIPELINE
 ; PIPELINE: wasm return bases require the default non-LTO Cangjie pipeline
 
@@ -98,23 +98,39 @@ define weak i8 addrspace(1)* @weakNull() {
   ret i8 addrspace(1)* null
 }
 
-; Only the direct, ordinary tail call becomes a root. The imported fact
-; does not become a declaration attribute or an exported wrapper fact.
+; Imported return-base facts stay records only: they do not become a
+; declaration attribute or an exported wrapper fact, and rooting under the
+; complete contract does not depend on them (imported and default outputs
+; publish the same frames).
 ; IMPORT: declare i8 addrspace(1)* @supplied()
-; IMPORT-LABEL: define i8 addrspace(1)* @uses()
-; IMPORT: %kept = tail call i8 addrspace(1)* @supplied()
-; IMPORT: store volatile i8 addrspace(1)* %kept,
-; IMPORT: call void @cjw_root_frame_push
-; IMPORT-NEXT: call void @allocate()
-; IMPORT-NEXT: [[RELOAD:%[^ ]+]] = load volatile i8 addrspace(1)*
-; IMPORT-NEXT: call void @cjw_root_frame_pop
-; IMPORT-NEXT: call void @consume(i8 addrspace(1)* [[RELOAD]])
-; IMPORT: ret i8 addrspace(1)* [[RELOAD]]
-; DEFAULT-LABEL: define i8 addrspace(1)* @uses()
-; DEFAULT-NEXT: %kept = tail call i8 addrspace(1)* @supplied()
-; DEFAULT-NEXT: call void @allocate()
-; DEFAULT-NEXT: call void @consume(i8 addrspace(1)* %kept)
-; DEFAULT-NEXT: ret i8 addrspace(1)* %kept
+; ROOTS-LABEL: define i8 addrspace(1)* @uses()
+; ROOTS: %kept = tail call i8 addrspace(1)* @supplied()
+; ROOTS: store volatile i8 addrspace(1)* %kept,
+; ROOTS: call void @cjw_root_frame_push_complete(
+; ROOTS-NEXT: call void @allocate()
+; ROOTS-NEXT: call void @cjw_root_frame_pop_complete(
+; ROOTS-NEXT: call void @consume(i8 addrspace(1)* %kept)
+; ROOTS-NEXT: ret i8 addrspace(1)* %kept
+; ROOTS-LABEL: define void @receiverIdentity
+; ROOTS: store volatile i8 addrspace(1)* %obj,
+; ROOTS: call void @cjw_root_frame_push_complete(
+; ROOTS-NEXT: %v = call i8 addrspace(1)* @outerCtor(i8 addrspace(1)* %obj)
+; ROOTS-NEXT: call void @cjw_root_frame_pop_complete(
+; ROOTS: store volatile i8 addrspace(1)* %obj,
+; ROOTS: call void @cjw_root_frame_push_complete(
+; ROOTS-NEXT: call void @allocate()
+; ROOTS-NEXT: call void @cjw_root_frame_pop_complete(
+; ROOTS-NEXT: call void @consume(i8 addrspace(1)* %obj)
+; ROOTS-LABEL: define void @ineligible()
+; ROOTS: store volatile i8 addrspace(1)* %weak,
+; ROOTS: %varargs = call i8 addrspace(1)* (...) @varargsSupplied()
+; ROOTS: store volatile i8 addrspace(1)* %weak,
+; ROOTS: store volatile i8 addrspace(1)* %varargs,
+; ROOTS: store volatile i32 -2147483646,
+; ROOTS: call void @allocate()
+; ROOTS-LABEL: define i8 addrspace(1)* @preserveMustTail()
+; ROOTS-NEXT: %v = musttail call i8 addrspace(1)* @supplied()
+; ROOTS-NEXT: ret i8 addrspace(1)* %v
 define i8 addrspace(1)* @uses() {
   %kept = tail call i8 addrspace(1)* @supplied()
   call void @allocate()
@@ -134,22 +150,6 @@ define i8 addrspace(1)* @outerCtor(i8 addrspace(1)* %self) {
   ret i8 addrspace(1)* %v
 }
 
-; IMPORT-LABEL: define void @receiverIdentity
-; IMPORT: store volatile i8 addrspace(1)* %obj,
-; IMPORT: call void @cjw_root_frame_push
-; IMPORT: call i8 addrspace(1)* @outerCtor
-; IMPORT: call void @allocate()
-; IMPORT: [[OBJRELOAD:%[^ ]+]] = load volatile i8 addrspace(1)*
-; IMPORT: call void @cjw_root_frame_pop
-; IMPORT: call void @consume(i8 addrspace(1)* [[OBJRELOAD]])
-; DEFAULT-LABEL: define void @receiverIdentity
-; DEFAULT: store volatile i8 addrspace(1)* %obj,
-; DEFAULT: call void @cjw_root_frame_push
-; DEFAULT: call i8 addrspace(1)* @outerCtor
-; DEFAULT: call void @allocate()
-; DEFAULT: [[DEFAULTRELOAD:%[^ ]+]] = load volatile i8 addrspace(1)*
-; DEFAULT: call void @cjw_root_frame_pop
-; DEFAULT: call void @consume(i8 addrspace(1)* [[DEFAULTRELOAD]])
 define void @receiverIdentity(i8 addrspace(1)* %obj) {
   %v = call i8 addrspace(1)* @outerCtor(i8 addrspace(1)* %obj), !cj.wasm.constructor_receiver !1
   call void @allocate()
@@ -157,10 +157,6 @@ define void @receiverIdentity(i8 addrspace(1)* %obj) {
   ret void
 }
 
-; IMPORT-LABEL: define void @ineligible()
-; IMPORT-NOT: @cjw_root_frame_push
-; IMPORT: call void @consume(i8 addrspace(1)* %varargs)
-; IMPORT-NEXT: ret void
 define void @ineligible() {
   %weak = call i8 addrspace(1)* @weakSupplied()
   %varargs = call i8 addrspace(1)* (...) @varargsSupplied()
@@ -170,9 +166,6 @@ define void @ineligible() {
   ret void
 }
 
-; IMPORT-LABEL: define i8 addrspace(1)* @preserveMustTail()
-; IMPORT-NEXT: %v = musttail call i8 addrspace(1)* @supplied()
-; IMPORT-NEXT: ret i8 addrspace(1)* %v
 define i8 addrspace(1)* @preserveMustTail() {
   %v = musttail call i8 addrspace(1)* @supplied()
   ret i8 addrspace(1)* %v
