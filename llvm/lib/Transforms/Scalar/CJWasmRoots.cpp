@@ -518,9 +518,15 @@ bool llvm::emitCJWasmRoots(Function &F, bool &Complete) {
       }
       uint64_t Bytes = DL.getTypeAllocSize(AI->getAllocatedType()) *
                        cast<ConstantInt>(AI->getArraySize())->getZExtValue();
-      if (Bytes == 0)
+      // References sit at their natural (4-byte) alignment; the runtime
+      // scans the range word by word.
+      if (Bytes < 4)
         continue;
-      if ((Bytes + 3) / 4 > MaxRangeWords) {
+      if (AI->getAlign() < Align(4)) {
+        AI->setAlignment(Align(4));
+        Changed = true;
+      }
+      if (Bytes / 4 > MaxRangeWords) {
         missedRoot(F, AI, "alloca too large to publish");
         Complete = false;
         return false;
@@ -631,7 +637,7 @@ bool llvm::emitCJWasmRoots(Function &F, bool &Complete) {
       Value *Slot = B.CreateInBoundsGEP(
           TableTy, Table, {B.getInt32(0), B.getInt32(1), B.getInt32(I)});
       B.CreateStore(Start, B.CreateStructGEP(RangeTy, Slot, 0));
-      B.CreateStore(B.getInt32(uint32_t((Bytes + 3) / 4)),
+      B.CreateStore(B.getInt32(uint32_t(Bytes / 4)),
                     B.CreateStructGEP(RangeTy, Slot, 1));
     }
     Desc = B.CreateBitCast(Table, Raw);
