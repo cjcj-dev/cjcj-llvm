@@ -653,12 +653,12 @@ bool llvm::emitCJWasmRoots(Function &F, ArrayRef<Value *> HeapObjects,
     else if (Fn && CI->arg_size() &&
              CI->getMetadata("cj.wasm.constructor_receiver")) {
       Constructors.push_back(CI);
-      // A proven constructor body returns its receiver unchanged.  For the
-      // raw i8 AS1 ABI receiver, that also proves the incoming receiver is a
-      // heap base and lets the frame protect it while the constructor does
-      // further allocation.  Typed record receivers are excluded above.
-      if (ReturnBases && ReturnBases->receiverIdentity(*CI) &&
-          objectReceiver(CI->getArgOperand(0)))
+      // The frontend's constructor_receiver marker is the producer/runtime
+      // contract for a class constructor.  Its raw i8 AS1 receiver is the
+      // object heap base, including when the constructor is an external
+      // declaration.  Typed record receivers (Array<T>::init %this, for
+      // example) are excluded and remain conservative.
+      if (objectReceiver(CI->getArgOperand(0)))
         Owners.try_emplace(CI->getArgOperand(0), CI->getArgOperand(0));
     }
   }

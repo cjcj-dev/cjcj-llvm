@@ -142,6 +142,14 @@ define i8 addrspace(1)* @outerCtor(i8 addrspace(1)* %self) {
 ; IMPORT: [[OBJRELOAD:%[^ ]+]] = load volatile i8 addrspace(1)*
 ; IMPORT: call void @cjw_root_frame_pop
 ; IMPORT: call void @consume(i8 addrspace(1)* [[OBJRELOAD]])
+; DEFAULT-LABEL: define void @receiverIdentity
+; DEFAULT: store volatile i8 addrspace(1)* %obj,
+; DEFAULT: call void @cjw_root_frame_push
+; DEFAULT: call i8 addrspace(1)* @outerCtor
+; DEFAULT: call void @allocate()
+; DEFAULT: [[DEFAULTRELOAD:%[^ ]+]] = load volatile i8 addrspace(1)*
+; DEFAULT: call void @cjw_root_frame_pop
+; DEFAULT: call void @consume(i8 addrspace(1)* [[DEFAULTRELOAD]])
 define void @receiverIdentity(i8 addrspace(1)* %obj) {
   %v = call i8 addrspace(1)* @outerCtor(i8 addrspace(1)* %obj), !cj.wasm.constructor_receiver !1
   call void @allocate()
