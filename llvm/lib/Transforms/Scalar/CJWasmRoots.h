@@ -34,6 +34,7 @@ public:
   static bool applies(const Module &M);
   explicit CJWasmReturnBases(Module &M, bool Enabled);
   bool imports(const CallInst &Call) const;
+  bool receiverIdentity(const CallInst &Call) const;
   void collect(Function &F, ArrayRef<Value *> HeapObjects);
   void write() const;
 };

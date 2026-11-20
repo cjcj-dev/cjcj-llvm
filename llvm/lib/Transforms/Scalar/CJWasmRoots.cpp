@@ -61,6 +61,16 @@ bool managed(Type *T) {
 
 bool managed(const Value *V) { return managed(V->getType()); }
 
+// Class constructors receive the raw AS1 object pointer.  This is the one
+// receiver shape for which the frontend/runtime ABI says the argument is a
+// heap base; typed AS1 record views (for example Array<T>::init's %this) are
+// deliberately excluded and remain conservative.
+bool objectReceiver(const Value *V) {
+  auto *PT = dyn_cast<PointerType>(V->getType());
+  return PT && PT->getAddressSpace() == 1 &&
+         PT->getNonOpaquePointerElementType()->isIntegerTy(8);
+}
+
 bool isRecordName(StringRef Name) {
   return !Name.empty() && Name.find_first_not_of(
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.$-") ==
@@ -559,6 +569,11 @@ bool CJWasmReturnBases::imports(const CallInst &Call) const {
          Imports.contains(Callee->getName());
 }
 
+bool CJWasmReturnBases::receiverIdentity(const CallInst &Call) const {
+  Function *Callee = ordinaryWasmCallee(Call);
+  return Callee && ReceiverIdentities.contains(Callee);
+}
+
 void CJWasmReturnBases::collect(Function &F, ArrayRef<Value *> HeapObjects) {
   if (!ExportEnabled || !F.hasExternalLinkage() || F.isDeclaration() ||
       !isRecordName(F.getName()) || !ordinaryWasmReturn(F))
@@ -635,8 +650,17 @@ bool llvm::emitCJWasmRoots(Function &F, ArrayRef<Value *> HeapObjects,
     if ((Fn && Fn->getAttributes().hasRetAttr("cj.wasm.base")) ||
         (ReturnBases && ReturnBases->imports(*CI)))
       Owners[CI] = CI;
-    else if (Fn && CI->arg_size() && CI->getMetadata("cj.wasm.constructor_receiver"))
+    else if (Fn && CI->arg_size() &&
+             CI->getMetadata("cj.wasm.constructor_receiver")) {
       Constructors.push_back(CI);
+      // A proven constructor body returns its receiver unchanged.  For the
+      // raw i8 AS1 ABI receiver, that also proves the incoming receiver is a
+      // heap base and lets the frame protect it while the constructor does
+      // further allocation.  Typed record receivers are excluded above.
+      if (ReturnBases && ReturnBases->receiverIdentity(*CI) &&
+          objectReceiver(CI->getArgOperand(0)))
+        Owners.try_emplace(CI->getArgOperand(0), CI->getArgOperand(0));
+    }
   }
   const LLVMContext &Ctx = F.getContext();
   const bool Report =

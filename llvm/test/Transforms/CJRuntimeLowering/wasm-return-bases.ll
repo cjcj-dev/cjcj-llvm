@@ -122,6 +122,33 @@ define i8 addrspace(1)* @uses() {
   ret i8 addrspace(1)* %kept
 }
 
+; A constructor identity also proves its raw i8 AS1 receiver is the heap
+; object being initialized.  Keep the typed record-view case conservative;
+; this test exercises only the class-constructor ABI shape.
+define i8 addrspace(1)* @identityCtor(i8 addrspace(1)* %self) {
+  ret i8 addrspace(1)* %self
+}
+
+define i8 addrspace(1)* @outerCtor(i8 addrspace(1)* %self) {
+  %v = call i8 addrspace(1)* @identityCtor(i8 addrspace(1)* %self), !cj.wasm.constructor_receiver !1
+  ret i8 addrspace(1)* %v
+}
+
+; IMPORT-LABEL: define void @receiverIdentity
+; IMPORT: store volatile i8 addrspace(1)* %obj,
+; IMPORT: call void @cjw_root_frame_push
+; IMPORT: call i8 addrspace(1)* @outerCtor
+; IMPORT: call void @allocate()
+; IMPORT: [[OBJRELOAD:%[^ ]+]] = load volatile i8 addrspace(1)*
+; IMPORT: call void @cjw_root_frame_pop
+; IMPORT: call void @consume(i8 addrspace(1)* [[OBJRELOAD]])
+define void @receiverIdentity(i8 addrspace(1)* %obj) {
+  %v = call i8 addrspace(1)* @outerCtor(i8 addrspace(1)* %obj), !cj.wasm.constructor_receiver !1
+  call void @allocate()
+  call void @consume(i8 addrspace(1)* %obj)
+  ret void
+}
+
 ; IMPORT-LABEL: define void @ineligible()
 ; IMPORT-NOT: @cjw_root_frame_push
 ; IMPORT: call void @consume(i8 addrspace(1)* %varargs)
