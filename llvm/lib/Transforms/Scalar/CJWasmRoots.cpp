@@ -10,10 +10,13 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
+#include "llvm/IR/DiagnosticHandler.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Scalar/CJGCLiveAnalysis.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
@@ -39,6 +42,8 @@ bool llvm::checkCJWasmRootContract(Module &M) {
 }
 
 namespace {
+constexpr char RootRemarkPass[] = "cj-wasm-roots";
+
 bool managed(Value *V) {
   auto *PT = dyn_cast<PointerType>(V->getType());
   return PT && PT->getAddressSpace() == 1;
@@ -105,6 +110,65 @@ public:
         Killed.insert(&I);
   }
 };
+
+// Report live SSA values that can carry an unproven call result. Keep their
+// identities for liveness (including PHI edge uses), and never add them to
+// the map used to publish roots. This is a diagnostic, not a coverage check.
+void reportUnprovenCallReturns(Function &F, DominatorTree &DT,
+                               const RootMap &Owners) {
+  RootMap Tracked;
+  SmallVector<Value *, 8> Work;
+  auto Track = [&](Value *V) {
+    if (Tracked.try_emplace(V, V).second)
+      Work.push_back(V);
+  };
+  for (Instruction &I : instructions(F))
+    if (isa<CallInst>(I) && managed(&I) && !Owners.count(&I))
+      Track(&I);
+  if (Work.empty())
+    return;
+  while (!Work.empty()) {
+    Value *V = Work.pop_back_val();
+    for (User *U : V->users()) {
+      auto *I = dyn_cast<Instruction>(U);
+      if (I && I->getType()->isPointerTy() &&
+          (isa<PHINode, SelectInst, FreezeInst>(I) ||
+           (projection(*I) && I->getOperand(0) == V)))
+        Track(I);
+    }
+  }
+
+  OptimizationRemarkEmitter ORE(&F);
+  RootLiveness L(F, DT, Tracked);
+  L.computeLiveness();
+  for (BasicBlock &BB : F) {
+    if (!DT.isReachableFromEntry(&BB))
+      continue;
+    LiveSetTy Live = L.Data.LiveOut[&BB];
+    for (Instruction &I : reverse(BB)) {
+      // Examine live-out before adding this call's arguments. Its own
+      // result does not exist while the call can allocate.
+      if (mayCollect(I)) {
+        const Function *Callee = cast<CallInst>(I).getCalledFunction();
+        for (Value *V : Live) {
+          if (V == &I)
+            continue;
+          std::string Operand;
+          raw_string_ostream OS(Operand);
+          V->printAsOperand(OS, /*PrintType=*/false);
+          ORE.emit([&]() {
+            return OptimizationRemarkMissed(RootRemarkPass,
+                                             "UnprovenCallReturn", &I)
+                   << "value " << ore::NV("Value", OS.str())
+                   << " may carry an unproven call return across "
+                   << ore::NV("Callee", Callee ? Callee->getName() : "<indirect>");
+          });
+        }
+      }
+      L.transfer(I, Live);
+    }
+  }
+}
 
 void addProjections(Value *V, RootMap &Owners) {
   Value *Base = Owners.lookup(V);
@@ -344,7 +408,12 @@ bool llvm::emitCJWasmRoots(Function &F, ArrayRef<Value *> HeapObjects,
     else if (Fn && CI->arg_size() && CI->getMetadata("cj.wasm.constructor_receiver"))
       Constructors.push_back(CI);
   }
-  if (Owners.empty())
+  const LLVMContext &Ctx = F.getContext();
+  const bool Report =
+      Ctx.getLLVMRemarkStreamer() ||
+      Ctx.getDiagHandlerPtr()->isMissedOptRemarkEnabled(RootRemarkPass);
+  const bool CanPublish = !Owners.empty();
+  if (!CanPublish && !Report)
     return false;
   auto isHeapBase = [&](Value *V) {
     V = V->stripPointerCasts();
@@ -372,12 +441,17 @@ bool llvm::emitCJWasmRoots(Function &F, ArrayRef<Value *> HeapObjects,
     }
   } while (Grew);
 
+  DominatorTree DT(F);
+  if (Report)
+    reportUnprovenCallReturns(F, DT, Owners);
+  if (!CanPublish)
+    return false;
+
   SmallVector<Value *, 16> Bases;
   for (auto P : Owners)
     Bases.push_back(P.first);
   for (Value *Base : Bases)
     addProjections(Base, Owners);
-  DominatorTree DT(F);
   Merges Recipes;
   collectMerges(F, DT, Owners, Fields, Recipes);
   RootLiveness L(F, DT, Owners);
