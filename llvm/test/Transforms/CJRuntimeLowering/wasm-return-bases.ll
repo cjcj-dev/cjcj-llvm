@@ -2,10 +2,10 @@
 ; RUN: echo supplied >> %t.in
 ; RUN: echo weakSupplied >> %t.in
 ; RUN: echo varargsSupplied >> %t.in
-; RUN: opt -passes=cj-runtime-lowering,verify -cj-wasm-root-version=1 -cj-wasm-export-return-bases=%t.out -cj-wasm-import-return-bases=%t.in -S %s -o %t.ll
+; RUN: opt -passes=cj-runtime-lowering,verify -cj-wasm-export-return-bases=%t.out -cj-wasm-import-return-bases=%t.in -S %s -o %t.ll
 ; RUN: FileCheck %s --check-prefix=FACT --match-full-lines --input-file=%t.out
 ; RUN: FileCheck %s --check-prefixes=ROOTS,IMPORT --input-file=%t.ll
-; RUN: opt -passes=cj-runtime-lowering,verify -cj-wasm-root-version=1 -S %s -o - | FileCheck %s --check-prefix=ROOTS
+; RUN: opt -passes=cj-runtime-lowering,verify -S %s -o - | FileCheck %s --check-prefix=ROOTS
 ; RUN: not opt -passes='default<O2>,verify' -cangjie-pipeline -cj-wasm-export-return-bases=%t.extra -disable-output %s 2>&1 | FileCheck %s --check-prefix=PIPELINE
 ; PIPELINE: wasm return bases require the default non-LTO Cangjie pipeline
 
@@ -106,28 +106,36 @@ define weak i8 addrspace(1)* @weakNull() {
 ; ROOTS-LABEL: define i8 addrspace(1)* @uses()
 ; ROOTS: %kept = tail call i8 addrspace(1)* @supplied()
 ; ROOTS: store volatile i8 addrspace(1)* %kept,
-; ROOTS: call void @cjw_root_frame_push_complete(
+; ROOTS: call void @cjw_push_frame(
 ; ROOTS-NEXT: call void @allocate()
-; ROOTS-NEXT: call void @cjw_root_frame_pop_complete(
+; ROOTS-NEXT: call void @cjw_pop_frame(
+; ROOTS: store volatile i8 addrspace(1)* %kept,
+; ROOTS: call void @cjw_push_frame(
 ; ROOTS-NEXT: call void @consume(i8 addrspace(1)* %kept)
+; ROOTS-NEXT: call void @cjw_pop_frame(
 ; ROOTS-NEXT: ret i8 addrspace(1)* %kept
 ; ROOTS-LABEL: define void @receiverIdentity
 ; ROOTS: store volatile i8 addrspace(1)* %obj,
-; ROOTS: call void @cjw_root_frame_push_complete(
+; ROOTS: call void @cjw_push_frame(
 ; ROOTS-NEXT: %v = call i8 addrspace(1)* @outerCtor(i8 addrspace(1)* %obj)
-; ROOTS-NEXT: call void @cjw_root_frame_pop_complete(
+; ROOTS-NEXT: call void @cjw_pop_frame(
 ; ROOTS: store volatile i8 addrspace(1)* %obj,
-; ROOTS: call void @cjw_root_frame_push_complete(
+; ROOTS: call void @cjw_push_frame(
 ; ROOTS-NEXT: call void @allocate()
-; ROOTS-NEXT: call void @cjw_root_frame_pop_complete(
+; ROOTS-NEXT: call void @cjw_pop_frame(
+; ROOTS: store volatile i8 addrspace(1)* %obj,
+; ROOTS: call void @cjw_push_frame(
 ; ROOTS-NEXT: call void @consume(i8 addrspace(1)* %obj)
+; ROOTS-NEXT: call void @cjw_pop_frame(
 ; ROOTS-LABEL: define void @ineligible()
 ; ROOTS: store volatile i8 addrspace(1)* %weak,
 ; ROOTS: %varargs = call i8 addrspace(1)* (...) @varargsSupplied()
 ; ROOTS: store volatile i8 addrspace(1)* %weak,
 ; ROOTS: store volatile i8 addrspace(1)* %varargs,
-; ROOTS: store volatile i32 -2147483646,
-; ROOTS: call void @allocate()
+; ROOTS: store volatile i32 2,
+; ROOTS-NEXT: call void @cjw_push_frame(
+; ROOTS-NEXT: call void @allocate()
+; ROOTS-NEXT: call void @cjw_pop_frame(
 ; ROOTS-LABEL: define i8 addrspace(1)* @preserveMustTail()
 ; ROOTS-NEXT: %v = musttail call i8 addrspace(1)* @supplied()
 ; ROOTS-NEXT: ret i8 addrspace(1)* %v
@@ -171,6 +179,4 @@ define i8 addrspace(1)* @preserveMustTail() {
   ret i8 addrspace(1)* %v
 }
 
-!llvm.module.flags = !{!0}
-!0 = !{i32 1, !"cj.wasm.root.version", i32 1}
 !1 = !{}

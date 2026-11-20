@@ -11,7 +11,6 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Triple.h"
-#include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/DiagnosticHandler.h"
 #include "llvm/IR/IRBuilder.h"
@@ -22,12 +21,9 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
-#include "llvm/Transforms/Utils/ModuleUtils.h"
 
 using namespace llvm;
 
-static cl::opt<unsigned> RequestedVersion("cj-wasm-root-version", cl::Hidden,
-    cl::desc("Require a matching wasm Cangjie partition root contract"));
 static cl::opt<std::string> ExportReturnBases(
     "cj-wasm-export-return-bases", cl::Hidden,
     cl::desc("Write the per-partition wasm return-base records"));
@@ -35,28 +31,7 @@ static cl::opt<std::string> ImportReturnBases(
     "cj-wasm-import-return-bases", cl::Hidden,
     cl::desc("Read return-base records from the selected wasm archive member"));
 
-bool llvm::checkCJWasmRootContract(Module &M) {
-  Metadata *Version = M.getModuleFlag("cj.wasm.root.version");
-  if (!Version && !RequestedVersion.getNumOccurrences())
-    return false;
-  auto *N = Version ? mdconst::dyn_extract<ConstantInt>(Version) : nullptr;
-  if (!N || !N->getType()->isIntegerTy(32) || !N->isOne() ||
-      (RequestedVersion.getNumOccurrences() && RequestedVersion != 1) ||
-      Triple(M.getTargetTriple()).getArch() != Triple::wasm32)
-    report_fatal_error("missing or incompatible cj.wasm.root.version");
-  for (StringRef Name : {"cjw_root_frame_push", "cjw_root_frame_pop",
-                         "cjw_root_frame_push_complete",
-                         "cjw_root_frame_pop_complete",
-                         "cjw_roots_module_complete",
-                         "cjw_roots_module_incomplete"})
-    if (const auto *Hook = M.getNamedValue(Name))
-      if (!Hook->use_empty())
-        report_fatal_error("wasm partition already contains transient frames");
-  return true;
-}
-
 namespace {
-constexpr char RootRemarkPass[] = "cj-wasm-roots";
 constexpr StringLiteral ReturnBaseHeader = "cj-wasm-return-bases-v1\n";
 constexpr size_t MaxReturnBaseBytes = 1024 * 1024;
 
@@ -179,10 +154,8 @@ public:
 // back, so later uses keep their SSA values. Every alloca that can hold a
 // reference is published in place through the frame's range table, so a
 // callee that stores into its caller's stack (sret, inout, out parameters) is
-// covered as well. A function with a shape outside this contract makes its
-// module incomplete; the runtime then never collects.
-constexpr uint32_t CompleteFrameFlag = 0x80000000u;
-constexpr uint64_t MaxRangeWords = 1u << 24;
+// covered as well. Reject unsupported shapes during compilation.
+constexpr uint64_t MaxRangeBytes = 1u << 26;
 
 bool vectorOfManaged(Type *T) {
   if (auto *VT = dyn_cast<VectorType>(T))
@@ -257,17 +230,22 @@ bool scalarSlot(const AllocaInst &AI) {
 }
 
 bool siteMayCollect(const CallBase &CB) {
-  if (CB.isInlineAsm() || CB.doesNotReturn())
-    return false;
-  if (const auto *CI = dyn_cast<CallInst>(&CB))
-    if (CI->isMustTailCall())
-      return false;
-  const Function *Fn = CB.getCalledFunction();
-  if (!Fn)
+  // NoStackGrow and FastNative both lower to gc-leaf-function. Neither
+  // supplies a no-allocation contract for a managed WASI caller. An
+  // indirect call or a call that does not return can allocate as well.
+  if (!CB.getIntrinsicID())
     return true;
-  if (Fn->isIntrinsic())
-    return Fn->getName().startswith("llvm.cj.");
-  return !Fn->hasFnAttribute("gc-leaf-function");
+  if (isa<DbgInfoIntrinsic>(CB) || isa<MemIntrinsic>(CB))
+    return false;
+  switch (CB.getIntrinsicID()) {
+  case Intrinsic::lifetime_start:
+  case Intrinsic::lifetime_end:
+  case Intrinsic::assume:
+    return false;
+  default:
+    // Includes Cangjie allocation intrinsics and unclassified callouts.
+    return true;
+  }
 }
 
 // Backward liveness over the managed SSA values of one function.
@@ -349,15 +327,9 @@ struct CompleteSite {
   BitVector Live;
 };
 
-void missedRoot(Function &F, const Instruction *At, StringRef Why) {
-  OptimizationRemarkEmitter ORE(&F);
-  ORE.emit([&] {
-    return At ? OptimizationRemarkMissed(RootRemarkPass, "IncompleteRoots", At)
-                    << "wasm roots incomplete: " << Why
-              : OptimizationRemarkMissed(RootRemarkPass, "IncompleteRoots",
-                                         &F)
-                    << "wasm roots incomplete: " << Why;
-  });
+void unsupportedRoot(Function &F, const Instruction &At, StringRef Why) {
+  F.getContext().emitError(&At, Twine("unsupported WASI root publication in ") +
+                                F.getName() + ": " + Why);
 }
 } // namespace
 
@@ -369,7 +341,6 @@ bool CJWasmReturnBases::requested() {
 bool CJWasmReturnBases::applies(const Module &M) {
   Triple Target(M.getTargetTriple());
   return Target.getArch() == Triple::wasm32 && Target.isOSWASI() &&
-         M.getModuleFlag("cj.wasm.root.version") &&
          M.getContext().supportsTypedPointers();
 }
 
@@ -480,18 +451,22 @@ void CJWasmReturnBases::write() const {
   }
 }
 
-bool llvm::emitCJWasmRoots(Function &F, bool &Complete) {
+bool llvm::emitCJWasmRoots(Function &F) {
   Module &M = *F.getParent();
   const DataLayout &DL = M.getDataLayout();
   BasicBlock &Entry = F.getEntryBlock();
   bool Changed = false;
 
-  for (Instruction &I : instructions(F))
-    if (isa<CallBrInst>(I)) {
-      missedRoot(F, &I, "callbr");
-      Complete = false;
+  for (Instruction &I : instructions(F)) {
+    auto *CB = dyn_cast<CallBase>(&I);
+    if (!CB)
+      continue;
+    if (isa<CallBrInst>(CB) || CB->isInlineAsm() ||
+        CB->hasFnAttr(Attribute::ReturnsTwice) || CB->hasOperandBundles()) {
+      unsupportedRoot(F, I, "unsupported call transfer or operand bundle");
       return false;
     }
+  }
 
   // Static allocas first, so the range table can be filled before any call.
   SmallVector<AllocaInst *, 16> Ranges;
@@ -502,8 +477,7 @@ bool llvm::emitCJWasmRoots(Function &F, bool &Complete) {
       if (!AI || scalarSlot(*AI))
         continue;
       if (AI->getParent() != &Entry || !AI->isStaticAlloca()) {
-        missedRoot(F, AI, "dynamic alloca that may hold references");
-        Complete = false;
+        unsupportedRoot(F, *AI, "dynamic alloca that may hold references");
         return false;
       }
       Static.push_back(AI);
@@ -516,21 +490,15 @@ bool llvm::emitCJWasmRoots(Function &F, bool &Complete) {
       } else {
         Top = AI->getNextNode();
       }
-      uint64_t Bytes = DL.getTypeAllocSize(AI->getAllocatedType()) *
-                       cast<ConstantInt>(AI->getArraySize())->getZExtValue();
-      // References sit at their natural (4-byte) alignment; the runtime
-      // scans the range word by word.
-      if (Bytes < 4)
+      const TypeSize Size = DL.getTypeAllocSize(AI->getAllocatedType());
+      const auto *N = cast<ConstantInt>(AI->getArraySize());
+      if (Size.isScalable() || N->getValue().getActiveBits() > 32 ||
+          (Size.getFixedValue() && N->getZExtValue() > MaxRangeBytes / Size.getFixedValue())) {
+        unsupportedRoot(F, *AI, "alloca too large to publish");
+        return Changed;
+      }
+      if (Size.getFixedValue() * N->getZExtValue() < DL.getPointerSize(1))
         continue;
-      if (AI->getAlign() < Align(4)) {
-        AI->setAlignment(Align(4));
-        Changed = true;
-      }
-      if (Bytes / 4 > MaxRangeWords) {
-        missedRoot(F, AI, "alloca too large to publish");
-        Complete = false;
-        return false;
-      }
       Ranges.push_back(AI);
     }
   }
@@ -570,8 +538,13 @@ bool llvm::emitCJWasmRoots(Function &F, bool &Complete) {
           if (Id != ~0u)
             S.Live.set(Id);
         }
-        if (S.Live.any() || !Ranges.empty())
+        if (S.Live.any() || !Ranges.empty()) {
+          if (CB->isMustTailCall()) {
+            unsupportedRoot(F, I, "musttail would discard live caller roots");
+            return Changed;
+          }
           Sites.push_back(std::move(S));
+        }
       }
       unsigned Def = L.indexOf(&I);
       if (Def != ~0u)
@@ -598,8 +571,7 @@ bool llvm::emitCJWasmRoots(Function &F, bool &Complete) {
         SmallVector<unsigned, 4> Path;
         SmallVector<SmallVector<unsigned, 4>, 2> Out;
         if (!managedLeaves(V->getType(), Path, Out)) {
-          missedRoot(F, S.Call, "managed vector live across a call");
-          Complete = false;
+          unsupportedRoot(F, *S.Call, "managed vector live across a call");
           return Changed;
         }
         It = Leaves.try_emplace(V, std::move(Out)).first;
@@ -637,15 +609,15 @@ bool llvm::emitCJWasmRoots(Function &F, bool &Complete) {
       Value *Slot = B.CreateInBoundsGEP(
           TableTy, Table, {B.getInt32(0), B.getInt32(1), B.getInt32(I)});
       B.CreateStore(Start, B.CreateStructGEP(RangeTy, Slot, 0));
-      B.CreateStore(B.getInt32(uint32_t(Bytes / 4)),
+      B.CreateStore(B.getInt32(uint32_t(Bytes)),
                     B.CreateStructGEP(RangeTy, Slot, 1));
     }
     Desc = B.CreateBitCast(Table, Raw);
   }
   B.CreateStore(Desc, B.CreateStructGEP(FrameTy, Frame, 1));
   auto *HookTy = FunctionType::get(B.getVoidTy(), {Raw}, false);
-  FunctionCallee Push = M.getOrInsertFunction("cjw_root_frame_push_complete", HookTy);
-  FunctionCallee Pop = M.getOrInsertFunction("cjw_root_frame_pop_complete", HookTy);
+  FunctionCallee Push = M.getOrInsertFunction("cjw_push_frame", HookTy);
+  FunctionCallee Pop = M.getOrInsertFunction("cjw_pop_frame", HookTy);
 
   for (const CompleteSite &S : Sites) {
     B.SetInsertPoint(S.Call);
@@ -660,7 +632,7 @@ bool llvm::emitCJWasmRoots(Function &F, bool &Complete) {
                       /*isVolatile=*/true);
       }
     }
-    B.CreateStore(B.getInt32(Slot | CompleteFrameFlag),
+    B.CreateStore(B.getInt32(Slot),
                   B.CreateStructGEP(FrameTy, Frame, 2), /*isVolatile=*/true);
     B.CreateCall(Push, Handle);
     if (auto *CI = dyn_cast<CallInst>(S.Call)) {
@@ -673,23 +645,4 @@ bool llvm::emitCJWasmRoots(Function &F, bool &Complete) {
     B.CreateCall(Pop, Handle);
   }
   return true;
-}
-
-void llvm::emitCJWasmRootRecord(Module &M, bool Complete) {
-  LLVMContext &C = M.getContext();
-  auto *Raw = Type::getInt8PtrTy(C);
-  Constant *Table = ConstantPointerNull::get(Raw);
-  if (GlobalVariable *G = M.getGlobalVariable(".cj.wasm.static_roots", true))
-    Table = ConstantExpr::getPointerBitCastOrAddrSpaceCast(G, Raw);
-  auto *HookTy = FunctionType::get(Type::getVoidTy(C), {Raw}, false);
-  FunctionCallee Hook = M.getOrInsertFunction(
-      Complete ? "cjw_roots_module_complete" : "cjw_roots_module_incomplete",
-      HookTy);
-  Function *Ctor = Function::Create(FunctionType::get(Type::getVoidTy(C), false),
-                                    GlobalValue::InternalLinkage,
-                                    ".cj.wasm.roots_record", M);
-  IRBuilder<> B(BasicBlock::Create(C, "entry", Ctor));
-  B.CreateCall(Hook, Table);
-  B.CreateRetVoid();
-  appendToGlobalCtors(M, Ctor, 0);
 }

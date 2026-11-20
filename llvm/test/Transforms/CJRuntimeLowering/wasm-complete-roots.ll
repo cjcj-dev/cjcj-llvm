@@ -1,7 +1,6 @@
-; RUN: opt -passes=cj-runtime-lowering,verify -cj-wasm-root-version=1 -S %s | FileCheck %s
-; RUN: sed -e 's/^; DYN://' %s | opt -passes=cj-runtime-lowering,verify -cj-wasm-root-version=1 -pass-remarks-missed='^cj-wasm-roots$' -S -o %t.ll 2> %t.remarks
-; RUN: FileCheck %s --check-prefix=INCOMPLETE --input-file=%t.ll
-; RUN: FileCheck %s --check-prefix=REMARK --input-file=%t.remarks
+; RUN: opt -passes=cj-runtime-lowering,verify -S %s | FileCheck %s
+; RUN: sed -e 's/^; DYN://' %s > %t.dynamic.ll
+; RUN: not opt -passes=cj-runtime-lowering,verify -disable-output %t.dynamic.ll 2>&1 | FileCheck %s --check-prefix=UNSUPPORTED
 target datalayout = "e-p:32:32-p1:32:32-i64:64-n32:64-S128"
 target triple = "wasm32-unknown-wasi"
 
@@ -11,17 +10,16 @@ declare void @fill(i8* sret(i8))
 declare { i8 addrspace(1)*, i64 } @pair()
 declare i32 @__gxx_personality_v0(...)
 
-; CHECK: @llvm.global_ctors = appending global [1 x { i32, void ()*, i8* }] [{ i32, void ()*, i8* } { i32 0, void ()* @.cj.wasm.roots_record, i8* null }]
 
 ; An invoke is a site; its frame is popped on the normal edge.
 ; CHECK-LABEL: define void @invoke_site(
 ; CHECK: store volatile i8 addrspace(1)* %p,
-; CHECK: store volatile i32 -2147483647,
-; CHECK-NEXT: call void @cjw_root_frame_push_complete(
+; CHECK: store volatile i32 1,
+; CHECK-NEXT: call void @cjw_push_frame(
 ; CHECK-NEXT: invoke void @collect()
 ; CHECK-NEXT: to label %ok unwind label %lp
 ; CHECK: ok:
-; CHECK-NEXT: call void @cjw_root_frame_pop_complete(
+; CHECK-NEXT: call void @cjw_pop_frame(
 define void @invoke_site(i8 addrspace(1)* %p) personality i32 (...)* @__gxx_personality_v0 {
 entry:
   invoke void @collect() to label %ok unwind label %lp
@@ -38,7 +36,7 @@ lp:
 ; CHECK: %v = call { i8 addrspace(1)*, i64 } @pair()
 ; CHECK: [[LEAF:%[^ ]+]] = extractvalue { i8 addrspace(1)*, i64 } %v, 0
 ; CHECK: store volatile i8 addrspace(1)* [[LEAF]],
-; CHECK: call void @cjw_root_frame_push_complete(
+; CHECK: call void @cjw_push_frame(
 ; CHECK-NEXT: call void @collect()
 define i64 @aggregate_leaf() {
   %v = call { i8 addrspace(1)*, i64 } @pair()
@@ -50,15 +48,15 @@ define i64 @aggregate_leaf() {
 }
 
 ; Stack memory a callee may store a reference into is published in place, as
-; zeroed whole words; its alignment is raised to the word size.
+; a bounded byte range, even if it is not word-aligned.
 ; CHECK-LABEL: define void @stack_range(
-; CHECK: %buf = alloca [3 x i32], align 4
+; CHECK: %buf = alloca [3 x i32], align 1
 ; CHECK: %wasm.root.ranges = alloca { i32, [1 x { i8*, i32 }] }
-; CHECK: call void @llvm.memset.{{[^(]+}}(i8* align 4 {{%[^ ]+}}, i8 0, i{{32|64}} 12, i1 false)
-; CHECK: store i32 3,
-; CHECK: call void @cjw_root_frame_push_complete(
+; CHECK: call void @llvm.memset.{{[^(]+}}(i8* align 1 {{%[^ ]+}}, i8 0, i{{32|64}} 12, i1 false)
+; CHECK: store i32 12,
+; CHECK: call void @cjw_push_frame(
 ; CHECK-NEXT: call void @fill(i8* sret(i8) %raw)
-; CHECK-NEXT: call void @cjw_root_frame_pop_complete(
+; CHECK-NEXT: call void @cjw_pop_frame(
 define void @stack_range() {
   %buf = alloca [3 x i32], align 1
   %raw = bitcast [3 x i32]* %buf to i8*
@@ -87,7 +85,7 @@ define i64 @scalar_slot(i8 addrspace(1)* %p) {
 ; CHECK: %f = getelementptr i8, i8 addrspace(1)* %o, i32 12
 ; CHECK: store volatile i8 addrspace(1)* %f,
 ; CHECK: call void @collect()
-; CHECK-NEXT: call void @cjw_root_frame_pop_complete(
+; CHECK-NEXT: call void @cjw_pop_frame(
 ; CHECK-NEXT: %b = load i8, i8 addrspace(1)* %f
 define i8 @interior(i8 addrspace(1)* %o) {
   %f = getelementptr i8, i8 addrspace(1)* %o, i32 12
@@ -96,18 +94,25 @@ define i8 @interior(i8 addrspace(1)* %o) {
   ret i8 %b
 }
 
-; CHECK: define internal void @.cj.wasm.roots_record()
-; CHECK: call void @cjw_roots_module_complete(i8* null)
 
-; A dynamic alloca is outside the contract: the module reports incomplete.
+; A dynamic alloca is outside the contract: compilation must fail.
+; UNSUPPORTED: unsupported WASI root publication in dynamic: dynamic alloca that may hold references
 ; DYN:define void @dynamic(i32 %n) {
 ; DYN:  %d = alloca i8 addrspace(1)*, i32 %n
 ; DYN:  call void @collect()
 ; DYN:  ret void
 ; DYN:}
-; INCOMPLETE-NOT: @cjw_roots_module_complete
-; INCOMPLETE: call void @cjw_roots_module_incomplete(i8* null)
-; REMARK: wasm roots incomplete: dynamic alloca that may hold references
 
-!llvm.module.flags = !{!0}
-!0 = !{i32 1, !"cj.wasm.root.version", i32 1}
+
+; A stack-growth constraint is not a heap-allocation constraint.
+declare void @no_stack_grow() "gc-leaf-function"
+; CHECK-LABEL: define void @stack_constrained_edge(
+; CHECK: store volatile i8 addrspace(1)* %obj,
+; CHECK: call void @cjw_push_frame(
+; CHECK-NEXT: call void @no_stack_grow()
+; CHECK-NEXT: call void @cjw_pop_frame(
+define void @stack_constrained_edge(i8 addrspace(1)* %obj) {
+  call void @no_stack_grow()
+  call void @use(i8 addrspace(1)* %obj)
+  ret void
+}

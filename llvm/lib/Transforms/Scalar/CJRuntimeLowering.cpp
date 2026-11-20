@@ -331,11 +331,11 @@ struct EscapeScope {
 class CJIntrinsicLowering {
 public:
   explicit CJIntrinsicLowering(Module &M)
-      : WasmRoots(checkCJWasmRootContract(M)), M(M), C(M.getContext()),
+      : WasmRoots(Triple(M.getTargetTriple()).getArch() == Triple::wasm32 &&
+                  Triple(M.getTargetTriple()).isOSWASI()), M(M), C(M.getContext()),
         DL(M.getDataLayout()) {}
 
   bool WasmRoots;
-  bool WasmRootsComplete = true;
   SmallVector<Value *, 8> HeapObjects, StackObjects;
 
   void recordHeapObject(Value *V) {
@@ -1459,7 +1459,7 @@ static bool runtimeLoweringFunc(
       !F.isDeclaration()) {
     if (ReturnBases)
       ReturnBases->collect(F, Lowering.HeapObjects);
-    Changed |= emitCJWasmRoots(F, Lowering.WasmRootsComplete);
+    Changed |= emitCJWasmRoots(F);
     Lowering.HeapObjects.clear();
     Lowering.StackObjects.clear();
   }
@@ -1479,8 +1479,6 @@ PreservedAnalyses CJRuntimeLowering::run(Module &M,
   const Stage EffectiveStage = Exchange ? S : Stage::All;
   Optional<CJWasmReturnBases> ReturnBases;
   if (S != Stage::BeforeWasmRoots && CJWasmReturnBases::requested()) {
-    if (Exchange)
-      checkCJWasmRootContract(M);
     ReturnBases.emplace(M, Exchange);
   }
   if (Late && !Exchange) {
@@ -1519,11 +1517,6 @@ PreservedAnalyses CJRuntimeLowering::run(Module &M,
 
   if (ReturnBases)
     ReturnBases->write();
-  if (CJLowering.WasmRoots && !CJLTOOpt &&
-      EffectiveStage != Stage::BeforeWasmRoots) {
-    emitCJWasmRootRecord(M, CJLowering.WasmRootsComplete);
-    Changed = true;
-  }
   if (!Changed)
     return PreservedAnalyses::all();
 

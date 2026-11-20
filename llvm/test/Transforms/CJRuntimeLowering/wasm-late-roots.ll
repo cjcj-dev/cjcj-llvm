@@ -1,10 +1,4 @@
-; RUN: opt -passes=cj-runtime-lowering,verify -cj-wasm-root-version=1 -S %s | FileCheck %s
-; RUN: sed '/^!llvm.module.flags/d' %s | opt -passes=cj-runtime-lowering,verify -S | FileCheck %s --check-prefix=OLD
-; RUN: sed '/^!llvm.module.flags/d' %s | not --crash opt -cj-wasm-root-version=1 -passes=cj-runtime-lowering -disable-output 2>&1 | FileCheck %s --check-prefix=VERSION
-; VERSION: missing or incompatible cj.wasm.root.version
-; OLD-NOT: @cjw_root_frame_push
-; OLD-NOT: @cjw_roots_module
-; CHECK: @llvm.global_ctors = appending global [1 x { i32, void ()*, i8* }] [{ i32, void ()*, i8* } { i32 0, void ()* @.cj.wasm.roots_record, i8* null }]
+; RUN: opt -passes=cj-runtime-lowering,verify -S %s | FileCheck %s
 target datalayout = "e-p:32:32-p1:32:32-i64:64-n32:64-S128"
 target triple = "wasm32-unknown-wasi"
 
@@ -16,14 +10,14 @@ declare void @write(i8 addrspace(1)* sret(i8))
 
 ; CHECK-LABEL: define i8 @late(
 ; CHECK: %first = call noalias i8 addrspace(1)* @CJ_MCC_NewObject
-; CHECK-NOT: @cjw_root_frame_push_complete
+; CHECK-NOT: @cjw_push_frame
 ; CHECK: %field = getelementptr i8, i8 addrspace(1)* %first, i32 %offset
 ; CHECK: body:
 ; CHECK: store volatile i8 addrspace(1)* %field,
-; CHECK: store volatile i32 -2147483647,
-; CHECK-NEXT: call void @cjw_root_frame_push_complete(
+; CHECK: store volatile i32 1,
+; CHECK-NEXT: call void @cjw_push_frame(
 ; CHECK-NEXT: %next = call noalias i8 addrspace(1)* @CJ_MCC_NewObject
-; CHECK-NEXT: call void @cjw_root_frame_pop_complete(
+; CHECK-NEXT: call void @cjw_pop_frame(
 ; CHECK-NEXT: %v = load i8, i8 addrspace(1)* %field
 define i8 @late(i8* %ti, i32 %offset) {
   %first = call i8 addrspace(1)* @llvm.cj.alloca.generic(i8* %ti, i32 16), !TrustedSize !1
@@ -37,9 +31,9 @@ body:
 
 ; CHECK-LABEL: define void @unknown(
 ; CHECK: store volatile i8 addrspace(1)* %arg,
-; CHECK: call void @cjw_root_frame_push_complete(
+; CHECK: call void @cjw_push_frame(
 ; CHECK-NEXT: call void @collect()
-; CHECK-NEXT: call void @cjw_root_frame_pop_complete(
+; CHECK-NEXT: call void @cjw_pop_frame(
 ; CHECK: call void @consume(i8 addrspace(1)* %arg)
 define void @unknown(i8 addrspace(1)* noalias sret(i8) %arg) {
   call void @collect()
@@ -49,11 +43,11 @@ define void @unknown(i8 addrspace(1)* noalias sret(i8) %arg) {
 
 ; CHECK-LABEL: define void @known_edge(
 ; CHECK: store volatile i8 addrspace(1)* %arg,
-; CHECK: call void @cjw_root_frame_push_complete(
+; CHECK: call void @cjw_push_frame(
 ; CHECK-NEXT: %result = call i8 addrspace(1)* @known()
 ; CHECK: store volatile i8 addrspace(1)* %arg,
 ; CHECK: store volatile i8 addrspace(1)* %result,
-; CHECK: store volatile i32 -2147483646,
+; CHECK: store volatile i32 2,
 ; CHECK: call void @consume(i8 addrspace(1)* %arg)
 ; CHECK: call void @consume(i8 addrspace(1)* %result)
 define void @known_edge(i8 addrspace(1)* "cj.wasm.base" %arg) {
@@ -72,11 +66,11 @@ define void @known_edge(i8 addrspace(1)* "cj.wasm.base" %arg) {
 ; CHECK: [[OBJ:%[^ ]+]] = alloca { %TypeInfo*, i32, i64 }, align 8
 ; CHECK: %wasm.root.ranges = alloca { i32, [1 x { i8*, i32 }] }
 ; CHECK: call void @llvm.memset.p0i8.i64(i8* align 8 {{%[^ ]+}}, i8 0, i64 16, i1 false)
-; CHECK: store i32 4,
+; CHECK: store i32 16,
 ; CHECK: [[STACK:%[^ ]+]] = addrspacecast { %TypeInfo*, i32, i64 }* [[OBJ]] to i8 addrspace(1)*
-; CHECK: call void @cjw_root_frame_push_complete(
+; CHECK: call void @cjw_push_frame(
 ; CHECK-NEXT: call void @write(i8 addrspace(1)* sret(i8) [[STACK]])
-; CHECK-NEXT: call void @cjw_root_frame_pop_complete(
+; CHECK-NEXT: call void @cjw_pop_frame(
 define void @plain_stack() {
   %s = call i8 addrspace(1)* @llvm.cj.alloca.generic(i8* bitcast (%TypeInfo* @Int64.ti to i8*), i32 8), !TrustedSize !1
   call void @write(i8 addrspace(1)* sret(i8) %s)
@@ -86,11 +80,11 @@ define void @plain_stack() {
 ; CHECK-LABEL: define void @ref_stack(
 ; CHECK: alloca { %TypeInfo*, i32, %RefPayload }, align 8
 ; CHECK: call void @llvm.memset.p0i8.i64(i8* align 8 {{%[^ ]+}}, i8 0, i64 12, i1 false)
-; CHECK: store i32 3,
+; CHECK: store i32 12,
 ; CHECK: [[STACK:%[^ ]+]] = addrspacecast
-; CHECK: call void @cjw_root_frame_push_complete(
+; CHECK: call void @cjw_push_frame(
 ; CHECK-NEXT: call void @write(i8 addrspace(1)* sret(i8) [[STACK]])
-; CHECK-NEXT: call void @cjw_root_frame_pop_complete(
+; CHECK-NEXT: call void @cjw_pop_frame(
 define void @ref_stack() {
   %s = call i8 addrspace(1)* @llvm.cj.alloca.generic(i8* bitcast (%TypeInfo* @Record.ti to i8*), i32 4), !TrustedSize !1
   call void @write(i8 addrspace(1)* sret(i8) %s)
@@ -106,9 +100,9 @@ define void @ref_stack() {
 ; CHECK: %wasm.root.ranges
 ; CHECK: store i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %first
 ; CHECK: store i8 addrspace(1)* %v, i8 addrspace(1)* addrspace(1)* %second
-; CHECK: call void @cjw_root_frame_push_complete(
+; CHECK: call void @cjw_push_frame(
 ; CHECK-NEXT: call void @collect()
-; CHECK-NEXT: call void @cjw_root_frame_pop_complete(
+; CHECK-NEXT: call void @cjw_pop_frame(
 ; CHECK: %result = load i8 addrspace(1)*, i8 addrspace(1)* addrspace(1)* %first
 define i8 addrspace(1)* @one_live_field(i8 addrspace(1)* %v) {
   %s = call i8 addrspace(1)* @llvm.cj.alloca.generic(i8* bitcast (%TypeInfo* @Pair.ti to i8*), i32 8), !TrustedSize !1
@@ -130,12 +124,10 @@ exit:
 ; CHECK-LABEL: define i8 @mixed(
 ; CHECK: %maybe = phi i8 addrspace(1)* [ %field, %left ], [ %unknown, %right ]
 ; CHECK: store volatile i8 addrspace(1)* %maybe,
-; CHECK: call void @cjw_root_frame_push_complete(
+; CHECK: call void @cjw_push_frame(
 ; CHECK-NEXT: call void @collect()
-; CHECK-NEXT: call void @cjw_root_frame_pop_complete(
+; CHECK-NEXT: call void @cjw_pop_frame(
 ; CHECK-NEXT: %byte = load i8, i8 addrspace(1)* %maybe
-; CHECK: define internal void @.cj.wasm.roots_record()
-; CHECK: call void @cjw_roots_module_complete(i8* null)
 define i8 @mixed(i1 %which, i8 addrspace(1)* "cj.wasm.base" %object, i8 addrspace(1)* %unknown, i32 %offset) {
   br i1 %which, label %left, label %right
 left:
@@ -150,8 +142,6 @@ join:
   ret i8 %byte
 }
 
-!llvm.module.flags = !{!0}
-!0 = !{i32 1, !"cj.wasm.root.version", i32 1}
 !1 = !{}
 !2 = !{!"Int64.Type"}
 !3 = !{!"RefPayload"}
