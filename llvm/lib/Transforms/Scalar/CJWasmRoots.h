@@ -39,8 +39,11 @@ public:
   void write() const;
 };
 
-bool emitCJWasmRoots(Function &F, ArrayRef<Value *> HeapObjects,
-                     ArrayRef<Value *> StackObjects,
-                     const CJWasmReturnBases *ReturnBases = nullptr);
+// Publishes complete shadow roots for F (see CJWasmRoots.cpp). Clears
+// Complete when F has a shape outside the complete-root contract.
+bool emitCJWasmRoots(Function &F, bool &Complete);
+// Reports the module to the runtime as root-complete or not, from a
+// constructor that names the module's static root table.
+void emitCJWasmRootRecord(Module &M, bool Complete);
 } // namespace llvm
 #endif

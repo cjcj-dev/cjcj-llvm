@@ -335,6 +335,7 @@ public:
         DL(M.getDataLayout()) {}
 
   bool WasmRoots;
+  bool WasmRootsComplete = true;
   SmallVector<Value *, 8> HeapObjects, StackObjects;
 
   void recordHeapObject(Value *V) {
@@ -1458,8 +1459,7 @@ static bool runtimeLoweringFunc(
       !F.isDeclaration()) {
     if (ReturnBases)
       ReturnBases->collect(F, Lowering.HeapObjects);
-    Changed |= emitCJWasmRoots(F, Lowering.HeapObjects, Lowering.StackObjects,
-                               ReturnBases);
+    Changed |= emitCJWasmRoots(F, Lowering.WasmRootsComplete);
     Lowering.HeapObjects.clear();
     Lowering.StackObjects.clear();
   }
@@ -1519,6 +1519,11 @@ PreservedAnalyses CJRuntimeLowering::run(Module &M,
 
   if (ReturnBases)
     ReturnBases->write();
+  if (CJLowering.WasmRoots && !CJLTOOpt &&
+      EffectiveStage != Stage::BeforeWasmRoots) {
+    emitCJWasmRootRecord(M, CJLowering.WasmRootsComplete);
+    Changed = true;
+  }
   if (!Changed)
     return PreservedAnalyses::all();
 

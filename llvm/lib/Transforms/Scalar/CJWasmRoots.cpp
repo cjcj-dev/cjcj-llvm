@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CJWasmRoots.h"
+#include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Triple.h"
@@ -14,13 +15,14 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/DiagnosticHandler.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/Scalar/CJGCLiveAnalysis.h"
-#include "llvm/Transforms/Utils/PromoteMemToReg.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
 
 using namespace llvm;
 
@@ -42,7 +44,11 @@ bool llvm::checkCJWasmRootContract(Module &M) {
       (RequestedVersion.getNumOccurrences() && RequestedVersion != 1) ||
       Triple(M.getTargetTriple()).getArch() != Triple::wasm32)
     report_fatal_error("missing or incompatible cj.wasm.root.version");
-  for (StringRef Name : {"cjw_root_frame_push", "cjw_root_frame_pop"})
+  for (StringRef Name : {"cjw_root_frame_push", "cjw_root_frame_pop",
+                         "cjw_root_frame_push_complete",
+                         "cjw_root_frame_pop_complete",
+                         "cjw_roots_module_complete",
+                         "cjw_roots_module_incomplete"})
     if (const auto *Hook = M.getNamedValue(Name))
       if (!Hook->use_empty())
         report_fatal_error("wasm partition already contains transient frames");
@@ -60,16 +66,6 @@ bool managed(Type *T) {
 }
 
 bool managed(const Value *V) { return managed(V->getType()); }
-
-// Class constructors receive the raw AS1 object pointer.  This is the one
-// receiver shape for which the frontend/runtime ABI says the argument is a
-// heap base; typed AS1 record views (for example Array<T>::init's %this) are
-// deliberately excluded and remain conservative.
-bool objectReceiver(const Value *V) {
-  auto *PT = dyn_cast<PointerType>(V->getType());
-  return PT && PT->getAddressSpace() == 1 &&
-         PT->getNonOpaquePointerElementType()->isIntegerTy(8);
-}
 
 bool isRecordName(StringRef Name) {
   return !Name.empty() && Name.find_first_not_of(
@@ -173,25 +169,100 @@ public:
   }
 };
 
-// A root is either an actual heap base or the initialized AS1 view returned
-// by stack allocation lowering. Only the latter's typed fields go into C6.
-using RootMap = DenseMap<Value *, Value *>;
-struct Site {
-  CallInst *Call;
-  SmallVector<Value *, 8> Roots;
-  SmallVector<std::pair<Value *, uint64_t>, 4> Fields;
-};
+// ---- complete roots --------------------------------------------------------
+// C6 is a non-moving mark-sweep collector. Under the complete contract every
+// managed SSA value (an AS1 pointer, or a first-class aggregate holding AS1
+// pointers) that is live across a call that may collect, and every managed
+// argument of that call, is stored into the function's shadow frame for the
+// duration of the call. No value needs to be an object start: the collector
+// marks the object containing the address a slot holds and never writes slots
+// back, so later uses keep their SSA values. Every alloca that can hold a
+// reference is published in place through the frame's range table, so a
+// callee that stores into its caller's stack (sret, inout, out parameters) is
+// covered as well. A function with a shape outside this contract makes its
+// module incomplete; the runtime then never collects.
+constexpr uint32_t CompleteFrameFlag = 0x80000000u;
+constexpr uint64_t MaxRangeWords = 1u << 24;
 
-bool projection(const Instruction &I) {
-  return isa<BitCastInst>(I) || isa<AddrSpaceCastInst>(I) ||
-         isa<GetElementPtrInst>(I);
+bool vectorOfManaged(Type *T) {
+  if (auto *VT = dyn_cast<VectorType>(T))
+    return managed(VT->getElementType());
+  return false;
 }
 
-bool mayCollect(Instruction &I) {
-  auto *CI = dyn_cast<CallInst>(&I);
-  if (!CI || CI->isMustTailCall() || CI->doesNotReturn() || CI->isInlineAsm())
+// Index paths of the AS1 leaves of a first-class aggregate. False when the
+// aggregate holds managed vectors, which this contract does not publish.
+bool managedLeaves(Type *T, SmallVectorImpl<unsigned> &Path,
+                   SmallVectorImpl<SmallVector<unsigned, 4>> &Out) {
+  if (managed(T)) {
+    Out.emplace_back(Path.begin(), Path.end());
+    return true;
+  }
+  if (vectorOfManaged(T))
     return false;
-  Function *Fn = CI->getCalledFunction();
+  if (auto *ST = dyn_cast<StructType>(T)) {
+    for (unsigned I = 0, E = ST->getNumElements(); I != E; ++I) {
+      Path.push_back(I);
+      bool OK = managedLeaves(ST->getElementType(I), Path, Out);
+      Path.pop_back();
+      if (!OK)
+        return false;
+    }
+  } else if (auto *AT = dyn_cast<ArrayType>(T)) {
+    for (uint64_t I = 0, E = AT->getNumElements(); I != E; ++I) {
+      Path.push_back(unsigned(I));
+      bool OK = managedLeaves(AT->getElementType(), Path, Out);
+      Path.pop_back();
+      if (!OK)
+        return false;
+    }
+  }
+  return true;
+}
+
+bool holdsManaged(Type *T) {
+  if (managed(T) || vectorOfManaged(T))
+    return true;
+  if (auto *ST = dyn_cast<StructType>(T))
+    return llvm::any_of(ST->elements(), holdsManaged);
+  if (auto *AT = dyn_cast<ArrayType>(T))
+    return holdsManaged(AT->getElementType());
+  if (auto *VT = dyn_cast<VectorType>(T))
+    return holdsManaged(VT->getElementType());
+  return false;
+}
+
+// Only a slot read and written as one non-pointer scalar of its own type
+// cannot hold a reference. Every other alloca is scanned as a range.
+bool scalarSlot(const AllocaInst &AI) {
+  Type *T = AI.getAllocatedType();
+  if (!(T->isIntegerTy() || T->isFloatingPointTy()) || AI.isArrayAllocation())
+    return false;
+  for (const User *U : AI.users()) {
+    if (const auto *LI = dyn_cast<LoadInst>(U)) {
+      if (LI->getType() != T)
+        return false;
+    } else if (const auto *SI = dyn_cast<StoreInst>(U)) {
+      if (SI->getPointerOperand() != &AI ||
+          SI->getValueOperand()->getType() != T)
+        return false;
+    } else if (const auto *II = dyn_cast<IntrinsicInst>(U)) {
+      if (!II->isLifetimeStartOrEnd() && !isa<DbgInfoIntrinsic>(II))
+        return false;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool siteMayCollect(const CallBase &CB) {
+  if (CB.isInlineAsm() || CB.doesNotReturn())
+    return false;
+  if (const auto *CI = dyn_cast<CallInst>(&CB))
+    if (CI->isMustTailCall())
+      return false;
+  const Function *Fn = CB.getCalledFunction();
   if (!Fn)
     return true;
   if (Fn->isIntrinsic())
@@ -199,301 +270,94 @@ bool mayCollect(Instruction &I) {
   return !Fn->hasFnAttribute("gc-leaf-function");
 }
 
-// Reuse CJ's backward CFG fixed point, but carry the proven *owner* of each
-// operand (including stack views and AS0 projections), not all AS1 values.
-class RootLiveness : public GCLiveAnalysis {
-  const RootMap &Owners;
-  void use(Value *V, LiveSetTy &Live) {
-    if (Value *Root = Owners.lookup(V))
-      Live.insert(Root);
-  }
+// Backward liveness over the managed SSA values of one function.
+class ManagedLiveness {
 public:
-  RootLiveness(Function &F, DominatorTree &DT, const RootMap &Owners)
-      : GCLiveAnalysis(F, DT), Owners(Owners) {}
+  DenseMap<const Value *, unsigned> Index;
+  SmallVector<Value *, 64> Values;
+  DenseMap<const BasicBlock *, BitVector> LiveOut;
 
-  void transfer(Instruction &I, LiveSetTy &Live) {
-    Live.remove(&I);
-    if (isa<PHINode>(I) || isa<DbgInfoIntrinsic>(I))
-      return;
-    for (Use &U : I.operands())
-      use(U, Live);
+  unsigned indexOf(const Value *V) const {
+    auto It = Index.find(V);
+    return It == Index.end() ? ~0u : It->second;
   }
-  void computeLiveInValues(BasicBlock::reverse_iterator B,
-                           BasicBlock::reverse_iterator E, LiveSetTy &Live) override {
-    for (Instruction &I : make_range(B, E))
-      transfer(I, Live);
+
+  void add(Value *V) {
+    if (Index.try_emplace(V, Values.size()).second)
+      Values.push_back(V);
   }
-  void computeLiveOutSeed(BasicBlock *BB, LiveSetTy &Live) override {
-    for (BasicBlock *Succ : successors(BB))
-      for (PHINode &Phi : Succ->phis())
-        use(Phi.getIncomingValueForBlock(BB), Live);
-  }
-  void computeKillSet(BasicBlock *BB, LiveSetTy &Killed) override {
-    for (Instruction &I : *BB)
-      if (Owners.lookup(&I) == &I)
-        Killed.insert(&I);
+
+  void compute(Function &F, ArrayRef<BasicBlock *> RPO) {
+    for (Argument &A : F.args())
+      if (holdsManaged(A.getType()))
+        add(&A);
+    for (Instruction &I : instructions(F))
+      if (holdsManaged(I.getType()))
+        add(&I);
+    const unsigned N = Values.size();
+    DenseMap<const BasicBlock *, BitVector> Gen, Kill, LiveIn;
+    for (BasicBlock *BB : RPO) {
+      BitVector G(N), K(N);
+      for (Instruction &I : *BB) {
+        if (!isa<PHINode>(I))
+          for (Value *Op : I.operands()) {
+            unsigned Id = indexOf(Op);
+            if (Id != ~0u && !K.test(Id))
+              G.set(Id);
+          }
+        unsigned Def = indexOf(&I);
+        if (Def != ~0u)
+          K.set(Def);
+      }
+      Gen[BB] = std::move(G);
+      Kill[BB] = std::move(K);
+      LiveIn[BB] = BitVector(N);
+      LiveOut[BB] = BitVector(N);
+    }
+    bool Changed = true;
+    while (Changed) {
+      Changed = false;
+      for (BasicBlock *BB : llvm::reverse(RPO)) {
+        BitVector Out(N);
+        for (BasicBlock *S : successors(BB)) {
+          auto It = LiveIn.find(S);
+          if (It != LiveIn.end())
+            Out |= It->second;
+          for (PHINode &P : S->phis())
+            for (unsigned I = 0, E = P.getNumIncomingValues(); I != E; ++I)
+              if (P.getIncomingBlock(I) == BB) {
+                unsigned Id = indexOf(P.getIncomingValue(I));
+                if (Id != ~0u)
+                  Out.set(Id);
+              }
+        }
+        BitVector In = Out;
+        In.reset(Kill[BB]);
+        In |= Gen[BB];
+        if (In != LiveIn[BB] || Out != LiveOut[BB]) {
+          LiveIn[BB] = std::move(In);
+          LiveOut[BB] = std::move(Out);
+          Changed = true;
+        }
+      }
+    }
   }
 };
 
-// Report live SSA values that can carry an unproven call result. Keep their
-// identities for liveness (including PHI edge uses), and never add them to
-// the map used to publish roots. This is a diagnostic, not a coverage check.
-void reportUnprovenCallReturns(Function &F, DominatorTree &DT,
-                               const RootMap &Owners) {
-  RootMap Tracked;
-  SmallVector<Value *, 8> Work;
-  auto Track = [&](Value *V) {
-    if (Tracked.try_emplace(V, V).second)
-      Work.push_back(V);
-  };
-  for (Instruction &I : instructions(F))
-    if (isa<CallInst>(I) && managed(&I) && !Owners.count(&I))
-      Track(&I);
-  if (Work.empty())
-    return;
-  while (!Work.empty()) {
-    Value *V = Work.pop_back_val();
-    for (User *U : V->users()) {
-      auto *I = dyn_cast<Instruction>(U);
-      if (I && I->getType()->isPointerTy() &&
-          (isa<PHINode, SelectInst, FreezeInst>(I) ||
-           (projection(*I) && I->getOperand(0) == V)))
-        Track(I);
-    }
-  }
+struct CompleteSite {
+  CallBase *Call;
+  BitVector Live;
+};
 
+void missedRoot(Function &F, const Instruction *At, StringRef Why) {
   OptimizationRemarkEmitter ORE(&F);
-  RootLiveness L(F, DT, Tracked);
-  L.computeLiveness();
-  for (BasicBlock &BB : F) {
-    if (!DT.isReachableFromEntry(&BB))
-      continue;
-    LiveSetTy Live = L.Data.LiveOut[&BB];
-    for (Instruction &I : reverse(BB)) {
-      // Examine live-out before adding this call's arguments. Its own
-      // result does not exist while the call can allocate.
-      if (mayCollect(I)) {
-        const Function *Callee = cast<CallInst>(I).getCalledFunction();
-        for (Value *V : Live) {
-          if (V == &I)
-            continue;
-          std::string Operand;
-          raw_string_ostream OS(Operand);
-          V->printAsOperand(OS, /*PrintType=*/false);
-          ORE.emit([&]() {
-            return OptimizationRemarkMissed(RootRemarkPass,
-                                             "UnprovenCallReturn", &I)
-                   << "value " << ore::NV("Value", OS.str())
-                   << " may carry an unproven call return across "
-                   << ore::NV("Callee", Callee ? Callee->getName() : "<indirect>");
-          });
-        }
-      }
-      L.transfer(I, Live);
-    }
-  }
-}
-
-void addProjections(Value *V, RootMap &Owners) {
-  Value *Base = Owners.lookup(V);
-  SmallVector<Value *, 8> Work{V};
-  while (!Work.empty()) {
-    Value *V = Work.pop_back_val();
-    for (User *U : V->users()) {
-      auto *I = dyn_cast<Instruction>(U);
-      if (I && projection(*I) && I->getOperand(0) == V &&
-          I->getType()->isPointerTy() && Owners.try_emplace(I, Base).second)
-        Work.push_back(I);
-    }
-  }
-}
-
-// A live aggregate need not have all its fields live. Starting at the
-// safepoint, follow successors until a read, a complete overwrite, or the
-// next initialization of this stack object. At an opaque use (e.g. sret),
-// the callee can observe the whole typed payload.
-bool liveFieldAt(CallInst *Site, Value *Object, uint64_t Field,
-                 const RootMap &Owners, const DataLayout &DL) {
-  auto *Storage = cast<AddrSpaceCastInst>(Object)->getOperand(0);
-  const uint64_t Width = DL.getPointerSize(1);
-  auto access = [&](Value *Ptr, uint64_t Bytes, bool Write) {
-    if (Owners.lookup(Ptr) != Object)
-      return 0;
-    APInt Off(DL.getIndexSizeInBits(0), 0);
-    if (Ptr->stripAndAccumulateConstantOffsets(DL, Off, true) != Storage)
-      return Write ? 0 : 1;
-    int64_t Start = Off.getSExtValue();
-    int64_t End = Start + static_cast<int64_t>(Bytes);
-    if (Write)
-      return Start <= int64_t(Field) && End >= int64_t(Field + Width) ? -1 : 0;
-    return End > int64_t(Field) && Start < int64_t(Field + Width) ? 1 : 0;
-  };
-  SmallVector<Instruction *, 8> Work{Site};
-  SmallPtrSet<BasicBlock *, 16> Seen;
-  while (!Work.empty()) {
-    Instruction *Start = Work.pop_back_val();
-    BasicBlock *BB = Start->getParent();
-    bool Killed = false;
-    for (Instruction &I : make_range(Start->getIterator(), BB->end())) {
-      if (&I == Object) {
-        Killed = true;
-        break;
-      }
-      if (projection(I) || isa<DbgInfoIntrinsic>(I))
-        continue;
-      int Effect = 0;
-      if (auto *LI = dyn_cast<LoadInst>(&I)) {
-        Effect = access(LI->getPointerOperand(), DL.getTypeStoreSize(LI->getType()), false);
-      } else if (auto *SI = dyn_cast<StoreInst>(&I)) {
-        if (Owners.lookup(SI->getValueOperand()) == Object)
-          return true;
-        Effect = access(SI->getPointerOperand(),
-                        DL.getTypeStoreSize(SI->getValueOperand()->getType()), true);
-      } else if (auto *MI = dyn_cast<MemIntrinsic>(&I)) {
-        auto *Size = dyn_cast<ConstantInt>(MI->getLength());
-        if (auto *Copy = dyn_cast<MemTransferInst>(MI))
-          if (Owners.lookup(Copy->getRawSource()) == Object &&
-              (!Size || access(Copy->getRawSource(), Size->getLimitedValue(UINT32_MAX), false)))
-            return true;
-        if (Size)
-          Effect = access(MI->getRawDest(), Size->getLimitedValue(UINT32_MAX), true);
-      } else {
-        for (Use &U : I.operands())
-          if (Owners.lookup(U) == Object)
-            return true;
-      }
-      if (Effect > 0)
-        return true;
-      if (Effect < 0) {
-        Killed = true;
-        break;
-      }
-    }
-    if (!Killed)
-      for (BasicBlock *Succ : successors(BB))
-        if (Seen.insert(Succ).second)
-          Work.push_back(&Succ->front());
-  }
-  return false;
-}
-
-// A merge can select a proven interior on one edge and an unknown pointer
-// on another. Select the root, byte displacement and unknown alternative on
-// precisely the original edges. The unknown arm contributes a null slot.
-struct MergedPointer {
-  Value *Offset;
-  Value *Fallback;
-  Value *Known;
-};
-using Merges = DenseMap<Value *, MergedPointer>;
-using StackFields = DenseMap<Value *, SmallVector<uint64_t, 4>>;
-
-void collectMerges(Function &F, DominatorTree &DT, RootMap &Owners,
-                   const StackFields &Fields, Merges &Recipes) {
-  SmallVector<Instruction *, 16> Work;
-  for (BasicBlock *BB : ReversePostOrderTraversal<Function *>(&F))
-    for (Instruction &I : *BB)
-      if (managed(&I) && isa<PHINode, SelectInst>(I) && !Owners.count(&I))
-        Work.push_back(&I);
-  for (Instruction *I : Work) {
-    auto *P = dyn_cast<PHINode>(I);
-    auto *S = dyn_cast<SelectInst>(I);
-    SmallVector<Value *, 4> Inputs, Bases, Offsets, Unknown, Valid;
-    if (P) {
-      // A loop recurrence is not an acyclic proof of its own provenance.
-      if (llvm::any_of(P->blocks(), [&](BasicBlock *B) {
-            return DT.dominates(P->getParent(), B);
-          }))
-        continue;
-      Inputs.append(P->incoming_values().begin(), P->incoming_values().end());
-    } else {
-      Inputs = {S->getTrueValue(), S->getFalseValue()};
-    }
-    auto heap = [&](Value *V) -> Value * {
-      Value *R = Owners.lookup(V);
-      return Fields.count(R) ? nullptr : R;
-    };
-    if (llvm::none_of(Inputs, heap))
-      continue;
-    IRBuilder<> B(I);
-    auto *Ref = B.getInt8PtrTy(1);
-    auto *Int = B.getInt32Ty();
-    for (unsigned J = 0; J != Inputs.size(); ++J) {
-      Value *V = Inputs[J];
-      Value *R = heap(V);
-      B.SetInsertPoint(P ? P->getIncomingBlock(J)->getTerminator() : I);
-      Bases.push_back(R ? B.CreateBitCast(R, Ref) : ConstantPointerNull::get(Ref));
-      Offsets.push_back(R && R != V
-          ? B.CreateSub(B.CreatePtrToInt(V, Int), B.CreatePtrToInt(R, Int))
-          : B.getInt32(0));
-      Value *Known = B.getInt1(R != nullptr);
-      for (Value *D = V; R && D != R;) {
-        auto It = Recipes.find(D);
-        if (It != Recipes.end()) {
-          Known = It->second.Known;
-          break;
-        }
-        auto *Step = dyn_cast<Instruction>(D);
-        if (!Step || !projection(*Step))
-          break;
-        D = Step->getOperand(0);
-      }
-      auto *Null = Constant::getNullValue(I->getType());
-      if (auto *C = dyn_cast<ConstantInt>(Known))
-        Unknown.push_back(C->isOne() ? Null : V);
-      else
-        Unknown.push_back(B.CreateSelect(Known, Null, V));
-      Valid.push_back(Known);
-    }
-    B.SetInsertPoint(I);
-    auto merge = [&](ArrayRef<Value *> Vs, StringRef Name) -> Value * {
-      if (llvm::all_of(Vs, [&](Value *V) { return V == Vs.front(); }))
-        return Vs.front();
-      if (S)
-        return B.CreateSelect(S->getCondition(), Vs[0], Vs[1], Name);
-      auto *Phi = B.CreatePHI(Vs.front()->getType(), Vs.size(), Name);
-      for (unsigned J = 0; J < Vs.size(); ++J)
-        Phi->addIncoming(Vs[J], P->getIncomingBlock(J));
-      return Phi;
-    };
-    Value *Base = merge(Bases, "wasm.root.base");
-    if (auto *Origin = Owners.lookup(Base))
-      Base = Origin;
-    else
-      Owners[Base] = Base;
-    Owners[I] = Base;
-    Recipes[I] = {merge(Offsets, "wasm.root.offset"),
-                  merge(Unknown, "wasm.root.unknown"), merge(Valid, "wasm.root.known")};
-    addProjections(I, Owners);
-  }
-}
-
-// Rebuild a chain of casts/GEPs at its consumer. Dynamic indices are the
-// original SSA values; no heap interior is ever placed in a frame slot.
-Value *materialize(Value *V, Value *Base, AllocaInst *Current, Instruction *At,
-                   const Merges &Recipes) {
-  IRBuilder<> B(At);
-  Value *Result = B.CreateLoad(Base->getType(), Current);
-  SmallVector<Instruction *, 4> Steps;
-  while (V != Base) {
-    auto It = Recipes.find(V);
-    if (It != Recipes.end()) {
-      auto &R = It->second;
-      Result = B.CreateGEP(B.getInt8Ty(), B.CreateBitCast(Result, B.getInt8PtrTy(1)),
-                           R.Offset, "wasm.root.interior");
-      Result = B.CreateSelect(R.Known, B.CreateBitCast(Result, V->getType()), R.Fallback);
-      break;
-    }
-    auto *I = cast<Instruction>(V);
-    Steps.push_back(I);
-    V = I->getOperand(0);
-  }
-  for (Instruction *I : reverse(Steps)) {
-    Instruction *Copy = I->clone();
-    Copy->setOperand(0, Result);
-    Result = B.Insert(Copy, I->getName() + ".rebased");
-  }
-  return Result;
+  ORE.emit([&] {
+    return At ? OptimizationRemarkMissed(RootRemarkPass, "IncompleteRoots", At)
+                    << "wasm roots incomplete: " << Why
+              : OptimizationRemarkMissed(RootRemarkPass, "IncompleteRoots",
+                                         &F)
+                    << "wasm roots incomplete: " << Why;
+  });
 }
 } // namespace
 
@@ -616,214 +480,210 @@ void CJWasmReturnBases::write() const {
   }
 }
 
-bool llvm::emitCJWasmRoots(Function &F, ArrayRef<Value *> HeapObjects,
-                           ArrayRef<Value *> StackObjects,
-                           const CJWasmReturnBases *ReturnBases) {
+bool llvm::emitCJWasmRoots(Function &F, bool &Complete) {
   Module &M = *F.getParent();
-  RootMap Owners;
-  StackFields Fields;
-  for (Value *V : HeapObjects)
-    Owners[V] = V;
-  for (Argument &A : F.args())
-    if (managed(&A) && F.getAttributes().hasParamAttr(A.getArgNo(), "cj.wasm.base"))
-      Owners[&A] = &A;
-  for (Value *V : StackObjects) {
-    auto *AI = cast<AllocaInst>(cast<AddrSpaceCastInst>(V)->getOperand(0));
-    MapVector<uint64_t, bool> Layout;
-    computeStructTypeOffsets(cast<StructType>(AI->getAllocatedType()), Layout,
-                             M.getDataLayout());
-    for (auto P : Layout)
-      if (P.second)
-        Fields[V].push_back(P.first);
-    if (Fields.count(V))
-      Owners[V] = V;
-  }
-  SmallVector<CallInst *, 4> Constructors;
-  for (Instruction &I : instructions(F)) {
-    // C6 has no EH cleanup path. Match the scope of the existing wasm ABI.
-    if (hasUnsupportedWasmControlFlow(I))
+  const DataLayout &DL = M.getDataLayout();
+  BasicBlock &Entry = F.getEntryBlock();
+  bool Changed = false;
+
+  for (Instruction &I : instructions(F))
+    if (isa<CallBrInst>(I)) {
+      missedRoot(F, &I, "callbr");
+      Complete = false;
       return false;
-    auto *CI = dyn_cast<CallInst>(&I);
-    if (!CI || !managed(CI))
-      continue;
-    Function *Fn = CI->getCalledFunction();
-    if ((Fn && Fn->getAttributes().hasRetAttr("cj.wasm.base")) ||
-        (ReturnBases && ReturnBases->imports(*CI)))
-      Owners[CI] = CI;
-    else if (Fn && CI->arg_size() &&
-             CI->getMetadata("cj.wasm.constructor_receiver")) {
-      Constructors.push_back(CI);
-      // The frontend's constructor_receiver marker is the producer/runtime
-      // contract for a class constructor.  Its raw i8 AS1 receiver is the
-      // object heap base, including when the constructor is an external
-      // declaration.  Typed record receivers (Array<T>::init %this, for
-      // example) are excluded and remain conservative.
-      if (objectReceiver(CI->getArgOperand(0)))
-        Owners.try_emplace(CI->getArgOperand(0), CI->getArgOperand(0));
+    }
+
+  // Static allocas first, so the range table can be filled before any call.
+  SmallVector<AllocaInst *, 16> Ranges;
+  {
+    SmallVector<AllocaInst *, 16> Static;
+    for (Instruction &I : instructions(F)) {
+      auto *AI = dyn_cast<AllocaInst>(&I);
+      if (!AI || scalarSlot(*AI))
+        continue;
+      if (AI->getParent() != &Entry || !AI->isStaticAlloca()) {
+        missedRoot(F, AI, "dynamic alloca that may hold references");
+        Complete = false;
+        return false;
+      }
+      Static.push_back(AI);
+    }
+    Instruction *Top = &*Entry.getFirstInsertionPt();
+    for (AllocaInst *AI : Static) {
+      if (AI != Top) {
+        AI->moveBefore(Top);
+        Changed = true;
+      } else {
+        Top = AI->getNextNode();
+      }
+      uint64_t Bytes = DL.getTypeAllocSize(AI->getAllocatedType()) *
+                       cast<ConstantInt>(AI->getArraySize())->getZExtValue();
+      if (Bytes == 0)
+        continue;
+      if ((Bytes + 3) / 4 > MaxRangeWords) {
+        missedRoot(F, AI, "alloca too large to publish");
+        Complete = false;
+        return false;
+      }
+      Ranges.push_back(AI);
     }
   }
-  const LLVMContext &Ctx = F.getContext();
-  const bool Report =
-      Ctx.getLLVMRemarkStreamer() ||
-      Ctx.getDiagHandlerPtr()->isMissedOptRemarkEnabled(RootRemarkPass);
-  const bool CanPublish = !Owners.empty();
-  if (!CanPublish && !Report)
-    return false;
-  auto isHeapBase = [&](Value *V) {
-    V = V->stripPointerCasts();
-    return isa<ConstantPointerNull>(V) ||
-           (Owners.lookup(V) == V && !Fields.count(V));
-  };
-  // Constructors return their incoming object only for the frontend's
-  // explicit receiver contract. A forwarded interior is still an interior.
-  bool Grew;
-  do {
-    Grew = false;
-    for (CallInst *CI : Constructors)
-      if (isHeapBase(CI->getArgOperand(0)))
-        Grew |= Owners.try_emplace(CI, CI).second;
-    for (Instruction &I : instructions(F)) {
-      if (!managed(&I) || Owners.count(&I))
-        continue;
-      if (auto *P = dyn_cast<PHINode>(&I)) {
-        if (llvm::all_of(P->incoming_values(), isHeapBase))
-          Grew |= Owners.try_emplace(P, P).second;
-      } else if (auto *S = dyn_cast<SelectInst>(&I)) {
-        if (isHeapBase(S->getTrueValue()) && isHeapBase(S->getFalseValue()))
-          Grew |= Owners.try_emplace(S, S).second;
+
+  SmallVector<BasicBlock *, 32> RPO;
+  for (BasicBlock *BB : ReversePostOrderTraversal<Function *>(&F))
+    RPO.push_back(BB);
+
+  // Invoke results are defined on the normal edge; give each invoke its own
+  // normal destination so the frame can be popped there.
+  for (BasicBlock *BB : RPO)
+    if (auto *II = dyn_cast<InvokeInst>(BB->getTerminator()))
+      if (siteMayCollect(*II) && !II->getNormalDest()->getSinglePredecessor()) {
+        SplitEdge(BB, II->getNormalDest());
+        Changed = true;
       }
-    }
-  } while (Grew);
+  RPO.clear();
+  for (BasicBlock *BB : ReversePostOrderTraversal<Function *>(&F))
+    RPO.push_back(BB);
 
-  DominatorTree DT(F);
-  if (Report)
-    reportUnprovenCallReturns(F, DT, Owners);
-  if (!CanPublish)
-    return false;
-
-  SmallVector<Value *, 16> Bases;
-  for (auto P : Owners)
-    Bases.push_back(P.first);
-  for (Value *Base : Bases)
-    addProjections(Base, Owners);
-  Merges Recipes;
-  collectMerges(F, DT, Owners, Fields, Recipes);
-  RootLiveness L(F, DT, Owners);
-  L.computeLiveness();
-  SmallVector<Site, 16> Sites;
-  size_t Capacity = 0;
-  SetVector<Value *> Needed;
-  for (BasicBlock &BB : F) {
-    if (!DT.isReachableFromEntry(&BB))
-      continue;
-    LiveSetTy Live = L.Data.LiveOut[&BB];
-    for (Instruction &I : reverse(BB)) {
-      L.transfer(I, Live);
-      if (!mayCollect(I) || Live.empty())
-        continue;
-      Site S{cast<CallInst>(&I), {}, {}};
-      for (Value *V : Live) {
-        auto It = Fields.find(V);
-        if (It == Fields.end()) {
-          S.Roots.push_back(V);
-          Needed.insert(V);
-        } else {
-          for (uint64_t Field : It->second)
-            if (liveFieldAt(S.Call, V, Field, Owners, M.getDataLayout()))
-              S.Fields.emplace_back(V, Field);
+  ManagedLiveness L;
+  L.compute(F, RPO);
+  SmallVector<CompleteSite, 16> Sites;
+  for (BasicBlock *BB : RPO) {
+    BitVector Live = L.LiveOut[BB];
+    for (Instruction &I : llvm::reverse(*BB)) {
+      if (isa<PHINode>(I))
+        break;
+      auto *CB = dyn_cast<CallBase>(&I);
+      if (CB && siteMayCollect(*CB)) {
+        CompleteSite S{CB, Live};
+        unsigned Def = L.indexOf(CB);
+        if (Def != ~0u)
+          S.Live.reset(Def);
+        for (Value *Arg : CB->args()) {
+          unsigned Id = L.indexOf(Arg);
+          if (Id != ~0u)
+            S.Live.set(Id);
         }
+        if (S.Live.any() || !Ranges.empty())
+          Sites.push_back(std::move(S));
       }
-      size_t Count = S.Roots.size() + S.Fields.size();
-      if (Count) {
-        Capacity = std::max(Count, Capacity);
-        Sites.push_back(std::move(S));
+      unsigned Def = L.indexOf(&I);
+      if (Def != ~0u)
+        Live.reset(Def);
+      for (Value *Op : I.operands()) {
+        unsigned Id = L.indexOf(Op);
+        if (Id != ~0u)
+          Live.set(Id);
       }
     }
   }
   if (Sites.empty())
-    return !Recipes.empty();
+    return Changed;
 
-  // Snapshot original consumers before inserting any frame/spill operands.
-  SmallVector<Use *, 32> Uses;
-  for (Instruction &I : instructions(F)) {
-    if (isa<DbgInfoIntrinsic>(I))
-      continue;
-    for (Use &U : I.operands())
-      if (Needed.contains(Owners.lookup(U)) &&
-          !(projection(I) && Owners.count(&I)))
-        Uses.push_back(&U);
+  // Leaves of each published value; reject managed vectors.
+  DenseMap<const Value *, SmallVector<SmallVector<unsigned, 4>, 2>> Leaves;
+  size_t Capacity = 0;
+  for (const CompleteSite &S : Sites) {
+    size_t Count = 0;
+    for (unsigned Id : S.Live.set_bits()) {
+      Value *V = L.Values[Id];
+      auto It = Leaves.find(V);
+      if (It == Leaves.end()) {
+        SmallVector<unsigned, 4> Path;
+        SmallVector<SmallVector<unsigned, 4>, 2> Out;
+        if (!managedLeaves(V->getType(), Path, Out)) {
+          missedRoot(F, S.Call, "managed vector live across a call");
+          Complete = false;
+          return Changed;
+        }
+        It = Leaves.try_emplace(V, std::move(Out)).first;
+      }
+      Count += It->second.size();
+    }
+    Capacity = std::max(Capacity, Count);
   }
-  Instruction *Entry = &*F.getEntryBlock().getFirstInsertionPt();
-  IRBuilder<> B(Entry);
+
+  // After every static alloca: the range table refers to all of them.
+  Instruction *AfterAllocas = &*Entry.getFirstInsertionPt();
+  while (isa<AllocaInst>(AfterAllocas))
+    AfterAllocas = AfterAllocas->getNextNode();
+  IRBuilder<> B(AfterAllocas);
   auto *Raw = B.getInt8PtrTy();
   auto *Ref = B.getInt8PtrTy(1);
-  auto *Slots = ArrayType::get(Ref, Capacity);
-  auto *Ty = StructType::get(Raw, Raw, B.getInt32Ty(), Slots);
-  Value *Frame = B.CreateAlloca(Ty, nullptr, "wasm.root.frame");
+  auto *FrameTy = StructType::get(Raw, Raw, B.getInt32Ty(),
+                                  ArrayType::get(Ref, std::max<size_t>(Capacity, 1)));
+  AllocaInst *Frame = B.CreateAlloca(FrameTy, nullptr, "wasm.root.frame");
   Value *Handle = B.CreateBitCast(Frame, Raw);
-  auto *HookTy = FunctionType::get(B.getVoidTy(), {Raw}, false);
-  auto Push = M.getOrInsertFunction("cjw_root_frame_push", HookTy);
-  auto Pop = M.getOrInsertFunction("cjw_root_frame_pop", HookTy);
-  DenseMap<Value *, AllocaInst *> Current;
-  SmallVector<AllocaInst *, 8> Promote;
-  for (Value *V : Needed) {
-    B.SetInsertPoint(Entry);
-    auto *A = B.CreateAlloca(V->getType(), nullptr, "wasm.root.current");
-    Current[V] = A;
-    Promote.push_back(A);
-    if (auto *I = dyn_cast<Instruction>(V))
-      B.SetInsertPoint(isa<PHINode>(I) ? &*I->getParent()->getFirstInsertionPt()
-                                        : I->getNextNode());
-    B.CreateStore(V, A);
-  }
-  for (Use *U : Uses) {
-    Instruction *At = cast<Instruction>(U->getUser());
-    if (auto *P = dyn_cast<PHINode>(At))
-      At = P->getIncomingBlock(*U)->getTerminator();
-    Value *Base = Owners.lookup(U->get());
-    U->set(materialize(U->get(), Base, Current.lookup(Base), At, Recipes));
-  }
-  // Reuse the frame storage across disjoint calls, with exactly the live
-  // prefix visible. The call result is defined after its own frame is popped.
-  for (const Site &S : Sites) {
-    B.SetInsertPoint(S.Call);
-    B.CreateStore(ConstantPointerNull::get(Raw), B.CreateStructGEP(Ty, Frame, 1));
-    struct Slot { Value *Address, *Cell, *Original; bool IsField; };
-    SmallVector<Slot, 8> Published;
-    auto publish = [&](Value *Cell, bool IsField) {
-      Type *T = Cell->getType()->getNonOpaquePointerElementType();
-      Value *V = B.CreateAlignedLoad(T, Cell, Align(1));
-      Value *Address = B.CreateInBoundsGEP(Ty, Frame,
-          {B.getInt32(0), B.getInt32(3), B.getInt32(Published.size())});
-      Address = B.CreateBitCast(Address, T->getPointerTo());
-      B.CreateStore(V, Address, true);
-      Published.push_back({Address, Cell, V, IsField});
-    };
-    for (Value *V : S.Roots)
-      publish(Current.lookup(V), false);
-    for (const auto &Field : S.Fields) {
-      auto *AI = cast<AddrSpaceCastInst>(Field.first)->getOperand(0);
-      Value *P = B.CreateConstGEP1_64(B.getInt8Ty(), B.CreateBitCast(AI, Raw),
-                                      Field.second);
-      publish(B.CreateBitCast(P, Ref->getPointerTo()), true);
+  Value *Desc = ConstantPointerNull::get(Raw);
+  if (!Ranges.empty()) {
+    auto *RangeTy = StructType::get(Raw, B.getInt32Ty());
+    auto *TableTy = StructType::get(B.getInt32Ty(),
+                                    ArrayType::get(RangeTy, Ranges.size()));
+    AllocaInst *Table = B.CreateAlloca(TableTy, nullptr, "wasm.root.ranges");
+    B.CreateStore(B.getInt32(Ranges.size()), B.CreateStructGEP(TableTy, Table, 0));
+    for (size_t I = 0; I < Ranges.size(); ++I) {
+      AllocaInst *AI = Ranges[I];
+      uint64_t Bytes = DL.getTypeAllocSize(AI->getAllocatedType()) *
+                       cast<ConstantInt>(AI->getArraySize())->getZExtValue();
+      Value *Start = B.CreateBitCast(AI, Raw);
+      // Unwritten stack bytes must not look like references.
+      B.CreateMemSet(Start, B.getInt8(0), Bytes, AI->getAlign());
+      Value *Slot = B.CreateInBoundsGEP(
+          TableTy, Table, {B.getInt32(0), B.getInt32(1), B.getInt32(I)});
+      B.CreateStore(Start, B.CreateStructGEP(RangeTy, Slot, 0));
+      B.CreateStore(B.getInt32(uint32_t((Bytes + 3) / 4)),
+                    B.CreateStructGEP(RangeTy, Slot, 1));
     }
-    B.CreateStore(B.getInt32(Published.size()), B.CreateStructGEP(Ty, Frame, 2));
-    B.CreateCall(Push, Handle);
-    S.Call->setTailCallKind(CallInst::TCK_None);
-    B.SetInsertPoint(S.Call->getNextNode());
-    for (const Slot &R : Published) {
-      auto *T = R.Original->getType();
-      Value *Reload = B.CreateLoad(T, R.Address, true, "wasm.root.reload");
-      if (R.IsField) {
-        // An sret callee can overwrite its caller's payload. Preserve a new
-        // field value; a shadow copy can update only the value it represented.
-        Value *Now = B.CreateAlignedLoad(T, R.Cell, Align(1));
-        Reload = B.CreateSelect(B.CreateICmpEQ(Now, R.Original), Reload, Now);
+    Desc = B.CreateBitCast(Table, Raw);
+  }
+  B.CreateStore(Desc, B.CreateStructGEP(FrameTy, Frame, 1));
+  auto *HookTy = FunctionType::get(B.getVoidTy(), {Raw}, false);
+  FunctionCallee Push = M.getOrInsertFunction("cjw_root_frame_push_complete", HookTy);
+  FunctionCallee Pop = M.getOrInsertFunction("cjw_root_frame_pop_complete", HookTy);
+
+  for (const CompleteSite &S : Sites) {
+    B.SetInsertPoint(S.Call);
+    uint32_t Slot = 0;
+    for (unsigned Id : S.Live.set_bits()) {
+      Value *V = L.Values[Id];
+      for (const auto &Path : Leaves.find(V)->second) {
+        Value *Leaf = Path.empty() ? V : B.CreateExtractValue(V, Path);
+        Value *Address = B.CreateInBoundsGEP(
+            FrameTy, Frame, {B.getInt32(0), B.getInt32(3), B.getInt32(Slot++)});
+        B.CreateStore(B.CreatePointerBitCastOrAddrSpaceCast(Leaf, Ref), Address,
+                      /*isVolatile=*/true);
       }
-      B.CreateAlignedStore(Reload, R.Cell, Align(1));
+    }
+    B.CreateStore(B.getInt32(Slot | CompleteFrameFlag),
+                  B.CreateStructGEP(FrameTy, Frame, 2), /*isVolatile=*/true);
+    B.CreateCall(Push, Handle);
+    if (auto *CI = dyn_cast<CallInst>(S.Call)) {
+      CI->setTailCallKind(CallInst::TCK_None);
+      B.SetInsertPoint(CI->getNextNode());
+    } else {
+      auto *II = cast<InvokeInst>(S.Call);
+      B.SetInsertPoint(&*II->getNormalDest()->getFirstInsertionPt());
     }
     B.CreateCall(Pop, Handle);
   }
-  PromoteMemToReg(Promote, DT);
   return true;
+}
+
+void llvm::emitCJWasmRootRecord(Module &M, bool Complete) {
+  LLVMContext &C = M.getContext();
+  auto *Raw = Type::getInt8PtrTy(C);
+  Constant *Table = ConstantPointerNull::get(Raw);
+  if (GlobalVariable *G = M.getGlobalVariable(".cj.wasm.static_roots", true))
+    Table = ConstantExpr::getPointerBitCastOrAddrSpaceCast(G, Raw);
+  auto *HookTy = FunctionType::get(Type::getVoidTy(C), {Raw}, false);
+  FunctionCallee Hook = M.getOrInsertFunction(
+      Complete ? "cjw_roots_module_complete" : "cjw_roots_module_incomplete",
+      HookTy);
+  Function *Ctor = Function::Create(FunctionType::get(Type::getVoidTy(C), false),
+                                    GlobalValue::InternalLinkage,
+                                    ".cj.wasm.roots_record", M);
+  IRBuilder<> B(BasicBlock::Create(C, "entry", Ctor));
+  B.CreateCall(Hook, Table);
+  B.CreateRetVoid();
+  appendToGlobalCtors(M, Ctor, 0);
 }
