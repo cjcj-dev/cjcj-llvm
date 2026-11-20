@@ -80,6 +80,7 @@ define void @as_integer(i8 addrspace(1)* %p) {
 ; A call result is not published at its own call; invoke is a site whose
 ; unwind edge needs no code.
 ; CHECK-LABEL: define void @invoke_site(
+; CHECK: store i8* {{.*}}, i8** @__cj_root_top
 ; CHECK: store i32 0,
 ; CHECK-NEXT: %r = invoke i8 addrspace(1)* @make()
 ; CHECK: store i8 addrspace(1)* %r, i8 addrspace(1)**
@@ -111,7 +112,7 @@ define void @intrinsic_not_site(i8* %d, i8 addrspace(1)* %p) {
 ; CHECK-LABEL: define void @range(
 ; CHECK: %slot = alloca i8 addrspace(1)*
 ; CHECK: %wasm.root.ranges = alloca { i32, [1 x { i8*, i32 }] }
-; CHECK: call void @llvm.memset.p0i8.i32(i8* {{.*}}, i8 0, i32 4,
+; CHECK: call void @llvm.memset.p0i8.{{i32|i64}}(i8* {{.*}}, i8 0, {{i32|i64}} 4,
 ; CHECK: store i32 1, i32*
 ; CHECK: call void @collect()
 define void @range(i8 addrspace(1)* %p) {
