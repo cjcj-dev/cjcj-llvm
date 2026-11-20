@@ -112,8 +112,9 @@ define void @intrinsic_not_site(i8* %d, i8 addrspace(1)* %p) {
 ; CHECK-LABEL: define void @range(
 ; CHECK: %slot = alloca i8 addrspace(1)*
 ; CHECK: %wasm.root.ranges = alloca { i32, [1 x { i8*, i32 }] }
-; CHECK: call void @llvm.memset.p0i8.{{i32|i64}}(i8* {{.*}}, i8 0, {{i32|i64}} 4,
 ; CHECK: store i32 1, i32*
+; CHECK: call void @llvm.memset.p0i8.{{i32|i64}}(i8* {{.*}}, i8 0, {{i32|i64}} 4,
+; CHECK: store i32 4, i32*
 ; CHECK: call void @collect()
 define void @range(i8 addrspace(1)* %p) {
   %slot = alloca i8 addrspace(1)*
