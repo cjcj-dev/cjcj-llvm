@@ -89,6 +89,25 @@ GlobalVariable *getNewKlass(CallBase *I) {
   return nullptr;
 }
 
+// A managed object starts with its TypeInfo pointer and the payload follows
+// it directly; an array payload starts with the 64-bit length (ArrayBase).
+// Both headers therefore depend on the target pointer width (wasm32 uses a
+// 4-byte TypeInfo pointer), so take them from the module DataLayout. On
+// 64-bit targets they equal the runtime layout constants.
+static uint32_t getObjectHeadSize(const DataLayout &DL) {
+  uint32_t Size = DL.getPointerSize(0);
+  assert((Size != 8 || Size == ObjectHeadSize) &&
+         "64-bit object header must match the runtime layout");
+  return Size;
+}
+
+static uint32_t getArrayHeadSize(const DataLayout &DL) {
+  uint32_t Size = getObjectHeadSize(DL) + sizeof(uint64_t);
+  assert((DL.getPointerSize(0) != 8 || Size == ArrayHeadSize) &&
+         "64-bit array header must match the runtime layout");
+  return Size;
+}
+
 void setEscapeMeta(Instruction *I) {
   assert(isa<AllocaInst>(I) && "Only add meta for alloca inst.");
   I->setMetadata("ea_val", MDNode::get(I->getContext(), {}));
@@ -103,15 +122,16 @@ Type *getAllocaType(GlobalVariable *Klass, bool &HasRef, uint32_t &AS,
   uint32_t ObjSize =
       static_cast<unsigned>(DL.getTypeAllocSize(ST).getFixedSize());
   // Struct Body is null
+  const uint32_t ObjHead = getObjectHeadSize(DL);
   if (ObjSize == 0) {
-    AS = ObjectHeadSize;
+    AS = ObjHead;
     HasRef = false;
     return ST;
   }
   // none-array type
   StructType *ArrayBaseType = dyn_cast<StructType>(ST->getElementType(0));
   if (!ArrayBaseType || ArrayBaseType->getName() != "ArrayBase") {
-    ObjSize += ObjectHeadSize;
+    ObjSize += ObjHead;
     ObjSize = (ObjSize + 7) & (~(7)); // 8 bytes alignment
     AS = ObjSize;
     if (AS > CJMaxStackObject) {
@@ -139,7 +159,7 @@ Type *getAllocaType(GlobalVariable *Klass, bool &HasRef, uint32_t &AS,
     }
     return nullptr; // obj size too large.
   }
-  AS = ArraySize * ElementSize + ArrayHeadSize;
+  AS = ArraySize * ElementSize + getArrayHeadSize(DL);
 
   if (ArraySize != 0) {
     HasRef = containsGCPtrType(ElementType);
@@ -408,20 +428,36 @@ private:
     }
   }
 
+  // The stack copy must use the heap object layout: the payload starts right
+  // after the TypeInfo pointer. A naturally aligned {TypeInfo*, Layout} would
+  // move the payload to the layout alignment when the pointer is narrower
+  // (offset 8 instead of 4 on wasm32), so the struct is packed and its tail is
+  // padded to the 8-byte object granule used for AllocaSize.
   Type *getObjAllocaType(Type *LayoutType) {
-    SmallVector<Type *> Elems;
-    auto *KlassType = StructType::getTypeByName(M->getContext(), "TypeInfo");
+    LLVMContext &C = M->getContext();
+    const DataLayout &DL = M->getDataLayout();
+    SmallVector<Type *, 3> Elems;
+    auto *KlassType = StructType::getTypeByName(C, "TypeInfo");
     Elems.push_back(KlassType->getPointerTo());
     Elems.push_back(LayoutType);
-    return StructType::get(M->getContext(), Elems);
+    uint64_t Size = getObjectHeadSize(DL) +
+                    DL.getTypeAllocSize(LayoutType).getFixedSize();
+    uint64_t PaddedSize = alignTo(Size, 8);
+    if (PaddedSize != Size) {
+      Elems.push_back(ArrayType::get(Type::getInt8Ty(C), PaddedSize - Size));
+    }
+    return StructType::get(C, Elems, /*isPacked=*/true);
   }
 
   void createAllocaInst(IRBuilder<> &IRB, bool IsArray, CallBase *I) {
     BasicBlock *EntryBB = &I->getParent()->getParent()->getEntryBlock();
     Instruction *InsertPos = &*EntryBB->getFirstInsertionPt();
     const DebugLoc &CurDbg = OldInst->getDebugLoc();
-    NewInst = new AllocaInst(getObjAllocaType(AllocaType), 0, "", InsertPos);
-    uint32_t MemSetSize = AllocaSize - ObjectHeadSize;
+    const DataLayout &DL = M->getDataLayout();
+    Align ObjAlign = std::max(Align(8), DL.getPrefTypeAlign(AllocaType));
+    NewInst = new AllocaInst(getObjAllocaType(AllocaType), 0, nullptr,
+                             ObjAlign, "", InsertPos);
+    uint32_t MemSetSize = AllocaSize - getObjectHeadSize(DL);
     if (IsArray) {
       SmallVector<Value *, 2> GEPIndices;
       GEPIndices.push_back(IRB.getInt32(0));
@@ -437,7 +473,7 @@ private:
           SizeP->getType()->getNonOpaquePointerElementType(), SizeP,
           GEPSizeIndices);
       IRB.CreateStore(I->getOperand(1), SizeP64); // store array size
-      MemSetSize = AllocaSize - ArrayHeadSize;
+      MemSetSize = AllocaSize - getArrayHeadSize(DL);
     }
     NewInst->setDebugLoc(CurDbg);
     setEscapeMeta(NewInst);
@@ -447,10 +483,11 @@ private:
     if (MemSetSize == 0) {
       return;
     }
-    SmallVector<Value *, 1> GEPValues;
-    // 8: PI Type Size
-    GEPValues.push_back(IRB.getInt32((AllocaSize - MemSetSize) / 8));
-    auto Values = IRB.CreateGEP(PI8Ty, PI, GEPValues);
+    // The cleared payload starts after the (array) header; address it in
+    // bytes so that the offset does not depend on the pointer width.
+    Value *ObjBytes = IRB.CreateBitCast(NewInst, PI8Ty);
+    auto Values = IRB.CreateConstInBoundsGEP1_32(IRB.getInt8Ty(), ObjBytes,
+                                                 AllocaSize - MemSetSize);
     CallInst *CI = IRB.CreateMemSet(
         Values, IRB.getInt8(0), IRB.getInt64(MemSetSize), MaybeAlign(0), false);
     if (UseCJMemset) {
