@@ -51,6 +51,7 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
 
 using namespace llvm;
 
@@ -547,12 +548,61 @@ bool emitFrame(Function &F, Constant *RootTop) {
 }
 } // namespace
 
+// Cross-package extension registry. Native links every package's
+// "InnerTypeExtensions" arrays (@ExternalExtensionDefs /
+// @NonExternalExtensionDefs) into the CJ metadata section the loader walks in
+// TypeInfo::TraverseOuterExtensionDefs. wasm32 has no CJMetadataInfo emitter,
+// so the arrays were emitted as unreferenced private data and wasm-ld dropped
+// them: an `extend Int64 <: Hashable` from another package was unreachable and
+// CJ_MCC_GetMTable trapped. A private explicit-section array is still removed
+// by wasm-ld's --gc-sections (llvm.used only marks the symbol NO_STRIP), so the
+// module instead registers each array from a constructor; the constructor
+// references the arrays, which keeps them live in every linked object.
+static const char *const ExtDefsRegisterFn = "CJ_MCC_WasmRegisterExtensionDefs";
+static const char *const ExtDefsCtorName = "cj.wasm.register_extension_defs";
+
+static bool registerExtensionDefs(Module &M) {
+  if (M.getFunction(ExtDefsCtorName))
+    return false; // the pass may run more than once over a module
+  SmallVector<GlobalVariable *, 4> Defs;
+  for (GlobalVariable &GV : M.globals()) {
+    if (!GV.isCJInnerTypeExtensions() || !GV.hasInitializer())
+      continue;
+    auto *ATy = dyn_cast<ArrayType>(GV.getValueType());
+    if (!ATy || !ATy->getElementType()->isPointerTy())
+      report_fatal_error(Twine("cj-wasm-roots: InnerTypeExtensions global '") +
+                         GV.getName() + "' is not an array of pointers");
+    if (ATy->getNumElements() != 0)
+      Defs.push_back(&GV);
+  }
+  if (Defs.empty())
+    return false;
+  LLVMContext &C = M.getContext();
+  Type *I8P = Type::getInt8PtrTy(C);
+  Type *I32 = Type::getInt32Ty(C);
+  FunctionCallee Reg = M.getOrInsertFunction(
+      ExtDefsRegisterFn,
+      FunctionType::get(Type::getVoidTy(C), {I8P, I32}, false));
+  Function *Ctor =
+      Function::Create(FunctionType::get(Type::getVoidTy(C), false),
+                       GlobalValue::InternalLinkage, ExtDefsCtorName, M);
+  Ctor->addFnAttr(DoneAttr); // no managed values: nothing to publish
+  IRBuilder<> B(BasicBlock::Create(C, "entry", Ctor));
+  for (GlobalVariable *GV : Defs) {
+    uint64_t N = cast<ArrayType>(GV->getValueType())->getNumElements();
+    B.CreateCall(Reg, {B.CreatePointerCast(GV, I8P), ConstantInt::get(I32, N)});
+  }
+  B.CreateRetVoid();
+  appendToGlobalCtors(M, Ctor, /*Priority=*/65535);
+  return true;
+}
+
 PreservedAnalyses CJWasmRootsPass::run(Module &M, ModuleAnalysisManager &) {
   const Triple T(M.getTargetTriple());
   if (T.getArch() != Triple::wasm32 || !T.isOSWASI())
     return PreservedAnalyses::all();
   Constant *RootTop = nullptr;
-  bool Changed = false;
+  bool Changed = registerExtensionDefs(M);
   for (Function &F : M) {
     if (F.isDeclaration() || F.hasFnAttribute(DoneAttr))
       continue;
