@@ -1011,13 +1011,19 @@ private:
     IRBuilder<> IRB(InsertPos);
     auto *TIType = StructType::getTypeByName(C, "TypeInfo");
     const Triple TT(CI->getModule()->getTargetTriple());
+    // Wasm32 boxes keep the payload right after the 4-byte TypeInfo pointer
+    // (CJW_OBJECT_HEADER_SIZE), which the generic read/write/assign entries
+    // rely on; use a packed 8-byte aligned slot instead of the natural layout.
+    const bool IsWasm = TT.isWasm();
     if (isPrimitiveTypeInfo(GV)) {
       SmallVector<Type *> ElemTypes;
       ElemTypes.push_back(TIType->getPointerTo());
-      if (TT.isArch32Bit())
+      if (TT.isArch32Bit() && !IsWasm)
         ElemTypes.push_back(IRB.getInt32Ty());
       ElemTypes.push_back(IRB.getInt64Ty());
-      AI = IRB.CreateAlloca(StructType::get(C, ElemTypes));
+      AI = IRB.CreateAlloca(StructType::get(C, ElemTypes, /*isPacked=*/IsWasm));
+      if (IsWasm)
+        AI->setAlignment(Align(8));
       Value *BC = IRB.CreateBitCast(AI, IRB.getInt8PtrTy()->getPointerTo());
       Value *GVExpr = ConstantExpr::getBitCast(GV, IRB.getInt8PtrTy());
       IRB.SetInsertPoint(CI);
@@ -1027,20 +1033,24 @@ private:
       assert(ST && "alloca.generic layout info missing!");
       SmallVector<Type *> ElemTypes;
       ElemTypes.push_back(TIType->getPointerTo());
-      if (TT.isArch32Bit())
+      if (TT.isArch32Bit() && !IsWasm)
         ElemTypes.push_back(IRB.getInt32Ty());
       ElemTypes.push_back(ST);
-      StructType *AllocaTy = StructType::get(C, ElemTypes);
+      StructType *AllocaTy = StructType::get(C, ElemTypes, /*isPacked=*/IsWasm);
       AI = IRB.CreateAlloca(AllocaTy);
+      if (IsWasm)
+        AI->setAlignment(Align(8));
       Value *BC = IRB.CreateBitCast(AI, IRB.getInt8PtrTy()->getPointerTo());
       Value *GVExpr = ConstantExpr::getBitCast(GV, IRB.getInt8PtrTy());
       IRB.CreateStore(GVExpr, BC);
       const StructLayout *AllocaSL = DL.getStructLayout(AllocaTy);
       // Count the arm32 i32 padding (see ElemTypes above) so the memset
-      // starts at the payload @8, not the padding @4.
+      // starts at the payload @8, not the padding @4. Wasm32 has no padding:
+      // like the heap object from CJ_MCC_NewObject, the payload follows the
+      // 4-byte TypeInfo pointer.
       uint64_t HeaderSize =
           DL.getTypeAllocSize(TIType->getPointerTo()).getFixedSize() +
-          (TT.isArch32Bit() ? 4 : 0);
+          (TT.isArch32Bit() && !IsWasm ? 4 : 0);
       uint64_t MemSize = AllocaSL->getSizeInBytes() - HeaderSize;
       // %x.payload = getelementptr i8*, %x.i, HeaderSize
       // call @memset(%x.payload, 0, MemSize)
@@ -1048,7 +1058,8 @@ private:
           IRB.CreateGEP(IRB.getInt8Ty(), IRB.CreateBitCast(AI, IRB.getInt8PtrTy()),
                         {IRB.getInt32(HeaderSize)});
       IRB.SetInsertPoint(CI);
-      IRB.CreateMemSet(Data, IRB.getInt8(0), MemSize, Align(8));
+      IRB.CreateMemSet(Data, IRB.getInt8(0), MemSize,
+                       commonAlignment(Align(8), HeaderSize));
     }
     Value *ASC = IRB.CreateAddrSpaceCast(AI, IRB.getInt8PtrTy(1));
     CI->replaceAllUsesWith(ASC);

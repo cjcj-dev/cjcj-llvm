@@ -101,6 +101,13 @@ static uint32_t getObjectHeadSize(const DataLayout &DL) {
   return Size;
 }
 
+// The stack object itself is at least 8-byte aligned, so the payload (and the
+// array length) right after the TypeInfo pointer is only guaranteed to be
+// aligned to the header size: 4 on wasm32, 8 on 64-bit targets.
+static Align getPayloadAlign(const DataLayout &DL) {
+  return commonAlignment(Align(alignEight), getObjectHeadSize(DL));
+}
+
 static uint32_t getArrayHeadSize(const DataLayout &DL) {
   uint32_t Size = getObjectHeadSize(DL) + sizeof(uint64_t);
   assert((DL.getPointerSize(0) != 8 || Size == ArrayHeadSize) &&
@@ -330,6 +337,27 @@ private:
     }
   }
 
+  // Alignment that may be promised for a struct/array copy operand. On 64-bit
+  // targets the 8-byte payload granule makes 8 the existing contract. With a
+  // narrower header (wasm32) the payload starts at +4 and the array elements
+  // at +12, so derive it from the constant offset to the stack object, or else
+  // from what is known about the pointer (byte-sized fields may be at any
+  // offset).
+  Align getAccessAlign(Value *Ptr, Instruction &CxtI) {
+    const DataLayout &DL = M->getDataLayout();
+    if (getObjectHeadSize(DL) == ObjectHeadSize) {
+      return Align(alignEight);
+    }
+    APInt Off(DL.getIndexTypeSizeInBits(Ptr->getType()), 0);
+    const Value *Base = Ptr->stripAndAccumulateConstantOffsets(
+        DL, Off, /*AllowNonInbounds=*/true);
+    if (const auto *AI = dyn_cast<AllocaInst>(Base)) {
+      return commonAlignment(AI->getAlign(),
+                             static_cast<uint64_t>(Off.getSExtValue()));
+    }
+    return getKnownAlignment(Ptr, DL, &CxtI);
+  }
+
   bool canReplaceBarrierCall(CallInst &CI, unsigned Arg) {
     Value *Val = findMemoryBasePointer(CI.getArgOperand(Arg));
     if (PHINode *PN = dyn_cast<PHINode>(Val)) {
@@ -373,9 +401,8 @@ private:
         // 2: value operands number
         AS1ToAS0 =
             Builder.CreateAddrSpaceCast(CI.getArgOperand(2), StackObjPtr);
-        NewInst =
-            new StoreInst(CI.getArgOperand(0),
-                          AS1ToAS0, false, Align(alignEight), &CI);
+        NewInst = new StoreInst(CI.getArgOperand(0), AS1ToAS0, false,
+                                getPayloadAlign(M->getDataLayout()), &CI);
         break;
       case Intrinsic::cj_gcread_ref:
         if (!canReplaceBarrierCall(CI, 0)) {
@@ -385,7 +412,8 @@ private:
         // 2: value operands number
         AS1ToAS0 =
             Builder.CreateAddrSpaceCast(CI.getArgOperand(1), StackObjPtr);
-        NewInst = new LoadInst(CI.getType(), AS1ToAS0, "", &CI);
+        NewInst = new LoadInst(CI.getType(), AS1ToAS0, "", false,
+                               getPayloadAlign(M->getDataLayout()), &CI);
         break;
       case Intrinsic::cj_gcwrite_struct:
         if (!canReplaceBarrierCall(CI, 0)) {
@@ -394,9 +422,10 @@ private:
         // 1: pointer operands number
         // 2: value operands number
         // 3: size info
-        NewInst = Builder.CreateMemCpy(CI.getArgOperand(1), Align(alignEight),
-                                       CI.getArgOperand(2), Align(alignEight),
-                                       CI.getArgOperand(3));
+        NewInst = Builder.CreateMemCpy(
+            CI.getArgOperand(1), getAccessAlign(CI.getArgOperand(1), CI),
+            CI.getArgOperand(2), getAccessAlign(CI.getArgOperand(2), CI),
+            CI.getArgOperand(3));
         break;
       case Intrinsic::cj_gcread_struct:
         if (!canReplaceBarrierCall(CI, 1)) {
@@ -405,9 +434,10 @@ private:
         // 0: pointer operands number
         // 2: value operands number
         // 3: size info
-        NewInst = Builder.CreateMemCpy(CI.getArgOperand(0), Align(alignEight),
-                                       CI.getArgOperand(2), Align(alignEight),
-                                       CI.getArgOperand(3));
+        NewInst = Builder.CreateMemCpy(
+            CI.getArgOperand(0), getAccessAlign(CI.getArgOperand(0), CI),
+            CI.getArgOperand(2), getAccessAlign(CI.getArgOperand(2), CI),
+            CI.getArgOperand(3));
         break;
       case Intrinsic::cj_array_copy_ref:
       case Intrinsic::cj_array_copy_struct:
@@ -417,9 +447,10 @@ private:
             !canReplaceBarrierCall(CI, 0)) {
           return;
         }
-        NewInst = Builder.CreateMemMove(CI.getArgOperand(1), Align(alignEight),
-                                        CI.getArgOperand(3), Align(alignEight),
-                                        CI.getArgOperand(4));
+        NewInst = Builder.CreateMemMove(
+            CI.getArgOperand(1), getAccessAlign(CI.getArgOperand(1), CI),
+            CI.getArgOperand(3), getAccessAlign(CI.getArgOperand(3), CI),
+            CI.getArgOperand(4));
         break;
       }
       CI.replaceAllUsesWith(NewInst);
@@ -478,7 +509,9 @@ private:
       auto SizeP64 = IRB.CreateInBoundsGEP(
           SizeP->getType()->getNonOpaquePointerElementType(), SizeP,
           GEPSizeIndices);
-      IRB.CreateStore(I->getOperand(1), SizeP64); // store array size
+      // The length follows the TypeInfo pointer: +4 on wasm32 (align 4).
+      IRB.CreateAlignedStore(I->getOperand(1), SizeP64,
+                             getPayloadAlign(DL)); // store array size
       MemSetSize = AllocaSize - getArrayHeadSize(DL);
     }
     NewInst->setDebugLoc(CurDbg);
@@ -3133,8 +3166,9 @@ public:
         setInfoEscaped(GV, I->getParent());
         return;
       }
+      // Reference slots are pointer sized (4 bytes on wasm32).
       for (uint64_t PtrOff = BeginOff; PtrOff < BeginOff + Size;
-           PtrOff += alignEight) {
+           PtrOff += DL.getPointerSize(0)) {
         RefOffsets.push_back(PtrOff);
       }
     }
