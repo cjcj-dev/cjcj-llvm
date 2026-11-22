@@ -429,22 +429,28 @@ private:
   }
 
   // The stack copy must use the heap object layout: the payload starts right
-  // after the TypeInfo pointer. A naturally aligned {TypeInfo*, Layout} would
-  // move the payload to the layout alignment when the pointer is narrower
-  // (offset 8 instead of 4 on wasm32), so the struct is packed and its tail is
-  // padded to the 8-byte object granule used for AllocaSize.
+  // after the TypeInfo pointer and the object occupies AllocaSize, a multiple
+  // of the 8-byte object granule. The natural {TypeInfo*, Layout} struct has
+  // that layout whenever the pointer is at least as aligned as the payload
+  // (all 64-bit targets). With a narrower pointer (wasm32) it would move the
+  // payload to offset 8, so use a packed struct padded to the granule instead.
   Type *getObjAllocaType(Type *LayoutType) {
     LLVMContext &C = M->getContext();
     const DataLayout &DL = M->getDataLayout();
-    SmallVector<Type *, 3> Elems;
     auto *KlassType = StructType::getTypeByName(C, "TypeInfo");
-    Elems.push_back(KlassType->getPointerTo());
-    Elems.push_back(LayoutType);
-    uint64_t Size = getObjectHeadSize(DL) +
-                    DL.getTypeAllocSize(LayoutType).getFixedSize();
-    uint64_t PaddedSize = alignTo(Size, 8);
-    if (PaddedSize != Size) {
-      Elems.push_back(ArrayType::get(Type::getInt8Ty(C), PaddedSize - Size));
+    SmallVector<Type *, 3> Elems{KlassType->getPointerTo(), LayoutType};
+    const uint64_t Head = getObjectHeadSize(DL);
+    const uint64_t Size =
+        alignTo(Head + DL.getTypeAllocSize(LayoutType).getFixedSize(), 8);
+    StructType *Natural = StructType::get(C, Elems);
+    const StructLayout *SL = DL.getStructLayout(Natural);
+    if (SL->getElementOffset(1) == Head && SL->getSizeInBytes() == Size) {
+      return Natural;
+    }
+    const uint64_t Unpadded =
+        Head + DL.getTypeAllocSize(LayoutType).getFixedSize();
+    if (Size != Unpadded) {
+      Elems.push_back(ArrayType::get(Type::getInt8Ty(C), Size - Unpadded));
     }
     return StructType::get(C, Elems, /*isPacked=*/true);
   }
