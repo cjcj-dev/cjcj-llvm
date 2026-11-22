@@ -15,6 +15,7 @@
 #ifndef LLVM_LIB_TARGET_WEBASSEMBLY_WEBASSEMBLY_H
 #define LLVM_LIB_TARGET_WEBASSEMBLY_WEBASSEMBLY_H
 
+#include "llvm/ADT/Triple.h"
 #include "llvm/PassRegistry.h"
 #include "llvm/Support/CodeGen.h"
 
@@ -31,6 +32,14 @@ ModulePass *createWebAssemblyFixFunctionBitcasts();
 FunctionPass *createWebAssemblyOptimizeReturned();
 FunctionPass *createWebAssemblyLowerRefTypesIntPtrConv();
 FunctionPass *createWebAssemblyCJLowerLandingPads();
+FunctionPass *createWebAssemblyCJLowerForeignInvokes();
+namespace WebAssembly {
+/// Cangjie wasm EH (default -wasm-enable-eh, +exception-handling and the
+/// landingpad lowering) is only for wasm32 WASI, the triple CJWasmRoots uses.
+inline bool isCJWasiEHTriple(const Triple &TT) {
+  return TT.getArch() == Triple::wasm32 && TT.isOSWASI();
+}
+} // namespace WebAssembly
 
 // ISel and immediate followup passes.
 FunctionPass *createWebAssemblyISelDag(WebAssemblyTargetMachine &TM,
@@ -84,6 +93,7 @@ void initializeWebAssemblyPeepholePass(PassRegistry &);
 void initializeWebAssemblyMCLowerPrePassPass(PassRegistry &);
 void initializeWebAssemblyLowerRefTypesIntPtrConvPass(PassRegistry &);
 void initializeWebAssemblyCJLowerLandingPadsPass(PassRegistry &);
+void initializeWebAssemblyCJLowerForeignInvokesPass(PassRegistry &);
 
 namespace WebAssembly {
 enum TargetIndex {

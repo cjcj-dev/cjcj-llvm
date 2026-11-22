@@ -57,7 +57,15 @@ FunctionPass *llvm::createWebAssemblyCJLowerLandingPads() {
   return new WebAssemblyCJLowerLandingPads();
 }
 
+static bool isCangjieFunction(const Function &F) {
+  return F.hasGC() && F.getGC() == "cangjie";
+}
+
 bool WebAssemblyCJLowerLandingPads::runOnFunction(Function &F) {
+  // Only Cangjie functions get catch_all funclets. Foreign landingpads, such as
+  // a C++ __gxx_personality_v0 {i8*, i32} pad, keep their selector here.
+  if (!isCangjieFunction(F))
+    return false;
   if (!F.hasPersonalityFn())
     return false;
   SmallVector<LandingPadInst *, 8> Pads;
@@ -117,4 +125,38 @@ bool WebAssemblyCJLowerLandingPads::runOnFunction(Function &F) {
       FunctionType::get(Type::getInt32Ty(C), true));
   F.setPersonalityFn(cast<Constant>(Pers.getCallee()));
   return true;
+}
+
+namespace {
+/// Wasm EH is on for the whole module on wasm32-wasi, but only Cangjie pads are
+/// turned into funclets. A non-Cangjie invoke becomes a plain call, which is
+/// what LowerInvoke did for every function before wasm EH, so its landingpad is
+/// unreachable and never reaches WasmEHPrepare as a catch_all pad.
+class WebAssemblyCJLowerForeignInvokes final : public FunctionPass {
+public:
+  static char ID;
+  WebAssemblyCJLowerForeignInvokes() : FunctionPass(ID) {}
+  StringRef getPassName() const override {
+    return "WebAssembly lower non-Cangjie invokes under Cangjie wasm EH";
+  }
+  bool runOnFunction(Function &F) override {
+    if (isCangjieFunction(F))
+      return false;
+    SmallVector<InvokeInst *, 8> Invokes;
+    for (BasicBlock &BB : F)
+      if (auto *II = dyn_cast<InvokeInst>(BB.getTerminator()))
+        Invokes.push_back(II);
+    for (InvokeInst *II : Invokes)
+      changeToCall(II);
+    return !Invokes.empty();
+  }
+};
+} // end anonymous namespace
+
+char WebAssemblyCJLowerForeignInvokes::ID = 0;
+INITIALIZE_PASS(WebAssemblyCJLowerForeignInvokes, "wasm-cj-lower-foreign-invokes",
+                "Lower non-Cangjie invokes under Cangjie wasm EH", false, false)
+
+FunctionPass *llvm::createWebAssemblyCJLowerForeignInvokes() {
+  return new WebAssemblyCJLowerForeignInvokes();
 }

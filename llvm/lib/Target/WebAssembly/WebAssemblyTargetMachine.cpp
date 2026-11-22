@@ -57,6 +57,8 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeWebAssemblyTarget() {
   auto &PR = *PassRegistry::getPassRegistry();
   initializeWebAssemblyAddMissingPrototypesPass(PR);
   initializeWebAssemblyLowerEmscriptenEHSjLjPass(PR);
+  initializeWebAssemblyCJLowerLandingPadsPass(PR);
+  initializeWebAssemblyCJLowerForeignInvokesPass(PR);
   initializeLowerGlobalDtorsLegacyPassPass(PR);
   initializeFixFunctionBitcastsPass(PR);
   initializeOptimizeReturnedPass(PR);
@@ -134,7 +136,8 @@ WebAssemblyTargetMachine::WebAssemblyTargetMachine(
   // handling proposal, i.e. the defaults are -wasm-enable-eh
   // -exception-model=wasm -mattr=+exception-handling. An explicit
   // -wasm-enable-eh=<v> or an Emscripten EH/SjLj mode keeps its meaning.
-  if (TT.isOSWASI() && WebAssembly::WasmEnableEH.getNumOccurrences() == 0 &&
+  if (WebAssembly::isCJWasiEHTriple(TT) &&
+      WebAssembly::WasmEnableEH.getNumOccurrences() == 0 &&
       !WebAssembly::WasmEnableEmEH && !WebAssembly::WasmEnableEmSjLj &&
       !WebAssembly::WasmEnableSjLj) {
     WebAssembly::WasmEnableEH = true;
@@ -180,7 +183,8 @@ WebAssemblyTargetMachine::getSubtargetImpl(const Function &F) const {
       CPUAttr.isValid() ? CPUAttr.getValueAsString().str() : TargetCPU;
   std::string FS =
       FSAttr.isValid() ? FSAttr.getValueAsString().str() : TargetFS;
-  if (WebAssembly::WasmEnableEH && getTargetTriple().isOSWASI() &&
+  if (WebAssembly::WasmEnableEH &&
+      WebAssembly::isCJWasiEHTriple(getTargetTriple()) &&
       FS.find("exception-handling") == std::string::npos)
     FS += FS.empty() ? "+exception-handling" : ",+exception-handling";
 
@@ -447,8 +451,13 @@ void WebAssemblyPassConfig::addIRPasses() {
   // before.
   // Cangjie wasm32-wasi (M1): turn landingpads into catch_all funclets before
   // WasmEHPrepare, instead of lowering the invokes away.
-  if (WasmEnableEH && TM->getTargetTriple().isOSWASI())
+  // Only Cangjie functions (gc "cangjie") get funclets; invokes of any other
+  // function are lowered to calls exactly as without wasm EH.
+  if (WasmEnableEH && WebAssembly::isCJWasiEHTriple(TM->getTargetTriple())) {
     addPass(createWebAssemblyCJLowerLandingPads());
+    addPass(createWebAssemblyCJLowerForeignInvokes());
+    addPass(createUnreachableBlockEliminationPass());
+  }
   if (!WasmEnableEmEH && !WasmEnableEH) {
     addPass(createLowerInvokePass());
     // The lower invoke pass may create unreachable code. Remove it in order not
