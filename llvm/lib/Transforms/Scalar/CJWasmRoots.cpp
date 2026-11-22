@@ -27,8 +27,9 @@
 // I-RET: collection only happens inside allocation, so a returned reference
 //   is safe until the caller's next slot store.
 // I-INB: AS1 values point into [base, base + size] of their object. Rule 4
-//   publishes the root of GEP/cast chains; the remaining PHI/select case with a
-//   non-inbounds or inttoptr leaf whose base is not published is rejected.
+//   publishes the root of GEP/cast chains. A PHI/select with a non-inbounds or
+//   inttoptr leaf also publishes that leaf's base when the base is an object
+//   start dominating the site; any other unpublished base is rejected.
 // I-BACKEND: this is the last IR pass; only llc follows, and the calls it
 //   introduces are libc/compiler-rt leaves that do not allocate managed memory.
 //
@@ -43,6 +44,7 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Triple.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
@@ -254,10 +256,31 @@ void unsupportedRoot(Function &F, const Instruction &At, const Twine &Why) {
                                     F.getName() + ": " + Why);
 }
 
+// A value that addresses the start of its object: a managed argument, or a
+// reference returned by a call (allocation, gcread, runtime entry) or loaded
+// from memory.
+bool objectStart(const Value *V) {
+  return isa<Argument>(V) || isa<CallBase>(V) || isa<LoadInst>(V);
+}
+
+bool dominatesSite(const DominatorTree &DT, const Value *V,
+                   const Instruction *At) {
+  if (isa<Argument>(V))
+    return true;
+  auto *I = dyn_cast<Instruction>(V);
+  return I && DT.dominates(I, At);
+}
+
 // I-INB residue: a published PHI/select whose (transitive) incoming chain
 // contains a non-inbounds GEP or an inttoptr is only covered when the base of
-// that chain is published at the same site.
-bool mergedLeavesCovered(Value *R, const BitVector &Pub, const RootLiveness &L) {
+// that chain is published at the same site. With DT, a base that is an object
+// start dominating At but no longer live there (its only use is the derived
+// address) is appended to Publish instead: publishing it keeps the object
+// alive (rule 4 stores chain roots, not derived addresses).
+bool mergedLeavesCovered(Value *R, const BitVector &Pub, const RootLiveness &L,
+                         const DominatorTree *DT = nullptr,
+                         const Instruction *At = nullptr,
+                         SmallVectorImpl<unsigned> *Publish = nullptr) {
   SmallPtrSet<Value *, 16> Seen;
   SmallVector<Value *, 16> Work;
   auto Push = [&](Value *M) {
@@ -294,8 +317,13 @@ bool mergedLeavesCovered(Value *R, const BitVector &Pub, const RootLiveness &L) 
     }
     if (Suspicious) {
       unsigned Id = L.indexOf(Cur);
-      if (Id == ~0u || !Pub.test(Id))
+      if (Id == ~0u)
         return false;
+      if (!Pub.test(Id)) {
+        if (!DT || !objectStart(Cur) || !dominatesSite(*DT, Cur, At))
+          return false;
+        Publish->push_back(Id);
+      }
     }
     if (Seen.insert(Cur).second || Cur == V)
       Push(Cur);
@@ -394,6 +422,22 @@ bool emitFrame(Function &F, Constant *RootTop) {
          N->getZExtValue() > MaxRangeBytes / Size.getFixedValue())) {
       unsupportedRoot(F, *AI, "alloca too large to publish");
       return false;
+    }
+  }
+
+  // I-INB: publish the dominating object-start base of each merged derived
+  // reference that is published at a site but whose base is not.
+  {
+    DominatorTree DT(F);
+    for (Site &S : Sites) {
+      SmallVector<unsigned, 4> Publish;
+      for (unsigned Id : S.Pub.set_bits()) {
+        Value *V = L.Values[Id];
+        if (isa<PHINode>(V) || isa<SelectInst>(V))
+          (void)mergedLeavesCovered(V, S.Pub, L, &DT, S.Call, &Publish);
+      }
+      for (unsigned Id : Publish)
+        S.Pub.set(Id);
     }
   }
 

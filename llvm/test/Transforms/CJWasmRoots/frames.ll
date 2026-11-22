@@ -154,11 +154,11 @@ define void @tail_cleared(i8 addrspace(1)* %p) {
 ; ERR-TAIL:}
 ; TAIL: unsupported WASI root publication in mt: musttail
 
-; ERR-PHI:define void @phi(i1 %c, i8 addrspace(1)* %a, i8 addrspace(1)* %b) {
+; ERR-PHI:define void @phi(i1 %c, i32 %n, i8 addrspace(1)* %b) {
 ; ERR-PHI:entry:
 ; ERR-PHI:  br i1 %c, label %l, label %r
 ; ERR-PHI:l:
-; ERR-PHI:  %x = getelementptr i8, i8 addrspace(1)* %a, i32 100000
+; ERR-PHI:  %x = inttoptr i32 %n to i8 addrspace(1)*
 ; ERR-PHI:  br label %j
 ; ERR-PHI:r:
 ; ERR-PHI:  br label %j
