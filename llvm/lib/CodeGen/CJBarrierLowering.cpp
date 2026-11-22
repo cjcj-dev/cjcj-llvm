@@ -494,6 +494,42 @@ private:
     return Func;
   }
 
+  // The named struct allocated by the stack or global side of a struct copy,
+  // if every such operand agrees and its alloc size equals the constant copy
+  // size. Heap (addrspace 1) operands carry no type and are ignored.
+  StructType *getCopiedStructType(IntrinsicInst *II) const {
+    const DataLayout &DL = M.getDataLayout();
+    const ConstantInt *Size = nullptr;
+    for (Value *Arg : II->args())
+      if (auto *CI = dyn_cast<ConstantInt>(Arg)) {
+        if (Size)
+          return nullptr;
+        Size = CI;
+      }
+    if (!Size)
+      return nullptr;
+    StructType *Found = nullptr;
+    for (Value *Arg : II->args()) {
+      auto *PT = dyn_cast<PointerType>(Arg->getType());
+      if (!PT || PT->getAddressSpace() != 0)
+        continue;
+      const Value *Base = Arg->stripPointerCasts();
+      Type *Ty = nullptr;
+      if (auto *AI = dyn_cast<AllocaInst>(Base))
+        Ty = AI->isArrayAllocation() ? nullptr : AI->getAllocatedType();
+      else if (auto *GV = dyn_cast<GlobalVariable>(Base))
+        Ty = GV->getValueType();
+      auto *Cand = dyn_cast_or_null<StructType>(Ty);
+      if (!Cand || Cand->isOpaque() || !Cand->hasName() ||
+          DL.getTypeAllocSize(Cand).getFixedSize() != Size->getZExtValue())
+        return nullptr;
+      if (Found && Found != Cand)
+        return nullptr;
+      Found = Cand;
+    }
+    return Found;
+  }
+
   Constant *getOrInsertGCTib(IntrinsicInst *II) const {
     const MDNode *Metadata = II->getMetadata("AggType");
     assert(Metadata && "Missing AggType Metadata.");
@@ -503,10 +539,24 @@ private:
     auto STName =
         dyn_cast<MDString>(Metadata->getOperand(0).get())->getString();
     auto *ST = StructType::getTypeByName(C, STName);
-    assert(ST && "AggType doesn't exsit.");
+    std::string BitMapName = STName.str();
+    if (!ST) {
+      // The frontend names the AggType by its own LLVM struct type. A named
+      // struct that no value references is not serialized into bitcode, so a
+      // separate llc may not see it. Recover the exact layout from the
+      // non-heap side of the copy, and never guess a bitmap.
+      ST = getCopiedStructType(II);
+      if (!ST)
+        report_fatal_error(Twine("CJBarrierLowering: AggType '") + STName +
+                           "' of '" + II->getCalledFunction()->getName() +
+                           "' in '" + II->getFunction()->getName() +
+                           "' names no struct type in this module, and the "
+                           "copy does not prove a struct layout of its size",
+                           /*gen_crash_diag=*/false);
+      BitMapName = ST->getName().str();
+    }
 
     Type *DstType = Type::getInt8PtrTy(C);
-    std::string BitMapName = STName.str();
     Constant *BitMapGV = M.getGlobalVariable(BitMapName + ".bitmap");
     if (BitMapGV == nullptr) {
       auto &Info = GCInfo.getOrInsertTypeGCInfo(ST);
