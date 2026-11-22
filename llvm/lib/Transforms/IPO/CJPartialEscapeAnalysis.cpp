@@ -125,6 +125,25 @@ static uint32_t getArrayHeadSize(const Module &M) {
   return getObjectHeadSize(M) + sizeof(uint64_t);
 }
 
+// A native stack object is the natural {TypeInfo*, Layout} struct (see
+// getObjAllocaType), while the code addresses the payload at the native
+// header size (+8) and expects AllocaSize bytes. On ARM32 a layout whose
+// members are at most 4-byte aligned puts the natural payload at +4 and the
+// struct is 4 bytes short, so such an object cannot stand in for the heap
+// object: keep it on the heap. 64-bit pointers and 8-byte aligned layouts
+// always fit. Wasm uses its own padded layout.
+static bool nativeStackLayoutFits(const Module &M, Type *LayoutType,
+                                  uint64_t AllocaSize) {
+  if (isWasmModule(M))
+    return true;
+  LLVMContext &C = M.getContext();
+  StructType *Natural =
+      StructType::get(C, {Type::getInt8PtrTy(C), LayoutType});
+  const StructLayout *SL = M.getDataLayout().getStructLayout(Natural);
+  return SL->getElementOffset(1) >= ObjectHeadSize &&
+         SL->getSizeInBytes() >= AllocaSize;
+}
+
 void setEscapeMeta(Instruction *I) {
   assert(isa<AllocaInst>(I) && "Only add meta for alloca inst.");
   I->setMetadata("ea_val", MDNode::get(I->getContext(), {}));
@@ -143,6 +162,9 @@ Type *getAllocaType(GlobalVariable *Klass, bool &HasRef, uint32_t &AS,
   if (ObjSize == 0) {
     AS = ObjHead;
     HasRef = false;
+    if (!nativeStackLayoutFits(*M, ST, AS)) {
+      return nullptr; // natural stack layout shorter than the native header
+    }
     return ST;
   }
   // none-array type
@@ -155,6 +177,9 @@ Type *getAllocaType(GlobalVariable *Klass, bool &HasRef, uint32_t &AS,
       return nullptr; // obj size too large
     }
     HasRef = containsGCPtrType(ST);
+    if (!nativeStackLayoutFits(*M, ST, AS)) {
+      return nullptr; // natural payload before the native header end
+    }
     return ST;
   }
   Value *Size = Val->getOperand(1);
@@ -184,7 +209,11 @@ Type *getAllocaType(GlobalVariable *Klass, bool &HasRef, uint32_t &AS,
   SmallVector<Type *, 4> ElementTypes;
   ElementTypes.push_back(ArrayBaseType);
   ElementTypes.push_back(ArrayType::get(ElementType, ArraySize));
-  return StructType::get(C, ElementTypes);
+  StructType *ArrayLayout = StructType::get(C, ElementTypes);
+  if (!nativeStackLayoutFits(*M, ArrayLayout, AS)) {
+    return nullptr; // natural payload before the native header end
+  }
+  return ArrayLayout;
 }
 
 // NEW func which can rewrite.
@@ -469,13 +498,14 @@ private:
     }
   }
 
-  // The stack copy must use the heap object layout: the payload starts right
-  // after the TypeInfo pointer and the object occupies AllocaSize, a multiple
-  // of the 8-byte object granule. The natural {TypeInfo*, Layout} struct has
-  // that layout whenever the pointer is at least as aligned as the payload
-  // (all 64-bit targets). Native targets keep the natural struct unchanged.
-  // With the compact Wasm header it would move the payload to offset 8, so use
-  // a packed struct padded to the granule instead.
+  // The stack copy must use the heap object layout: the payload starts at the
+  // object header size and the object occupies AllocaSize, a multiple of the
+  // 8-byte object granule. Native targets keep the natural {TypeInfo*, Layout}
+  // struct; getAllocaType keeps an object on the heap when that struct puts
+  // the payload before the 8-byte native header end or is smaller than
+  // AllocaSize (ARM32 layouts without 8-byte aligned members). With the
+  // compact Wasm header the natural struct would move the payload to offset 8,
+  // so use a packed struct padded to the granule instead.
   Type *getObjAllocaType(Type *LayoutType) {
     LLVMContext &C = M->getContext();
     const DataLayout &DL = M->getDataLayout();

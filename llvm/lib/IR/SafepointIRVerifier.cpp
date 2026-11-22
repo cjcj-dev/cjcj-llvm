@@ -997,27 +997,32 @@ Value *llvm::findMemoryBasePointer(Value *V) {
   return CV;
 }
 
-// Alignment that a raw copy may promise for a barrier operand. Native
-// runtimes keep the existing 8-byte contract (8-byte object header, 8-byte
-// payload granule). The Wasm object header is 4 bytes, so a managed field is
-// only as aligned as its address chain proves: walk casts and GEPs to the base
-// (folding constant offsets and the stride of variable indices) and combine
-// with what is known about that base (alloca, global or parameter alignment).
-// Never promise more than the native 8.
-static Align getGuaranteedCopyAlign(const Value *Ptr, const Module &M) {
-  if (!Triple(M.getTargetTriple()).isWasm())
-    return Align(8);
-  const DataLayout &DL = M.getDataLayout();
+// Alignment of a pointer as far as its address chain proves it, capped at the
+// native 8: walk casts and GEPs to the base (folding constant offsets and the
+// stride of variable indices) and combine with what is known about that base
+// (alloca, global or parameter alignment). Offsets are only tracked modulo 8,
+// so a constant index wider than 64 bits contributes its low 64 bits.
+static Align getProvenAddrAlign(const Value *Ptr, const DataLayout &DL,
+                                unsigned &Budget) {
   Align A(8);
   uint64_t Off = 0;
-  for (unsigned Depth = 0; Depth < 32; ++Depth) {
+  while (Budget > 0) {
+    --Budget;
     Ptr = Ptr->stripPointerCasts();
     if (const auto *II = dyn_cast<IntrinsicInst>(Ptr)) {
-      // Clearing low bits never lowers the alignment of the operand.
       if (II->getIntrinsicID() != Intrinsic::ptrmask)
         break;
-      Ptr = II->getArgOperand(0);
-      continue;
+      // ptrmask(P, Mask) clears bits of P, so it is at least as aligned as P,
+      // and at least as aligned as the trailing zero bits of a constant Mask.
+      // The cleared bits may include bits contributed by offsets above the
+      // mask, so those offsets never combine with Off below it: Off applies
+      // to the alignment of the mask result only.
+      Align MaskedAlign = getProvenAddrAlign(II->getArgOperand(0), DL, Budget);
+      if (const auto *CMask = dyn_cast<ConstantInt>(II->getArgOperand(1))) {
+        unsigned TZ = std::min(CMask->getValue().countTrailingZeros(), 3u);
+        MaskedAlign = std::max(MaskedAlign, Align(uint64_t(1) << TZ));
+      }
+      return commonAlignment(std::min(A, MaskedAlign), Off);
     }
     const auto *GEP = dyn_cast<GEPOperator>(Ptr);
     if (!GEP)
@@ -1034,7 +1039,7 @@ static Align getGuaranteedCopyAlign(const Value *Ptr, const Module &M) {
       if (Stride.isScalable())
         return Align(1);
       if (const auto *CIdx = dyn_cast<ConstantInt>(Idx))
-        Off += static_cast<uint64_t>(CIdx->getSExtValue()) *
+        Off += CIdx->getValue().sextOrTrunc(64).getZExtValue() *
                Stride.getFixedSize();
       else
         A = commonAlignment(A, Stride.getFixedSize());
@@ -1043,6 +1048,18 @@ static Align getGuaranteedCopyAlign(const Value *Ptr, const Module &M) {
   }
   A = std::min(A, Ptr->getPointerAlignment(DL));
   return commonAlignment(A, Off);
+}
+
+// Alignment that a raw copy may promise for a barrier operand. Native
+// runtimes keep the existing 8-byte contract (8-byte object header, 8-byte
+// payload granule). The Wasm object header is 4 bytes, so a managed field is
+// only as aligned as its address chain proves. Never promise more than the
+// native 8.
+static Align getGuaranteedCopyAlign(const Value *Ptr, const Module &M) {
+  if (!Triple(M.getTargetTriple()).isWasm())
+    return Align(8);
+  unsigned Budget = 32;
+  return getProvenAddrAlign(Ptr, M.getDataLayout(), Budget);
 }
 
 Instruction *llvm::createStoreOrMems(CallBase *CI, IRBuilder<> &Builder) {
