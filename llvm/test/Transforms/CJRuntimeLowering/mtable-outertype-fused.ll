@@ -2,11 +2,11 @@
 ; treatment of llvm.cj.get.mtable.func.outertype.
 ; REQUIRES: x86-registered-target, aarch64-registered-target
 ; RUN: opt -passes=cj-runtime-lowering -S < %s | FileCheck %s --check-prefix=LOWER
-; RUN: opt -passes=cj-runtime-lowering -S < %s | llc -O2 -mtriple=x86_64-unknown-linux-gnu -o - | FileCheck %s --check-prefix=SYSV
-; RUN: opt -passes=cj-runtime-lowering -S < %s | llc -O2 -mtriple=x86_64-apple-darwin -o - | FileCheck %s --check-prefix=SYSV
-; RUN: opt -passes=cj-runtime-lowering -S < %s | llc -O2 -mtriple=x86_64-w64-windows-gnu -o - | FileCheck %s --check-prefix=WIN64
-; RUN: opt -passes=cj-runtime-lowering -S < %s | llc -O2 -mtriple=aarch64-linux-ohos -o - | FileCheck %s --check-prefix=A64
-; RUN: opt -passes=cj-runtime-lowering -S < %s | llc -O2 -mtriple=aarch64-apple-darwin -o - | FileCheck %s --check-prefix=A64
+; RUN: opt -passes=cj-runtime-lowering,cj-specific-opt -S < %s | llc -O2 -mtriple=x86_64-unknown-linux-gnu -o - | FileCheck %s --check-prefix=SYSV
+; RUN: opt -passes=cj-runtime-lowering,cj-specific-opt -S < %s | llc -O2 -mtriple=x86_64-apple-darwin -o - | FileCheck %s --check-prefix=SYSV
+; RUN: opt -passes=cj-runtime-lowering,cj-specific-opt -S < %s | llc -O2 -mtriple=x86_64-w64-windows-gnu -o - | FileCheck %s --check-prefix=WIN64
+; RUN: opt -passes=cj-runtime-lowering,cj-specific-opt -S < %s | llc -O2 -mtriple=aarch64-linux-ohos -o - | FileCheck %s --check-prefix=A64
+; RUN: opt -passes=cj-runtime-lowering,cj-specific-opt -S < %s | llc -O2 -mtriple=aarch64-apple-darwin -o - | FileCheck %s --check-prefix=A64
 ; RUN: opt -passes='loop-mssa(licm),gvn' -S < %s | FileCheck %s --check-prefix=OPT
 
 declare { i8*, i8* } @llvm.cj.get.mtable.func.outertype(i8*, i8*, i64)
