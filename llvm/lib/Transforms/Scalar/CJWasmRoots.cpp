@@ -537,8 +537,8 @@ bool emitFrame(Function &F, Constant *RootTop) {
   for (Instruction &I : instructions(F))
     if (auto *CI = dyn_cast<CallInst>(&I))
       CI->setTailCallKind(CallInst::TCK_None);
-  // Unlink before every return. Unwind paths need no code: throwing exits the
-  // process in this ABI generation.
+  // Unlink before every return. Unwind paths are handled by
+  // restoreRootTopAtLandingPads: a caught exception relinks this frame.
   for (BasicBlock &BB : F)
     if (auto *Ret = dyn_cast<ReturnInst>(BB.getTerminator())) {
       B.SetInsertPoint(Ret);
@@ -602,6 +602,49 @@ static bool registerExtensionDefs(Module &M) {
   return true;
 }
 
+// I-FRAME under unwind (wasm EH, M1): a throw leaves the frames of every
+// unwound callee linked on __cj_root_top, so at each landingpad (the
+// catch_all entry after wasm lowering) __cj_root_top is reset to this
+// activation's own frame, or to the value it had on entry when the function
+// links no frame. The store precedes every may-collect call of the handler.
+static bool restoreRootTopAtLandingPads(Function &F, Constant *RootTop) {
+  SmallVector<LandingPadInst *, 8> Pads;
+  for (BasicBlock &BB : F)
+    if (LandingPadInst *LP = BB.getLandingPadInst())
+      Pads.push_back(LP);
+  if (Pads.empty())
+    return false;
+  BasicBlock &Entry = F.getEntryBlock();
+  Value *Own = nullptr;
+  for (Instruction &I : Entry)
+    if (auto *AI = dyn_cast<AllocaInst>(&I))
+      if (AI->getName() == "wasm.root.frame") {
+        Own = AI;
+        break;
+      }
+  Type *Raw = Type::getInt8PtrTy(F.getContext());
+  if (Own) {
+    IRBuilder<> B(cast<AllocaInst>(Own)->getNextNode());
+    Own = B.CreateBitCast(Own, Raw, "wasm.root.own");
+  } else {
+    Instruction *AfterAllocas = &*Entry.getFirstInsertionPt();
+    while (isa<AllocaInst>(AfterAllocas))
+      AfterAllocas = AfterAllocas->getNextNode();
+    IRBuilder<> B(AfterAllocas);
+    Own = B.CreateLoad(Raw, RootTop, "wasm.root.entry");
+  }
+  if (auto *OI = dyn_cast<Instruction>(Own)) {
+    // The own-frame value must be defined before the frame is linked and
+    // dominate every pad: keep it in the entry block right after its source.
+    (void)OI;
+  }
+  for (LandingPadInst *LP : Pads) {
+    IRBuilder<> B(&*LP->getParent()->getFirstInsertionPt());
+    B.CreateStore(Own, RootTop);
+  }
+  return true;
+}
+
 PreservedAnalyses CJWasmRootsPass::run(Module &M, ModuleAnalysisManager &) {
   const Triple T(M.getTargetTriple());
   if (T.getArch() != Triple::wasm32 || !T.isOSWASI())
@@ -614,6 +657,7 @@ PreservedAnalyses CJWasmRootsPass::run(Module &M, ModuleAnalysisManager &) {
     if (!RootTop)
       RootTop = M.getOrInsertGlobal("__cj_root_top", Type::getInt8PtrTy(M.getContext()));
     Changed |= emitFrame(F, RootTop);
+    Changed |= restoreRootTopAtLandingPads(F, RootTop);
     F.addFnAttr(DoneAttr);
   }
   return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();

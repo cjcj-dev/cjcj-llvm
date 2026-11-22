@@ -30,6 +30,7 @@ ModulePass *createWebAssemblyAddMissingPrototypes();
 ModulePass *createWebAssemblyFixFunctionBitcasts();
 FunctionPass *createWebAssemblyOptimizeReturned();
 FunctionPass *createWebAssemblyLowerRefTypesIntPtrConv();
+FunctionPass *createWebAssemblyCJLowerLandingPads();
 
 // ISel and immediate followup passes.
 FunctionPass *createWebAssemblyISelDag(WebAssemblyTargetMachine &TM,
@@ -82,6 +83,7 @@ void initializeWebAssemblyDebugFixupPass(PassRegistry &);
 void initializeWebAssemblyPeepholePass(PassRegistry &);
 void initializeWebAssemblyMCLowerPrePassPass(PassRegistry &);
 void initializeWebAssemblyLowerRefTypesIntPtrConvPass(PassRegistry &);
+void initializeWebAssemblyCJLowerLandingPadsPass(PassRegistry &);
 
 namespace WebAssembly {
 enum TargetIndex {

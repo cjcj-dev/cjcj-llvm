@@ -130,6 +130,17 @@ WebAssemblyTargetMachine::WebAssemblyTargetMachine(
   // 'unreachable' instructions which is meant for that case.
   this->Options.TrapUnreachable = true;
 
+  // Cangjie wasm32-wasi (M1): Cangjie exceptions use the wasm exception
+  // handling proposal, i.e. the defaults are -wasm-enable-eh
+  // -exception-model=wasm -mattr=+exception-handling. An explicit
+  // -wasm-enable-eh=<v> or an Emscripten EH/SjLj mode keeps its meaning.
+  if (TT.isOSWASI() && WebAssembly::WasmEnableEH.getNumOccurrences() == 0 &&
+      !WebAssembly::WasmEnableEmEH && !WebAssembly::WasmEnableEmSjLj &&
+      !WebAssembly::WasmEnableSjLj) {
+    WebAssembly::WasmEnableEH = true;
+    this->Options.ExceptionModel = ExceptionHandling::Wasm;
+  }
+
   // WebAssembly treats each function as an independent unit. Force
   // -ffunction-sections, effectively, so that we can emit them independently.
   this->Options.FunctionSections = true;
@@ -169,6 +180,9 @@ WebAssemblyTargetMachine::getSubtargetImpl(const Function &F) const {
       CPUAttr.isValid() ? CPUAttr.getValueAsString().str() : TargetCPU;
   std::string FS =
       FSAttr.isValid() ? FSAttr.getValueAsString().str() : TargetFS;
+  if (WebAssembly::WasmEnableEH && getTargetTriple().isOSWASI() &&
+      FS.find("exception-handling") == std::string::npos)
+    FS += FS.empty() ? "+exception-handling" : ",+exception-handling";
 
   // This needs to be done before we create a new subtarget since any
   // creation will depend on the TM and the code generation flags on the
@@ -431,6 +445,10 @@ void WebAssemblyPassConfig::addIRPasses() {
   // TargetPassConfig::addPassesToHandleExceptions, but that runs after these IR
   // passes and Emscripten SjLj handling expects all invokes to be lowered
   // before.
+  // Cangjie wasm32-wasi (M1): turn landingpads into catch_all funclets before
+  // WasmEHPrepare, instead of lowering the invokes away.
+  if (WasmEnableEH && TM->getTargetTriple().isOSWASI())
+    addPass(createWebAssemblyCJLowerLandingPads());
   if (!WasmEnableEmEH && !WasmEnableEH) {
     addPass(createLowerInvokePass());
     // The lower invoke pass may create unreachable code. Remove it in order not
