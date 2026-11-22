@@ -36,6 +36,7 @@
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/BasicBlock.h"
@@ -46,6 +47,8 @@
 #include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/IR/Statepoint.h"
 #include "llvm/IR/Value.h"
@@ -994,6 +997,54 @@ Value *llvm::findMemoryBasePointer(Value *V) {
   return CV;
 }
 
+// Alignment that a raw copy may promise for a barrier operand. Native
+// runtimes keep the existing 8-byte contract (8-byte object header, 8-byte
+// payload granule). The Wasm object header is 4 bytes, so a managed field is
+// only as aligned as its address chain proves: walk casts and GEPs to the base
+// (folding constant offsets and the stride of variable indices) and combine
+// with what is known about that base (alloca, global or parameter alignment).
+// Never promise more than the native 8.
+static Align getGuaranteedCopyAlign(const Value *Ptr, const Module &M) {
+  if (!Triple(M.getTargetTriple()).isWasm())
+    return Align(8);
+  const DataLayout &DL = M.getDataLayout();
+  Align A(8);
+  uint64_t Off = 0;
+  for (unsigned Depth = 0; Depth < 32; ++Depth) {
+    Ptr = Ptr->stripPointerCasts();
+    if (const auto *II = dyn_cast<IntrinsicInst>(Ptr)) {
+      // Clearing low bits never lowers the alignment of the operand.
+      if (II->getIntrinsicID() != Intrinsic::ptrmask)
+        break;
+      Ptr = II->getArgOperand(0);
+      continue;
+    }
+    const auto *GEP = dyn_cast<GEPOperator>(Ptr);
+    if (!GEP)
+      break;
+    for (gep_type_iterator GTI = gep_type_begin(GEP), E = gep_type_end(GEP);
+         GTI != E; ++GTI) {
+      const Value *Idx = GTI.getOperand();
+      if (StructType *STy = GTI.getStructTypeOrNull()) {
+        uint64_t Field = cast<ConstantInt>(Idx)->getZExtValue();
+        Off += DL.getStructLayout(STy)->getElementOffset(Field);
+        continue;
+      }
+      TypeSize Stride = DL.getTypeAllocSize(GTI.getIndexedType());
+      if (Stride.isScalable())
+        return Align(1);
+      if (const auto *CIdx = dyn_cast<ConstantInt>(Idx))
+        Off += static_cast<uint64_t>(CIdx->getSExtValue()) *
+               Stride.getFixedSize();
+      else
+        A = commonAlignment(A, Stride.getFixedSize());
+    }
+    Ptr = GEP->getPointerOperand();
+  }
+  A = std::min(A, Ptr->getPointerAlignment(DL));
+  return commonAlignment(A, Off);
+}
+
 Instruction *llvm::createStoreOrMems(CallBase *CI, IRBuilder<> &Builder) {
   auto getAtomicOrdering = [](Value *Order) {
     return (AtomicOrdering)(cast<ConstantInt>(Order)->getZExtValue() +
@@ -1034,18 +1085,21 @@ Instruction *llvm::createStoreOrMems(CallBase *CI, IRBuilder<> &Builder) {
   case Intrinsic::cj_gcread_struct:
   case Intrinsic::cj_gcwrite_static_struct:
   case Intrinsic::cj_gcread_static_struct:
-    NewInst = Builder.CreateMemCpy(getDest(CI),
-                                   Align(8),
-                                   getSource(CI),
-                                   Align(8), getSize(CI));
+    NewInst = Builder.CreateMemCpy(
+        getDest(CI), getGuaranteedCopyAlign(getDest(CI), *CI->getModule()),
+        getSource(CI), getGuaranteedCopyAlign(getSource(CI), *CI->getModule()),
+        getSize(CI));
     break;
   case Intrinsic::cj_array_copy_ref:
   case Intrinsic::cj_array_copy_struct:
     NewInst = Builder.CreateMemMove(
         CI->getArgOperand(ArrayCopy::DstPtr),
-        Align(8),
+        getGuaranteedCopyAlign(CI->getArgOperand(ArrayCopy::DstPtr),
+                               *CI->getModule()),
         CI->getArgOperand(ArrayCopy::SrcPtr),
-        Align(8), CI->getArgOperand(ArrayCopy::Size));
+        getGuaranteedCopyAlign(CI->getArgOperand(ArrayCopy::SrcPtr),
+                               *CI->getModule()),
+        CI->getArgOperand(ArrayCopy::Size));
     break;
   case Intrinsic::cj_atomic_store: {
     NewInst = Builder.CreateStore(

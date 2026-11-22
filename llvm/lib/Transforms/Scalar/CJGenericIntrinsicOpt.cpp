@@ -66,14 +66,14 @@ static void updateMSSA(MemorySSAUpdater &MSSAU, Instruction *Old,
   MSSAU.removeMemoryAccess(Old);
 }
 
-// The object header is the TypeInfo pointer: 8 bytes on 64-bit targets, 4 on
-// wasm32. The generic copy intrinsics address the payload right after it, as
-// the runtime fallbacks do, so take the header size from the DataLayout.
-static uint32_t getObjectHeadSize(const DataLayout &DL) {
-  uint32_t Size = DL.getPointerSize(0);
-  assert((Size != 8 || Size == CangjieRuntimeLayout::ObjectHeaderSize) &&
-         "64-bit object header must match the runtime layout");
-  return Size;
+// The generic copy intrinsics address the payload right after the object
+// header, as the runtime fallbacks do. Only the Wasm runtime uses the compact
+// 4-byte header (the TypeInfo pointer, CJW_OBJECT_HEADER_SIZE); every native
+// runtime, including ARM32 (sizeof(TypeInfo *) + 4), uses 8 bytes.
+static uint32_t getObjectHeadSize(const Module &M) {
+  if (!Triple(M.getTargetTriple()).isWasm())
+    return CangjieRuntimeLayout::ObjectHeaderSize;
+  return M.getDataLayout().getPointerSize(0);
 }
 
 static bool isStackToStackCopy(Value *Src, Value *Dst) {
@@ -92,8 +92,7 @@ static void lowerToMemcpy(CallInst *CI, Value *SizeOp,
   Instruction *NewInst = CI;
   Type *I8Ty = IRB.getInt8Ty();
   Type *I32Ty = IRB.getInt32Ty();
-  const DataLayout &DL = CI->getModule()->getDataLayout();
-  const uint32_t HeadSize = getObjectHeadSize(DL);
+  const uint32_t HeadSize = getObjectHeadSize(*CI->getModule());
   // The payload is only as aligned as the 8-byte object start allows.
   const Align PayloadAlign = commonAlignment(Align(8), HeadSize);
 

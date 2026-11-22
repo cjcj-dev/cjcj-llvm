@@ -20,6 +20,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/CGSCCPassManager.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/CallGraphSCCPass.h"
@@ -89,30 +90,39 @@ GlobalVariable *getNewKlass(CallBase *I) {
   return nullptr;
 }
 
-// A managed object starts with its TypeInfo pointer and the payload follows
-// it directly; an array payload starts with the 64-bit length (ArrayBase).
-// Both headers therefore depend on the target pointer width (wasm32 uses a
-// 4-byte TypeInfo pointer), so take them from the module DataLayout. On
-// 64-bit targets they equal the runtime layout constants.
-static uint32_t getObjectHeadSize(const DataLayout &DL) {
-  uint32_t Size = DL.getPointerSize(0);
-  assert((Size != 8 || Size == ObjectHeadSize) &&
-         "64-bit object header must match the runtime layout");
-  return Size;
+// Only the Wasm runtime uses the compact object header: the payload follows
+// the 4-byte TypeInfo pointer directly (CJW_OBJECT_HEADER_SIZE), and an array
+// payload starts with the 64-bit length. Every native runtime, including
+// ARM32 (sizeof(TypeInfo *) + 4), keeps the 8-byte header and the 16-byte
+// array header.
+static bool isWasmModule(const Module &M) {
+  return Triple(M.getTargetTriple()).isWasm();
+}
+
+static uint32_t getObjectHeadSize(const Module &M) {
+  if (!isWasmModule(M))
+    return ObjectHeadSize;
+  return M.getDataLayout().getPointerSize(0);
 }
 
 // The stack object itself is at least 8-byte aligned, so the payload (and the
-// array length) right after the TypeInfo pointer is only guaranteed to be
-// aligned to the header size: 4 on wasm32, 8 on 64-bit targets.
-static Align getPayloadAlign(const DataLayout &DL) {
-  return commonAlignment(Align(alignEight), getObjectHeadSize(DL));
+// array length) right after the header is only guaranteed to be aligned to the
+// header size: 4 on wasm32, 8 elsewhere.
+static Align getPayloadAlign(const Module &M) {
+  return commonAlignment(Align(alignEight), getObjectHeadSize(M));
 }
 
-static uint32_t getArrayHeadSize(const DataLayout &DL) {
-  uint32_t Size = getObjectHeadSize(DL) + sizeof(uint64_t);
-  assert((DL.getPointerSize(0) != 8 || Size == ArrayHeadSize) &&
-         "64-bit array header must match the runtime layout");
-  return Size;
+// A reference slot inside the payload is pointer sized and pointer aligned
+// relative to the payload start: 4 on ARM32 and wasm32, 8 on 64-bit targets.
+static Align getRefSlotAlign(const Module &M) {
+  return commonAlignment(getPayloadAlign(M),
+                         M.getDataLayout().getPointerSize(0));
+}
+
+static uint32_t getArrayHeadSize(const Module &M) {
+  if (!isWasmModule(M))
+    return ArrayHeadSize;
+  return getObjectHeadSize(M) + sizeof(uint64_t);
 }
 
 void setEscapeMeta(Instruction *I) {
@@ -129,7 +139,7 @@ Type *getAllocaType(GlobalVariable *Klass, bool &HasRef, uint32_t &AS,
   uint32_t ObjSize =
       static_cast<unsigned>(DL.getTypeAllocSize(ST).getFixedSize());
   // Struct Body is null
-  const uint32_t ObjHead = getObjectHeadSize(DL);
+  const uint32_t ObjHead = getObjectHeadSize(*M);
   if (ObjSize == 0) {
     AS = ObjHead;
     HasRef = false;
@@ -166,7 +176,7 @@ Type *getAllocaType(GlobalVariable *Klass, bool &HasRef, uint32_t &AS,
     }
     return nullptr; // obj size too large.
   }
-  AS = ArraySize * ElementSize + getArrayHeadSize(DL);
+  AS = ArraySize * ElementSize + getArrayHeadSize(*M);
 
   if (ArraySize != 0) {
     HasRef = containsGCPtrType(ElementType);
@@ -338,14 +348,14 @@ private:
   }
 
   // Alignment that may be promised for a struct/array copy operand. On 64-bit
-  // targets the 8-byte payload granule makes 8 the existing contract. With a
-  // narrower header (wasm32) the payload starts at +4 and the array elements
+  // native targets the 8-byte header makes 8 the existing contract. With the
+  // compact Wasm header the payload starts at +4 and the array elements
   // at +12, so derive it from the constant offset to the stack object, or else
   // from what is known about the pointer (byte-sized fields may be at any
   // offset).
   Align getAccessAlign(Value *Ptr, Instruction &CxtI) {
     const DataLayout &DL = M->getDataLayout();
-    if (getObjectHeadSize(DL) == ObjectHeadSize) {
+    if (!isWasmModule(*M)) {
       return Align(alignEight);
     }
     APInt Off(DL.getIndexTypeSizeInBits(Ptr->getType()), 0);
@@ -402,7 +412,7 @@ private:
         AS1ToAS0 =
             Builder.CreateAddrSpaceCast(CI.getArgOperand(2), StackObjPtr);
         NewInst = new StoreInst(CI.getArgOperand(0), AS1ToAS0, false,
-                                getPayloadAlign(M->getDataLayout()), &CI);
+                                getRefSlotAlign(*M), &CI);
         break;
       case Intrinsic::cj_gcread_ref:
         if (!canReplaceBarrierCall(CI, 0)) {
@@ -413,7 +423,7 @@ private:
         AS1ToAS0 =
             Builder.CreateAddrSpaceCast(CI.getArgOperand(1), StackObjPtr);
         NewInst = new LoadInst(CI.getType(), AS1ToAS0, "", false,
-                               getPayloadAlign(M->getDataLayout()), &CI);
+                               getRefSlotAlign(*M), &CI);
         break;
       case Intrinsic::cj_gcwrite_struct:
         if (!canReplaceBarrierCall(CI, 0)) {
@@ -463,17 +473,21 @@ private:
   // after the TypeInfo pointer and the object occupies AllocaSize, a multiple
   // of the 8-byte object granule. The natural {TypeInfo*, Layout} struct has
   // that layout whenever the pointer is at least as aligned as the payload
-  // (all 64-bit targets). With a narrower pointer (wasm32) it would move the
-  // payload to offset 8, so use a packed struct padded to the granule instead.
+  // (all 64-bit targets). Native targets keep the natural struct unchanged.
+  // With the compact Wasm header it would move the payload to offset 8, so use
+  // a packed struct padded to the granule instead.
   Type *getObjAllocaType(Type *LayoutType) {
     LLVMContext &C = M->getContext();
     const DataLayout &DL = M->getDataLayout();
     auto *KlassType = StructType::getTypeByName(C, "TypeInfo");
     SmallVector<Type *, 3> Elems{KlassType->getPointerTo(), LayoutType};
-    const uint64_t Head = getObjectHeadSize(DL);
+    StructType *Natural = StructType::get(C, Elems);
+    if (!isWasmModule(*M)) {
+      return Natural;
+    }
+    const uint64_t Head = getObjectHeadSize(*M);
     const uint64_t Size =
         alignTo(Head + DL.getTypeAllocSize(LayoutType).getFixedSize(), 8);
-    StructType *Natural = StructType::get(C, Elems);
     const StructLayout *SL = DL.getStructLayout(Natural);
     if (SL->getElementOffset(1) == Head && SL->getSizeInBytes() == Size) {
       return Natural;
@@ -494,7 +508,7 @@ private:
     Align ObjAlign = std::max(Align(8), DL.getPrefTypeAlign(AllocaType));
     NewInst = new AllocaInst(getObjAllocaType(AllocaType), 0, nullptr,
                              ObjAlign, "", InsertPos);
-    uint32_t MemSetSize = AllocaSize - getObjectHeadSize(DL);
+    uint32_t MemSetSize = AllocaSize - getObjectHeadSize(*M);
     if (IsArray) {
       SmallVector<Value *, 2> GEPIndices;
       GEPIndices.push_back(IRB.getInt32(0));
@@ -511,8 +525,8 @@ private:
           GEPSizeIndices);
       // The length follows the TypeInfo pointer: +4 on wasm32 (align 4).
       IRB.CreateAlignedStore(I->getOperand(1), SizeP64,
-                             getPayloadAlign(DL)); // store array size
-      MemSetSize = AllocaSize - getArrayHeadSize(DL);
+                             getPayloadAlign(*M)); // store array size
+      MemSetSize = AllocaSize - getArrayHeadSize(*M);
     }
     NewInst->setDebugLoc(CurDbg);
     setEscapeMeta(NewInst);
