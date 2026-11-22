@@ -1,4 +1,5 @@
 ; RUN: opt < %s '-passes=cj-pea' -S | FileCheck %s
+; RUN: opt < %s '-passes=cj-pea' -S | FileCheck %s --check-prefix=ALIGN
 ; REQUIRES: webassembly-registered-target
 ; On wasm32 the TypeInfo pointer is 4 bytes: a stack-allocated object must keep
 ; the heap layout (payload at offset 4, array data at offset 12) and span the
@@ -14,9 +15,16 @@ target triple = "wasm32-unknown-wasi"
 ; CHECK: [[OBJ:%[0-9]+]] = getelementptr inbounds i8, i8* %{{[0-9]+}}, i32 4
 ; CHECK-NEXT: call void @llvm.cj.memset.p0i8(i8* [[OBJ]], i8 0, i64 100, i1 false)
 ; CHECK: getelementptr inbounds <{ %TypeInfo*, { %ArrayBase, [50 x i64] }, [4 x i8] }>, {{.*}}* %1, i32 0, i32 1
-; CHECK: store i64 50, i64* %{{[0-9]+}}, align 8
+; The length lives at +4 of the 8-byte aligned slot: only align 4 is guaranteed.
+; CHECK-NEXT: [[LEN:%[0-9]+]] = getelementptr inbounds { %ArrayBase, [50 x i64] }, { %ArrayBase, [50 x i64] }* %{{[0-9]+}}, i32 0, i32 0, i32 0
+; CHECK-NEXT: store i64 50, i64* [[LEN]], align 4
 ; CHECK: [[DATA:%[0-9]+]] = getelementptr inbounds i8, i8* %{{[0-9]+}}, i32 12
 ; CHECK-NEXT: call void @llvm.memset.p0i8.i64(i8* [[DATA]], i8 0, i64 400, i1 false)
+
+; No access PEA creates inside a wasm32 stack object may claim 8-byte alignment:
+; neither the array lengths (+4) nor the rewritten reference field stores.
+; ALIGN-NOT: store i64 {{[0-9]+}}, i64* %{{[0-9]+}}, align 8
+; ALIGN-NOT: store i8 addrspace(1)* {{.*}}, align 8
 
 %BitMap = type { i32, [0 x i8] }
 %_ZN7default8CrcCheck.ti.reflectType = type { i32, i32, i32, i32, i32, i8* }
