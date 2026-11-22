@@ -66,6 +66,16 @@ static void updateMSSA(MemorySSAUpdater &MSSAU, Instruction *Old,
   MSSAU.removeMemoryAccess(Old);
 }
 
+// The object header is the TypeInfo pointer: 8 bytes on 64-bit targets, 4 on
+// wasm32. The generic copy intrinsics address the payload right after it, as
+// the runtime fallbacks do, so take the header size from the DataLayout.
+static uint32_t getObjectHeadSize(const DataLayout &DL) {
+  uint32_t Size = DL.getPointerSize(0);
+  assert((Size != 8 || Size == CangjieRuntimeLayout::ObjectHeaderSize) &&
+         "64-bit object header must match the runtime layout");
+  return Size;
+}
+
 static bool isStackToStackCopy(Value *Src, Value *Dst) {
   Type *DstBaseTy = findMemoryBasePointer(Dst)->getType();
   Type *SrcBaseTy = findMemoryBasePointer(Src)->getType();
@@ -82,30 +92,35 @@ static void lowerToMemcpy(CallInst *CI, Value *SizeOp,
   Instruction *NewInst = CI;
   Type *I8Ty = IRB.getInt8Ty();
   Type *I32Ty = IRB.getInt32Ty();
+  const DataLayout &DL = CI->getModule()->getDataLayout();
+  const uint32_t HeadSize = getObjectHeadSize(DL);
+  // The payload is only as aligned as the 8-byte object start allows.
+  const Align PayloadAlign = commonAlignment(Align(8), HeadSize);
 
   switch (CI->getIntrinsicID()) {
   default:
     report_fatal_error("Unsupported process type!");
     break;
   case Intrinsic::cj_assign_generic: {
-    Idxs.push_back(ConstantInt::get(I32Ty, CangjieRuntimeLayout::ObjectHeaderSize));
+    Idxs.push_back(ConstantInt::get(I32Ty, HeadSize));
     Value *DstPtr = IRB.CreateGEP(I8Ty, CI->getArgOperand(0), {Idxs});
     Value *SrcPtr = IRB.CreateGEP(I8Ty, CI->getArgOperand(1), {Idxs});
-    NewInst = IRB.CreateMemCpy(DstPtr, Align(8), SrcPtr, Align(8), SizeOp);
+    NewInst = IRB.CreateMemCpy(DstPtr, PayloadAlign, SrcPtr, PayloadAlign,
+                               SizeOp);
     break;
   }
   case Intrinsic::cj_gcread_generic: {
-    Idxs.push_back(ConstantInt::get(I32Ty, CangjieRuntimeLayout::ObjectHeaderSize));
+    Idxs.push_back(ConstantInt::get(I32Ty, HeadSize));
     Value *DstPtr = IRB.CreateGEP(I8Ty, CI->getArgOperand(0), {Idxs});
-    NewInst = IRB.CreateMemCpy(DstPtr, Align(8), CI->getArgOperand(2), Align(8),
-                               SizeOp);
+    NewInst = IRB.CreateMemCpy(DstPtr, PayloadAlign, CI->getArgOperand(2),
+                               PayloadAlign, SizeOp);
     break;
   }
   case Intrinsic::cj_gcwrite_generic: {
-    Idxs.push_back(ConstantInt::get(I32Ty, CangjieRuntimeLayout::ObjectHeaderSize));
+    Idxs.push_back(ConstantInt::get(I32Ty, HeadSize));
     Value *SrcPtr = IRB.CreateGEP(I8Ty, CI->getArgOperand(2), {Idxs});
-    NewInst = IRB.CreateMemCpy(CI->getArgOperand(1), Align(8), SrcPtr, Align(8),
-                               SizeOp);
+    NewInst = IRB.CreateMemCpy(CI->getArgOperand(1), PayloadAlign, SrcPtr,
+                               PayloadAlign, SizeOp);
     break;
   }
   }
