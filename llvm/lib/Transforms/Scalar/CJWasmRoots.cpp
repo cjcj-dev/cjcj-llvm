@@ -550,8 +550,9 @@ bool emitFrame(Function &F, Constant *RootTop) {
 
 // Cross-package extension registry. Native links every package's
 // "InnerTypeExtensions" arrays (@ExternalExtensionDefs /
-// @NonExternalExtensionDefs) into the CJ metadata section the loader walks in
-// TypeInfo::TraverseOuterExtensionDefs. wasm32 has no CJMetadataInfo emitter,
+// @NonExternalExtensionDefs) and "OuterTypeExtensions" arrays into CJ metadata
+// sections the loader walks (TypeInfo::TraverseOuterExtensionDefs,
+// RegisterOuterTypeExtensions). wasm32 has no CJMetadataInfo emitter,
 // so the arrays were emitted as unreferenced private data and wasm-ld dropped
 // them: an `extend Int64 <: Hashable` from another package was unreachable and
 // CJ_MCC_GetMTable trapped. A private explicit-section array is still removed
@@ -566,11 +567,15 @@ static bool registerExtensionDefs(Module &M) {
     return false; // the pass may run more than once over a module
   SmallVector<GlobalVariable *, 4> Defs;
   for (GlobalVariable &GV : M.globals()) {
-    if (!GV.isCJInnerTypeExtensions() || !GV.hasInitializer())
+    // Inner: a package's own types and generic templates. Outer: extends of
+    // types defined elsewhere (std.core's `extend Int64 <: Hashable`), which
+    // the native loader adds to the target's MTable at load.
+    if (!(GV.isCJInnerTypeExtensions() || GV.isCJOuterTypeExtensions()) ||
+        !GV.hasInitializer())
       continue;
     auto *ATy = dyn_cast<ArrayType>(GV.getValueType());
     if (!ATy || !ATy->getElementType()->isPointerTy())
-      report_fatal_error(Twine("cj-wasm-roots: InnerTypeExtensions global '") +
+      report_fatal_error(Twine("cj-wasm-roots: extension defs global '") +
                          GV.getName() + "' is not an array of pointers");
     if (ATy->getNumElements() != 0)
       Defs.push_back(&GV);
