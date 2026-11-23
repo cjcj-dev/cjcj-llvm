@@ -1927,7 +1927,8 @@ static bool optimizeNUWCompare(Loop *L, ScalarEvolution &SE) {
     auto *Cond = cast<Instruction>(BI->getCondition());
     BI->setCondition(ICI1);
 
-    Cond->eraseFromParent();
+    if (Cond->use_empty())
+      Cond->eraseFromParent();
     Changed = true;
   }
   return Changed;

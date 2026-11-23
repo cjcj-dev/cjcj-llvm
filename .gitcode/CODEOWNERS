@@ -1,10 +1,10 @@
-/.gitcode/ @neilliuistaken
+/.gitcode/ @xuanjz
 
 * @neilliuistaken
 
 /compiler-rt/ @duo-duo @wangyang594
 /llvm/ @duo-duo @wangyang594
-/lldb/ @zxudong
+/lldb/ @jyf219
 /lld/ @duo-duo @wangyang594
 
 /bolt/ @neilliuistaken

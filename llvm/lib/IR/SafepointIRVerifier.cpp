@@ -985,11 +985,27 @@ Value *llvm::findMemoryBasePointer(Value *V) {
       if (II->getIntrinsicID() != Intrinsic::ptrmask)
         break;
       CV = II->getArgOperand(0);
+    } else if (auto *FI = dyn_cast<FreezeInst>(CV)) {
+      // freeze(P) is P whenever P is neither undef nor poison, and an arbitrary
+      // but fixed value otherwise, so it addresses the same memory object as P.
+      // The base/derived walkers already look through freeze; do the same here
+      // so a frozen stack pointer keeps its alloca as the memory base.
+      LLVM_DEBUG(dbgs() << "findMemoryBasePointer: look through " << *FI
+                        << "\n");
+      CV = FI->getOperand(0);
     } else {
       break;
     }
   }
 
+  LLVM_DEBUG({
+    if (!(isa<AllocaInst>(CV) || isa<Argument>(CV) || isa<Constant>(CV) ||
+          isa<CallInst>(CV) || isa<InvokeInst>(CV) || isa<LoadInst>(CV) ||
+          isa<PHINode>(CV) || isa<SelectInst>(CV) ||
+          isa<ExtractValueInst>(CV)))
+      dbgs() << "findMemoryBasePointer: unexpected memory base " << *CV
+             << " for " << *V << "\n";
+  });
   // Assert terminator insts
   assert(isa<AllocaInst>(CV) || isa<Argument>(CV) || isa<Constant>(CV) ||
          isa<CallInst>(CV) || isa<InvokeInst>(CV) || isa<LoadInst>(CV) ||

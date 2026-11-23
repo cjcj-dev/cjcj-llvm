@@ -291,6 +291,7 @@ const static StdMap<unsigned, StringRef> IntrinsicMap{
     {Intrinsic::cj_atomic_swap, "CJ_MCC_AtomicSwapReference"},
     {Intrinsic::cj_atomic_compare_swap, "CJ_MCC_AtomicCompareAndSwapReference"},
     {Intrinsic::cj_assign_generic, "CJ_MCC_AssignGeneric"},
+    {Intrinsic::cj_assign_local_generic, "CJ_MCC_AssignLocalGeneric"},
     {Intrinsic::cj_gcwrite_generic, "CJ_MCC_WriteGeneric"},
     {Intrinsic::cj_gcread_generic, "CJ_MCC_ReadGeneric"},
     {Intrinsic::cj_array_copy_generic, "CJ_MCC_ArrayCopyGeneric"},
@@ -1592,6 +1593,7 @@ bool CJBarrierLowering::isCJBarrier(Instruction *I) {
   case Intrinsic::cj_array_copy_struct:
   case Intrinsic::cj_array_copy_generic:
   case Intrinsic::cj_assign_generic:
+  case Intrinsic::cj_assign_local_generic:
   case Intrinsic::cj_gcwrite_generic:
   case Intrinsic::cj_gcread_generic:
   case Intrinsic::cj_gcwrite_generic_payload:
@@ -1621,6 +1623,7 @@ static void replaceFastFunc(Function &F, GCStatepointInst *CI,
 static bool doNewFastPath(Function &F, SetVector<GCStatepointInst *> &NewObjs) {
   if (CangjieJIT)
     return false;
+
   for (GCStatepointInst *CI : NewObjs) {
     replaceFastFunc(F, CI, NewObjFastStr);
   }

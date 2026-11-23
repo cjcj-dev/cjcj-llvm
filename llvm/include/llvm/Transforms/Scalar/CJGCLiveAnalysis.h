@@ -14,9 +14,12 @@
 #define LLVM_TRANSFORMS_SCALAR_GCLIVEANALYSIS_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
@@ -130,7 +133,7 @@ struct AllocaAnalysisData {
   }
 };
 
-enum MemoryAccess {
+enum MemoryAccessKind {
   MemoryNone = 0,
   DefineMemory = 0b01,
   UseMemory = 0b10,
@@ -225,6 +228,10 @@ public:
 
   FieldInfo *getFieldInfoByValue(Value *Ptr);
 
+  FieldInfo *getStackFieldInfo(Value *Ptr);
+
+  FieldInfo *getBarrierFieldInfo(Value *Ptr);
+
   bool containGCPtrByOffset(Value *Ptr, uint64_t Size);
 
   bool isBaseContainGCPtr(Value *Ptr);
@@ -240,7 +247,7 @@ public:
 
   void moveInitializerAfterLifetime(Value *V, Instruction *I, CallInst *CI);
 
-  void insertMemsetForPhiStruct();
+  void insertMemsetForStackStructs();
 
   void computeFieldLiveInValues(BasicBlock::reverse_iterator Begin,
                                 BasicBlock::reverse_iterator End,
@@ -272,7 +279,8 @@ public:
 
   void visitMemoryLoad(LoadInst *LI, SetVector<FieldInfo *> &AllocaUses);
 
-  void visitMemoryStore(StoreInst *SI, SetVector<FieldInfo *> &AllocaDefs);
+  void visitMemoryStore(StoreInst *SI, SetVector<FieldInfo *> &AllocaDefs,
+                        SetVector<FieldInfo *> &AllocaUses);
 
   void visitMemoryIntrinsic(IntrinsicInst *II,
                             SetVector<FieldInfo *> &AllocaDefs,
@@ -284,9 +292,52 @@ public:
   void visitMemorySelect(SelectInst *SI, SetVector<FieldInfo *> &AllocaDefs,
                          SetVector<FieldInfo *> &AllocaUses);
 
-  MemoryAccess hasMemoryDefineOrUseValue(Instruction *I,
+  MemoryAccessKind hasMemoryDefineOrUseValue(Instruction *I,
                                          SetVector<FieldInfo *> &AllocaDefs,
                                          SetVector<FieldInfo *> &AllocaUses);
+
+  using StackPointeeState = DenseMap<FieldInfo *, SetVector<Value *>>;
+
+  void computeStackPointeeStates();
+
+  void applyStackPointeeTransfer(Instruction *I, StackPointeeState &State);
+
+  bool mergeStackPointeeState(StackPointeeState &Dst,
+                              const StackPointeeState &Src);
+
+  void getGCFieldInfos(Value *Base, SmallVectorImpl<FieldInfo *> &Fields);
+
+  void getGCFieldInfosInRange(Value *Base, uint64_t Begin, uint64_t End,
+                              SmallVectorImpl<FieldInfo *> &Fields);
+
+  void collectStackObjectPointees(Value *V, SetVector<Value *> &Pointees);
+
+  void collectStackFieldPointees(Instruction *I, Value *V, uint64_t Size,
+                                 SetVector<Value *> &Pointees);
+
+  void setStackPointees(StackPointeeState &State, FieldInfo *Field,
+                        const SetVector<Value *> &Pointees);
+
+  void clearStackPointees(StackPointeeState &State, Value *Ptr, uint64_t Size);
+
+  void copyStackPointees(StackPointeeState &State, Value *Dst, Value *Src,
+                         uint64_t Size);
+
+  bool isFieldLive(FieldInfo *Field, const StructLiveSetTy &Live);
+
+  void addConditionalPublishUses(Instruction *I,
+                                 const StructLiveSetTy &LiveAfter,
+                                 SetVector<FieldInfo *> &Uses);
+
+  void addPointeeFields(Instruction *I, FieldInfo *Field,
+                        SetVector<FieldInfo *> &Set);
+
+  void addStoredPointeeFields(Value *V, SetVector<FieldInfo *> &Uses);
+
+  void addSourcePointeeFields(Instruction *I, Value *V, uint64_t Size,
+                              SetVector<FieldInfo *> &Uses);
+
+  void expandStackPointees(CallBase *Call, StructLiveSetTy &FieldInfos);
 
   // Conservatively identifies any definitions which might be live at the
   // given instruction. The  analysis is performed immediately before the
@@ -303,6 +354,9 @@ public:
 
   void clear() {
     StackContainGCPtrMap.clear();
+    StackPointeeIn.clear();
+    StackPointeeOut.clear();
+    StackPointeeBefore.clear();
     for (auto *Field : AllFields) {
       delete Field;
     }
@@ -312,6 +366,7 @@ public:
 public:
   StructLiveData Data;
   SmallSet<Value *, 8> InsertedMemset;
+  SmallSet<Value *, 8> StackPointeeObjects;
 
 private:
   const DataLayout &DL;
@@ -322,6 +377,13 @@ private:
   // Mapping whether a V is a stack pointer that contains gcptr, and clear it
   // after active variable analysis.
   MapVector<Value *, bool> StackContainGCPtrMap;
+  // Stack fields can contain the address of another stack object.  The
+  // runtime stops at that non-heap address, so the pointee's fields have to be
+  // reported separately.  These maps track which stack objects each field may
+  // contain at a program point.
+  DenseMap<BasicBlock *, StackPointeeState> StackPointeeIn;
+  DenseMap<BasicBlock *, StackPointeeState> StackPointeeOut;
+  DenseMap<Instruction *, StackPointeeState> StackPointeeBefore;
   // Avoid duplicate liveness analysis in the BB.
   MapVector<BasicBlock *, std::pair<Instruction *, StructLiveSetTy>>
       InstLiveSetCache;

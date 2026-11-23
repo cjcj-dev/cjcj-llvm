@@ -197,7 +197,8 @@ static void computeStructDefineSet(BasicBlock &BB, StructDefineTy &StructDefs,
 static void eliminateDeadMemset(StructLiveData &StructLives, Function &F,
                                 PostDominatorTree &PostDT,
                                 AllocaAnalysisData &AllocaData,
-                                SmallSet<Value *, 8> &InsertedMemset) {
+                                SmallSet<Value *, 8> &InsertedMemset,
+                                SmallSet<Value *, 8> &StackPointeeObjects) {
   SetVector<Value *> &AllStructs = AllocaData.Structs;
   if (AllStructs.empty()) {
     return;
@@ -222,6 +223,12 @@ static void eliminateDeadMemset(StructLiveData &StructLives, Function &F,
 
   for (auto &P : StructDefs) {
     Value *V = P.first;
+    // The zero initializer of a stack pointee is required for GC safety: the
+    // object is reported live at safepoints because another stack object
+    // references it, so a safepoint between the memset and a post-dominating
+    // redefinition would scan uninitialized memory.  Never delete it.
+    if (StackPointeeObjects.count(V))
+      continue;
     // If this AI does not have memset, or as the parameter of the call
     // instruction.do nothing.
     if (!StructToMemsetMap.count(V) || CallStructSet.count(V))
@@ -532,6 +539,41 @@ FieldInfo *StructLiveAnalysis::getFieldInfoByValue(Value *Ptr) {
   return getFieldInfo(PtrBase, Offsets.getZExtValue());
 }
 
+FieldInfo *StructLiveAnalysis::getStackFieldInfo(Value *Ptr) {
+  assert(isa<PointerType>(Ptr->getType()) && "Expected a pointer operand");
+  if (isa<PHINode>(Ptr) || isa<SelectInst>(Ptr))
+    return getFieldInfo(Ptr, -1);
+  Value *Base = findMemoryBasePointer(Ptr);
+  if (!isa<AllocaInst>(Base) && !isa<Argument>(Base))
+    return nullptr;
+  // A large struct is tracked as a single whole-object entry: a store to one
+  // of its fields must not kill the pointees recorded for the other fields.
+  if (AllocaData.LargeStructs.contains(Base))
+    return getFieldInfo(Base, -1);
+  APInt Offsets(DL.getIndexSizeInBits(0), 0);
+  Value *PtrBase = Ptr->stripPointerCasts()->stripAndAccumulateConstantOffsets(
+      DL, Offsets, false);
+  if (PtrBase != Base)
+    return getFieldInfo(Base, -1);
+  return getFieldInfo(Base, static_cast<int>(Offsets.getZExtValue()));
+}
+
+FieldInfo *StructLiveAnalysis::getBarrierFieldInfo(Value *Ptr) {
+  if (!isa<PointerType>(Ptr->getType()))
+    return nullptr;
+
+  // A barrier field pointer is an address-space-1 pointer to a GC field.  It
+  // can therefore look like a GC pointer itself, but it is really a stack
+  // field address.  Strip the pointer casts and resolve the underlying stack
+  // object instead of classifying the field pointer as a GC pointer.
+  for (Value *Candidate : {Ptr->stripPointerCasts(), Ptr}) {
+    FieldInfo *Field = getStackFieldInfo(Candidate);
+    if (Field && isMemoryContainsGCPtrType(Field->V->getType()))
+      return Field;
+  }
+  return nullptr;
+}
+
 // Checks whether a range contains gcptr based on the struct type.
 bool StructLiveAnalysis::containGCPtrByOffset(Value *Ptr, uint64_t Size) {
   APInt Offsets(DL.getIndexSizeInBits(0), 0);
@@ -539,9 +581,10 @@ bool StructLiveAnalysis::containGCPtrByOffset(Value *Ptr, uint64_t Size) {
   if (isa<AllocaInst>(Base) && Size > 0) {
     uint64_t Begin = Offsets.getZExtValue();
     uint64_t End = Begin + Size;
-    MapVector<uint64_t, bool> &OffsetMap =
-        AllocaData.StructLayoutGCPtrMap[Base];
-    for (auto &Pair : OffsetMap) {
+    auto It = AllocaData.StructLayoutGCPtrMap.find(Base);
+    if (It == AllocaData.StructLayoutGCPtrMap.end())
+      return false;
+    for (auto &Pair : It->second) {
       if (Pair.first >= Begin && Pair.first < End) {
         if (Pair.second) {
           return true;
@@ -654,28 +697,29 @@ void StructLiveAnalysis::moveInitializerAfterLifetime(Value *V, Instruction *I,
   }
 }
 
-// For an alloca that contain gcptr to be used in phi, we need to insert an
-// initializer in entry and lifetime.start.
-void StructLiveAnalysis::insertMemsetForPhiStruct() {
+// For an alloca that contains a gcptr and is used by phi/select or referenced
+// from another stack object, we need to insert an initializer in entry and
+// lifetime.start.
+void StructLiveAnalysis::insertMemsetForStackStructs() {
   SetVector<Value *> AllocaStructs;
   SetVector<Value *> AllocaGCPtrs;
-  MapVector<Value *, CallInst *> LifetimeStarts;
-  MapVector<Value *, CallInst *> Memsets;
-  MapVector<Value *, StoreInst *> StoreNulls;
+  MapVector<Value *, SmallVector<CallInst *, 2>> LifetimeStarts;
+  MapVector<Value *, SmallVector<CallInst *, 2>> Memsets;
+  MapVector<Value *, SmallVector<StoreInst *, 2>> StoreNulls;
   for (auto &I : instructions(F)) {
     if (CallInst *CI = dyn_cast<CallInst>(&I)) {
       if (CI->getIntrinsicID() == Intrinsic::lifetime_start) {
         Value *Base = CI->getArgOperand(1)->stripPointerCasts();
         if (isa<AllocaInst>(Base) &&
             isMemoryContainsGCPtrType(Base->getType())) {
-          LifetimeStarts.insert({Base, CI});
+          LifetimeStarts[Base].push_back(CI);
         }
       } else if (CI->getIntrinsicID() == Intrinsic::memset) {
         Value *Base = CI->getArgOperand(0)->stripPointerCasts();
         if (isa<AllocaInst>(Base) &&
             isMemoryContainsGCPtrType(Base->getType()) &&
             isa<ConstantInt>(CI->getArgOperand(1))) {
-          Memsets.insert({Base, CI});
+          Memsets[Base].push_back(CI);
         }
       }
       continue;
@@ -686,7 +730,7 @@ void StructLiveAnalysis::insertMemsetForPhiStruct() {
       if (C && C->isNullValue() && isGCPointerType(C->getType())) {
         Value *Base = SI->getPointerOperand()->stripPointerCasts();
         if (isa<AllocaInst>(Base))
-          StoreNulls.insert({Base, SI});
+          StoreNulls[Base].push_back(SI);
       }
       continue;
     }
@@ -714,50 +758,102 @@ void StructLiveAnalysis::insertMemsetForPhiStruct() {
       AllocaStructs.insert(&I);
   }
 
-  for (auto P : LifetimeStarts) {
+  for (Value *V : StackPointeeObjects) {
+    auto *AI = dyn_cast<AllocaInst>(V);
+    if (!AI)
+      continue;
+    if (AI->getAllocatedType()->isStructTy())
+      AllocaStructs.insert(AI);
+    else if (AI->getAllocatedType()->isPointerTy() &&
+             isGCPointerType(AI->getAllocatedType()))
+      AllocaGCPtrs.insert(AI);
+  }
+
+  SmallPtrSet<Instruction *, 8> ConsumedInitializers;
+  for (auto &P : LifetimeStarts) {
     Value *V = P.first;
-    CallInst *Lifetime = P.second;
     if (AllocaStructs.contains(V)) {
-      if (Memsets.count(V)) {
-        CallInst *MI = Memsets[V];
-        // Do nothing if there is a memset in lifetime.start
-        if (MI->getParent() == Lifetime->getParent()) {
+      for (CallInst *Lifetime : P.second) {
+        CallInst *MI = nullptr;
+        for (CallInst *Candidate : Memsets[V]) {
+          if (ConsumedInitializers.contains(Candidate))
+            continue;
+          if (Candidate->getParent() == Lifetime->getParent() &&
+              Candidate->comesBefore(Lifetime))
+            continue;
+          MI = Candidate;
+          if (Candidate->getParent() == Lifetime->getParent())
+            break;
+        }
+        // Do nothing if the lifetime region is already initialized.
+        if (MI && MI->getParent() == Lifetime->getParent()) {
+          ConsumedInitializers.insert(MI);
           continue;
         }
-        if (MI->getParent()->isEntryBlock()) {
+        if (MI && MI->getParent()->isEntryBlock()) {
           insertInitializerAfterLifetime(V, Lifetime);
           continue;
         }
-        // move it to lifetime
-        moveInitializerAfterLifetime(V, MI, Lifetime);
-      } else {
-        // Create a memset for alloca struct.
-        insertInitializerAfterLifetime(V, Lifetime);
+        if (MI) {
+          // Move the existing memset into this lifetime region.
+          moveInitializerAfterLifetime(V, MI, Lifetime);
+          ConsumedInitializers.insert(MI);
+        } else {
+          // Create a memset for alloca struct.
+          insertInitializerAfterLifetime(V, Lifetime);
+        }
       }
       continue;
     }
     if (AllocaGCPtrs.contains(V)) {
-      if (StoreNulls.count(V)) {
-        StoreInst *SI = StoreNulls[V];
-        // Do nothing if there is a store null in lifetime.start
-        if (SI->getParent() == Lifetime->getParent()) {
+      for (CallInst *Lifetime : P.second) {
+        StoreInst *SI = nullptr;
+        for (StoreInst *Candidate : StoreNulls[V]) {
+          if (ConsumedInitializers.contains(Candidate))
+            continue;
+          if (Candidate->getParent() == Lifetime->getParent() &&
+              Candidate->comesBefore(Lifetime))
+            continue;
+          SI = Candidate;
+          if (Candidate->getParent() == Lifetime->getParent())
+            break;
+        }
+        // Do nothing if the lifetime region is already initialized.
+        if (SI && SI->getParent() == Lifetime->getParent()) {
+          ConsumedInitializers.insert(SI);
           continue;
         }
-        if (SI->getParent()->isEntryBlock()) {
+        if (SI && SI->getParent()->isEntryBlock()) {
           insertInitializerAfterLifetime(V, Lifetime);
           continue;
         }
-        // move it to lifetime
-        moveInitializerAfterLifetime(V, SI, Lifetime);
-      } else {
-        // Craete a store null for alloca gcptr.
-        insertInitializerAfterLifetime(V, Lifetime);
+        if (SI) {
+          // Move the existing store null into this lifetime region.
+          moveInitializerAfterLifetime(V, SI, Lifetime);
+          ConsumedInitializers.insert(SI);
+        } else {
+          // Create a store null for alloca gcptr.
+          insertInitializerAfterLifetime(V, Lifetime);
+        }
       }
     }
   }
 
-  // Filter out the alloca that has been initialized in the entry.
+  // Filter out the alloca that has been initialized in the entry.  An
+  // initialization only counts if it precedes every safepoint in the entry
+  // block: a store that appears after a call cannot keep the GC from
+  // scanning uninitialized memory at that call.  Stop the scan at the first
+  // call that is not a lifetime marker or a memory-init intrinsic.
   for (auto &I : F.getEntryBlock()) {
+    if (auto *CB = dyn_cast<CallBase>(&I)) {
+      auto *II = dyn_cast<IntrinsicInst>(CB);
+      bool IsInitOrMarker =
+          II && (isa<MemIntrinsic>(II) ||
+                 II->getIntrinsicID() == Intrinsic::lifetime_start ||
+                 II->getIntrinsicID() == Intrinsic::lifetime_end);
+      if (!IsInitOrMarker)
+        break;
+    }
     if (auto *SI = dyn_cast<StoreInst>(&I)) {
       Value *Ptr = SI->getPointerOperand()->stripPointerCasts();
       if (AllocaStructs.contains(Ptr)) {
@@ -790,10 +886,15 @@ void StructLiveAnalysis::computeFieldLiveInValues(
   for (auto &I : make_range(Begin, End)) {
     SetVector<FieldInfo *> MemDefSet;
     SetVector<FieldInfo *> MemUseSet;
+    StructLiveSetTy LiveAfter = LiveTmp;
     if (hasMemoryDefineOrUseValue(&I, MemDefSet, MemUseSet) != MemoryNone) {
       LiveTmp.set_subtract(MemDefSet);
       LiveTmp.set_union(MemUseSet);
     }
+    SetVector<FieldInfo *> PublishUses;
+    addConditionalPublishUses(&I, LiveAfter, PublishUses);
+    if (!PublishUses.empty())
+      LiveTmp.set_union(PublishUses);
   }
 }
 
@@ -832,7 +933,7 @@ void StructLiveAnalysis::computeFieldKillSet(BasicBlock *BB,
     SetVector<FieldInfo *> MemDefSet;
     SetVector<FieldInfo *> MemUseSet;
 
-    MemoryAccess Status = hasMemoryDefineOrUseValue(&I, MemDefSet, MemUseSet);
+    MemoryAccessKind Status = hasMemoryDefineOrUseValue(&I, MemDefSet, MemUseSet);
     if (Status & DefineMemory) {
       KillSet.set_union(MemDefSet);
     }
@@ -1134,6 +1235,538 @@ void StructLiveAnalysis::addGCFieldsByMemory(Value *V,
   addGCFieldsByBase(Ptr, AllocaSet);
 }
 
+void StructLiveAnalysis::getGCFieldInfos(Value *Base,
+                                         SmallVectorImpl<FieldInfo *> &Fields) {
+  auto *AI = dyn_cast<AllocaInst>(Base);
+  if (!AI)
+    return;
+
+  if (AI->getAllocatedType()->isPointerTy()) {
+    Fields.push_back(getFieldInfo(Base, 0));
+    return;
+  }
+
+  // Keep precise field keys even for large structs.  A copy only affects the
+  // copied range, and whole-object liveness is expanded later at the GC point.
+  auto It = AllocaData.StructLayoutGCPtrMap.find(Base);
+  if (It == AllocaData.StructLayoutGCPtrMap.end())
+    return;
+  for (auto &Pair : It->second) {
+    if (Pair.second)
+      Fields.push_back(getFieldInfo(Base, static_cast<int>(Pair.first)));
+  }
+}
+
+void StructLiveAnalysis::getGCFieldInfosInRange(
+    Value *Base, uint64_t Begin, uint64_t End,
+    SmallVectorImpl<FieldInfo *> &Fields) {
+  auto *AI = dyn_cast<AllocaInst>(Base);
+  if (!AI)
+    return;
+
+  if (AI->getAllocatedType()->isPointerTy()) {
+    if (Begin == 0 && End > 0)
+      Fields.push_back(getFieldInfo(Base, 0));
+    return;
+  }
+
+  auto LayoutIt = AllocaData.StructLayoutGCPtrMap.find(Base);
+  if (LayoutIt == AllocaData.StructLayoutGCPtrMap.end())
+    return;
+  for (auto &Pair : LayoutIt->second) {
+    if (!Pair.second || Pair.first < Begin || Pair.first >= End)
+      continue;
+    Fields.push_back(getFieldInfo(Base, static_cast<int>(Pair.first)));
+  }
+}
+
+void StructLiveAnalysis::collectStackObjectPointees(
+    Value *V, SetVector<Value *> &Pointees) {
+  if (!V->getType()->isPointerTy())
+    return;
+
+  SetVector<Value *> Allocas;
+  if (!findAllocaInsts(V, Allocas))
+    return;
+  Pointees.insert(Allocas.begin(), Allocas.end());
+}
+
+void StructLiveAnalysis::collectStackFieldPointees(
+    Instruction *I, Value *V, uint64_t Size, SetVector<Value *> &Pointees) {
+  auto StateIt = StackPointeeBefore.find(I);
+  if (StateIt == StackPointeeBefore.end())
+    return;
+  const StackPointeeState &State = StateIt->second;
+
+  Value *Base = findMemoryBasePointer(V);
+  SmallVector<FieldInfo *, 16> Fields;
+  if (isa<AllocaInst>(Base) && Size > 0) {
+    APInt Offsets(DL.getIndexSizeInBits(0), 0);
+    if (V->stripAndAccumulateConstantOffsets(DL, Offsets, false) == Base) {
+      uint64_t Begin = Offsets.getZExtValue();
+      getGCFieldInfosInRange(Base, Begin, Begin + Size, Fields);
+    }
+  }
+  if (Fields.empty()) {
+    SmallVector<Value *, 4> Bases;
+    if (isa<AllocaInst>(Base))
+      Bases.push_back(Base);
+    else {
+      SetVector<Value *> Allocas;
+      findAllocaInsts(V, Allocas);
+      Bases.append(Allocas.begin(), Allocas.end());
+    }
+    for (auto &Entry : State) {
+      if (llvm::is_contained(Bases, Entry.first->V))
+        Fields.push_back(Entry.first);
+    }
+  }
+
+  for (FieldInfo *Field : Fields) {
+    auto It = State.find(Field);
+    if (It != State.end())
+      Pointees.set_union(It->second);
+  }
+  // A variable-index store is recorded against the whole base object.  It may
+  // overlap a fixed source range copied here, so include those pointees too.
+  auto WholeIt = State.find(getFieldInfo(Base, -1));
+  if (WholeIt != State.end())
+    Pointees.set_union(WholeIt->second);
+}
+
+void StructLiveAnalysis::setStackPointees(StackPointeeState &State,
+                                          FieldInfo *Field,
+                                          const SetVector<Value *> &Pointees) {
+  if (Pointees.empty()) {
+    if (Field->Offset != -1)
+      State.erase(Field);
+    return;
+  }
+
+  if (Field->Offset == -1) {
+    // A large struct is represented by a single whole-object entry.  A store
+    // to one field cannot invalidate the other fields, so keep the old
+    // pointees and add the new ones.
+    SetVector<Value *> &Current = State[Field];
+    Current.set_union(Pointees);
+    return;
+  }
+  State[Field] = Pointees;
+}
+
+void StructLiveAnalysis::clearStackPointees(StackPointeeState &State,
+                                            Value *Ptr, uint64_t Size) {
+  if (!isa<PointerType>(Ptr->getType()))
+    return;
+
+  Value *Base = findMemoryBasePointer(Ptr);
+  SmallVector<Value *, 4> Bases;
+  if (isa<AllocaInst>(Base)) {
+    Bases.push_back(Base);
+  } else {
+    SetVector<Value *> Allocas;
+    findAllocaInsts(Ptr, Allocas);
+    Bases.append(Allocas.begin(), Allocas.end());
+  }
+  if (Bases.empty())
+    return;
+
+  bool HasRange = Size > 0;
+  uint64_t Begin = 0;
+  uint64_t End = 0;
+  if (HasRange && isa<AllocaInst>(Base)) {
+    APInt Offsets(DL.getIndexSizeInBits(0), 0);
+    Value *PtrBase = Ptr->stripAndAccumulateConstantOffsets(DL, Offsets, false);
+    if (PtrBase == Base) {
+      Begin = Offsets.getZExtValue();
+      End = Begin + Size;
+    } else {
+      HasRange = false;
+    }
+  } else if (HasRange) {
+    HasRange = false;
+  }
+
+  SmallVector<FieldInfo *, 16> ToErase;
+  for (auto &Entry : State) {
+    FieldInfo *Field = Entry.first;
+    if (!llvm::is_contained(Bases, Field->V))
+      continue;
+    if (Field->Offset == -1) {
+      // A whole-object entry cannot represent a partial overwrite.  Keep it
+      // unless the entire object is being cleared.
+      if (HasRange)
+        continue;
+    } else if (HasRange && (Field->Offset < static_cast<int>(Begin) ||
+                            Field->Offset >= static_cast<int>(End))) {
+      continue;
+    }
+    ToErase.push_back(Field);
+  }
+  for (FieldInfo *Field : ToErase)
+    State.erase(Field);
+}
+
+void StructLiveAnalysis::copyStackPointees(StackPointeeState &State, Value *Dst,
+                                           Value *Src, uint64_t Size) {
+  if (!isa<PointerType>(Dst->getType()))
+    return;
+
+  Value *DstBase = findMemoryBasePointer(Dst);
+  Value *SrcBase = findMemoryBasePointer(Src);
+  if (!isa<AllocaInst>(DstBase)) {
+    clearStackPointees(State, Dst, Size);
+    return;
+  }
+
+  bool HasRange = Size > 0;
+  uint64_t DstBegin = 0;
+  uint64_t SrcBegin = 0;
+  if (HasRange) {
+    APInt DstOffsets(DL.getIndexSizeInBits(0), 0);
+    if (Dst->stripAndAccumulateConstantOffsets(DL, DstOffsets, false) !=
+        DstBase)
+      HasRange = false;
+    else
+      DstBegin = DstOffsets.getZExtValue();
+  }
+  if (HasRange) {
+    APInt SrcOffsets(DL.getIndexSizeInBits(0), 0);
+    if (!isa<AllocaInst>(SrcBase) || Src->stripAndAccumulateConstantOffsets(
+                                         DL, SrcOffsets, false) != SrcBase)
+      HasRange = false;
+    else
+      SrcBegin = SrcOffsets.getZExtValue();
+  }
+
+  if (!HasRange) {
+    // The copied range is unknown.  Conservatively attach every pointee that
+    // the source may hold to every destination GC field.
+    SetVector<Value *> Pointees;
+    SmallVector<Value *, 4> SrcBases;
+    if (isa<AllocaInst>(SrcBase))
+      SrcBases.push_back(SrcBase);
+    else {
+      SetVector<Value *> Allocas;
+      findAllocaInsts(Src, Allocas);
+      SrcBases.append(Allocas.begin(), Allocas.end());
+    }
+    for (auto &Entry : State) {
+      if (!llvm::is_contained(SrcBases, Entry.first->V))
+        continue;
+      Pointees.set_union(Entry.second);
+    }
+
+    clearStackPointees(State, Dst, 0);
+    SmallVector<FieldInfo *, 8> DstFields;
+    getGCFieldInfos(DstBase, DstFields);
+    for (FieldInfo *Field : DstFields)
+      setStackPointees(State, Field, Pointees);
+    return;
+  }
+
+  SmallVector<FieldInfo *, 8> DstFields;
+  getGCFieldInfosInRange(DstBase, DstBegin, DstBegin + Size, DstFields);
+
+  SmallVector<std::pair<FieldInfo *, SetVector<Value *>>, 8> NewValues;
+  for (FieldInfo *DstField : DstFields) {
+    if (DstField->Offset == -1)
+      continue;
+    int64_t SrcOffset = static_cast<int64_t>(SrcBegin) +
+                        (static_cast<int64_t>(DstField->Offset) -
+                         static_cast<int64_t>(DstBegin));
+    if (SrcOffset < 0)
+      continue;
+    FieldInfo *SrcField = getFieldInfo(SrcBase, static_cast<int>(SrcOffset));
+    SetVector<Value *> Pointees;
+    auto It = State.find(SrcField);
+    if (It != State.end())
+      Pointees = It->second;
+    // A variable-index store is recorded against the whole source object.  A
+    // later fixed-range copy may still copy that field, so include the
+    // unknown-offset pointees as well.
+    auto WholeIt = State.find(getFieldInfo(SrcBase, -1));
+    if (WholeIt != State.end())
+      Pointees.set_union(WholeIt->second);
+    NewValues.push_back({DstField, Pointees});
+  }
+
+  clearStackPointees(State, Dst, Size);
+  for (auto &Entry : NewValues) {
+    if (Entry.second.empty())
+      continue;
+    setStackPointees(State, Entry.first, Entry.second);
+  }
+}
+
+bool StructLiveAnalysis::isFieldLive(FieldInfo *Field,
+                                     const StructLiveSetTy &Live) {
+  if (Live.contains(Field))
+    return true;
+  for (FieldInfo *LiveField : Live) {
+    if (LiveField->V != Field->V)
+      continue;
+    if (LiveField->Offset == -1 || Field->Offset == -1)
+      return true;
+  }
+  return false;
+}
+
+void StructLiveAnalysis::addConditionalPublishUses(
+    Instruction *I, const StructLiveSetTy &LiveAfter,
+    SetVector<FieldInfo *> &Uses) {
+  auto AddForField = [&](Value *Ptr, Value *Published) {
+    FieldInfo *Field = getBarrierFieldInfo(Ptr);
+    if (!Field || !isFieldLive(Field, LiveAfter))
+      return;
+    if (Published->getType()->isPointerTy())
+      addStoredPointeeFields(Published, Uses);
+  };
+
+  if (auto *SI = dyn_cast<StoreInst>(I)) {
+    AddForField(SI->getPointerOperand(), SI->getValueOperand());
+    return;
+  }
+
+  auto *CB = dyn_cast<CallBase>(I);
+  if (!CB)
+    return;
+  auto *II = dyn_cast<IntrinsicInst>(CB);
+  if (!II)
+    return;
+
+  switch (II->getIntrinsicID()) {
+  default:
+    return;
+  case Intrinsic::cj_gcwrite_ref:
+    AddForField(getPointerArg(II), getValueArg(II));
+    return;
+  case Intrinsic::memcpy:
+  case Intrinsic::memmove: {
+    uint64_t Size = 0;
+    if (auto *C = dyn_cast<ConstantInt>(II->getArgOperand(2)))
+      Size = C->getZExtValue();
+    FieldInfo *Dst = getStackFieldInfo(II->getArgOperand(0));
+    if (!Dst || !isFieldLive(Dst, LiveAfter))
+      return;
+    addSourcePointeeFields(I, II->getArgOperand(1), Size, Uses);
+    return;
+  }
+  }
+}
+
+void StructLiveAnalysis::addPointeeFields(Instruction *I, FieldInfo *Field,
+                                          SetVector<FieldInfo *> &Set) {
+  auto StateIt = StackPointeeBefore.find(I);
+  if (StateIt == StackPointeeBefore.end())
+    return;
+  const StackPointeeState &State = StateIt->second;
+
+  auto Add = [&](FieldInfo *Key) {
+    auto It = State.find(Key);
+    if (It == State.end())
+      return;
+    for (Value *Pointee : It->second)
+      addGCFields(Pointee, Set);
+  };
+
+  Add(Field);
+  if (Field->Offset != -1)
+    Add(getFieldInfo(Field->V, -1));
+
+  // A store through a phi/select pointer records its pointees under the
+  // phi/select key, while the safepoint live set is expanded to the concrete
+  // alloca fields.  An exact lookup would miss those entries, so also union
+  // the pointees of every phi/select that may refer to this stack object.
+  for (auto &Entry : State) {
+    Value *KeyV = Entry.first->V;
+    if (!isa<PHINode>(KeyV) && !isa<SelectInst>(KeyV))
+      continue;
+    auto It = AllocaData.PhiToAllocasMap.find(KeyV);
+    if (It == AllocaData.PhiToAllocasMap.end() || !It->second.count(Field->V))
+      continue;
+    for (Value *Pointee : Entry.second)
+      addGCFields(Pointee, Set);
+  }
+
+  if (Field->Offset != -1)
+    return;
+
+  // A whole-object entry means every GC field of the object is live, so all
+  // stack objects recorded in its fields are reachable without following the
+  // runtime's stack-address boundary.
+  for (auto &Entry : State) {
+    if (Entry.first->V != Field->V)
+      continue;
+    for (Value *Pointee : Entry.second)
+      addGCFields(Pointee, Set);
+  }
+}
+
+void StructLiveAnalysis::addStoredPointeeFields(Value *V,
+                                                SetVector<FieldInfo *> &Uses) {
+  SetVector<Value *> Pointees;
+  collectStackObjectPointees(V, Pointees);
+  for (Value *Pointee : Pointees)
+    addGCFields(Pointee, Uses);
+}
+
+void StructLiveAnalysis::addSourcePointeeFields(Instruction *I, Value *V,
+                                                uint64_t Size,
+                                                SetVector<FieldInfo *> &Uses) {
+  if (!V->getType()->isPointerTy())
+    return;
+  SetVector<Value *> Pointees;
+  collectStackFieldPointees(I, V, Size, Pointees);
+  for (Value *Pointee : Pointees)
+    addGCFields(Pointee, Uses);
+}
+
+void StructLiveAnalysis::applyStackPointeeTransfer(Instruction *I,
+                                                   StackPointeeState &State) {
+  if (auto *SI = dyn_cast<StoreInst>(I)) {
+    Value *Ptr = SI->getPointerOperand();
+    if (!isStackContainGCPtr(Ptr))
+      return;
+
+    Type *ValType = SI->getValueOperand()->getType();
+    const Triple TT(SI->getModule()->getTargetTriple());
+    if (ValType->isPointerTy() || ValType->isIntegerTy(64) ||
+        (TT.isARM() && ValType->isIntegerTy(32))) {
+      FieldInfo *Field = getStackFieldInfo(Ptr);
+      if (!Field)
+        return;
+      State.erase(Field);
+      SetVector<Value *> Pointees;
+      if (ValType->isPointerTy())
+        collectStackObjectPointees(SI->getValueOperand(), Pointees);
+      setStackPointees(State, Field, Pointees);
+    } else {
+      clearStackPointees(State, Ptr, 0);
+    }
+    return;
+  }
+
+  auto *CB = dyn_cast<CallBase>(I);
+  if (!CB)
+    return;
+
+  auto *II = dyn_cast<IntrinsicInst>(CB);
+  if (!II)
+    return;
+
+  switch (II->getIntrinsicID()) {
+  default:
+    return;
+  case Intrinsic::cj_gcwrite_ref: {
+    Value *Ptr = getPointerArg(II);
+    FieldInfo *Field = getBarrierFieldInfo(Ptr);
+    if (!Field)
+      return;
+    State.erase(Field);
+    SetVector<Value *> Pointees;
+    collectStackObjectPointees(getValueArg(II), Pointees);
+    setStackPointees(State, Field, Pointees);
+    return;
+  }
+  case Intrinsic::memcpy:
+  case Intrinsic::memmove: {
+    uint64_t Size = 0;
+    if (auto *C = dyn_cast<ConstantInt>(II->getArgOperand(2)))
+      Size = C->getZExtValue();
+    copyStackPointees(State, II->getArgOperand(0), II->getArgOperand(1), Size);
+    return;
+  }
+  case Intrinsic::memset:
+  case Intrinsic::cj_memset: {
+    uint64_t Size = 0;
+    if (auto *C = dyn_cast<ConstantInt>(II->getArgOperand(2)))
+      Size = C->getZExtValue();
+    clearStackPointees(State, II->getArgOperand(0), Size);
+    return;
+  }
+  case Intrinsic::lifetime_start:
+    clearStackPointees(State, II->getArgOperand(1), 0);
+    return;
+  }
+}
+
+bool StructLiveAnalysis::mergeStackPointeeState(StackPointeeState &Dst,
+                                                const StackPointeeState &Src) {
+  bool Changed = false;
+  for (auto &Entry : Src) {
+    SetVector<Value *> &Current = Dst[Entry.first];
+    if (Current.set_union(Entry.second))
+      Changed = true;
+  }
+  return Changed;
+}
+
+void StructLiveAnalysis::computeStackPointeeStates() {
+  StackPointeeIn.clear();
+  StackPointeeOut.clear();
+  StackPointeeBefore.clear();
+
+  SmallSetVector<BasicBlock *, 32> Worklist;
+  for (BasicBlock &BB : F) {
+    StackPointeeIn[&BB] = StackPointeeState();
+    StackPointeeOut[&BB] = StackPointeeState();
+    Worklist.insert(&BB);
+  }
+
+  while (!Worklist.empty()) {
+    BasicBlock *BB = Worklist.pop_back_val();
+    StackPointeeState State = StackPointeeIn[BB];
+    for (Instruction &I : *BB)
+      applyStackPointeeTransfer(&I, State);
+
+    if (!mergeStackPointeeState(StackPointeeOut[BB], State))
+      continue;
+    for (BasicBlock *Succ : successors(BB)) {
+      if (mergeStackPointeeState(StackPointeeIn[Succ], StackPointeeOut[BB]))
+        Worklist.insert(Succ);
+    }
+  }
+
+  for (BasicBlock &BB : F) {
+    StackPointeeState State = StackPointeeIn[&BB];
+    for (Instruction &I : BB) {
+      if (isa<CallBase>(I))
+        StackPointeeBefore[&I] = State;
+      applyStackPointeeTransfer(&I, State);
+    }
+  }
+
+  for (auto &Entry : StackPointeeOut) {
+    for (auto &FieldEntry : Entry.second)
+      StackPointeeObjects.insert(FieldEntry.second.begin(),
+                                 FieldEntry.second.end());
+  }
+}
+
+void StructLiveAnalysis::expandStackPointees(CallBase *Call,
+                                             StructLiveSetTy &FieldInfos) {
+  if (FieldInfos.empty())
+    return;
+  auto StateIt = StackPointeeBefore.find(Call);
+  if (StateIt == StackPointeeBefore.end() || StateIt->second.empty())
+    return;
+
+  bool Changed = true;
+  while (Changed) {
+    Changed = false;
+    SmallVector<FieldInfo *, 16> Current(FieldInfos.begin(), FieldInfos.end());
+    for (FieldInfo *Field : Current) {
+      SetVector<FieldInfo *> PointeeFields;
+      addPointeeFields(Call, Field, PointeeFields);
+      for (FieldInfo *PointeeField : PointeeFields) {
+        if (FieldInfos.insert(PointeeField))
+          Changed = true;
+      }
+    }
+  }
+}
+
 void StructLiveAnalysis::visitMemoryLoad(LoadInst *LI,
                                          SetVector<FieldInfo *> &AllocaUses) {
   Value *Ptr = LI->getPointerOperand()->stripPointerCasts();
@@ -1153,7 +1786,8 @@ void StructLiveAnalysis::visitMemoryLoad(LoadInst *LI,
 }
 
 void StructLiveAnalysis::visitMemoryStore(StoreInst *SI,
-                                          SetVector<FieldInfo *> &AllocaDefs) {
+                                          SetVector<FieldInfo *> &AllocaDefs,
+                                          SetVector<FieldInfo *> &AllocaUses) {
   Value *Ptr = SI->getPointerOperand();
   if (!isStackContainGCPtr(Ptr)) {
     return;
@@ -1167,10 +1801,14 @@ void StructLiveAnalysis::visitMemoryStore(StoreInst *SI,
   const Triple TT(SI->getModule()->getTargetTriple());
   if (ValType->isPointerTy() || ValType->isIntegerTy(64) ||
       (TT.isArch32Bit() && ValType->isIntegerTy(32))) {
-    FieldInfo *Field = getFieldInfoByValue(Ptr);
+    FieldInfo *Field = getStackFieldInfo(Ptr);
+    if (!Field)
+      return;
     Value *Base = Field->V;
     if (isa<AllocaInst>(Base) || isa<Argument>(Base))
       AllocaDefs.insert(Field);
+    if (ValType->isPointerTy())
+      addStoredPointeeFields(SI->getValueOperand(), AllocaUses);
   } else {
     Value *BasePtr = findMemoryBasePointer(Ptr);
     // Only if the PointerType and ValueType of Store Inst are equal,
@@ -1321,7 +1959,7 @@ void StructLiveAnalysis::visitMemorySelect(SelectInst *SI,
 
 // If it is an instruction that contains the memory parameter, then handles
 // use and define values according to the instruction type.
-MemoryAccess StructLiveAnalysis::hasMemoryDefineOrUseValue(
+MemoryAccessKind StructLiveAnalysis::hasMemoryDefineOrUseValue(
     Instruction *I, SetVector<FieldInfo *> &AllocaDefs,
     SetVector<FieldInfo *> &AllocaUses) {
   // For each memory instruction, identifies and processes use and define,
@@ -1333,7 +1971,7 @@ MemoryAccess StructLiveAnalysis::hasMemoryDefineOrUseValue(
     visitMemoryLoad(cast<LoadInst>(I), AllocaUses);
     break;
   case Instruction::Store:
-    visitMemoryStore(cast<StoreInst>(I), AllocaDefs);
+    visitMemoryStore(cast<StoreInst>(I), AllocaDefs, AllocaUses);
     break;
   case Instruction::Call:
   case Instruction::Invoke:
@@ -1352,7 +1990,7 @@ MemoryAccess StructLiveAnalysis::hasMemoryDefineOrUseValue(
     Status |= static_cast<int>(DefineMemory);
   if (!AllocaUses.empty())
     Status |= static_cast<int>(UseMemory);
-  return static_cast<MemoryAccess>(Status);
+  return static_cast<MemoryAccessKind>(Status);
 }
 
 void StructLiveAnalysis::combineStructGCField(StructLiveSetTy &FieldInfos,
@@ -1488,10 +2126,11 @@ void LivenessData::computeGCFieldLiveness(
     MutableArrayRef<SafepointRecord> Records) {
   StructLiveAnalysis StructLA(F, DT, AllocaData);
 
-  // In the case of phi struct, we need to record all structs. To ensure
-  // that the struct is initialized, we insert memset. It is optimized
-  // after Livenesss analysis. Only necessary memsets are retained.
-  StructLA.insertMemsetForPhiStruct();
+  StructLA.computeStackPointeeStates();
+
+  // In the case of phi struct or a stack field publishing another stack
+  // object, we need to ensure the pointee is zero-initialized.
+  StructLA.insertMemsetForStackStructs();
 
   StructLA.computeLiveness();
 
@@ -1507,6 +2146,10 @@ void LivenessData::computeGCFieldLiveness(
     // If phi and select exist, delete them and record their alloca SSAs.
     StructLA.legalizeMemoryValueSet(FieldLives);
 
+    // The runtime stops at a stack address held in a stack field.  Explicitly
+    // report the fields of the stack object it points to.
+    StructLA.expandStackPointees(ToUpdate[i], FieldLives);
+
     // Generate the SSA value of `gep a + x` for each struct field.
     StructLA.insertGEPForField(ToUpdate[i], FieldLives, Records[i].FieldSet);
   }
@@ -1514,7 +2157,7 @@ void LivenessData::computeGCFieldLiveness(
   // Eliminate dead cjmemset. Only works at O2, because cjdb needs it at O0.
   if (OptLevel == 2) {
     eliminateDeadMemset(StructLA.Data, F, PostDT, AllocaData,
-                        StructLA.InsertedMemset);
+                        StructLA.InsertedMemset, StructLA.StackPointeeObjects);
   }
 }
 
