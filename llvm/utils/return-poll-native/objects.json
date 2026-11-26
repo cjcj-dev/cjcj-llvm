@@ -8,13 +8,13 @@
       "arm": "candidate",
       "llc_sha256": "41ad559cd00e1c4da7f090938b6cb0d18d37300c95c318f3335c1609ed327c01",
       "command": [
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/tools/release/llc",
+        "llc",
         "--cangjie-pipeline",
         "-mtriple=x86_64-apple-macosx11.0",
         "-filetype=obj",
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/src-candidate/llvm/utils/return-poll-native/pair.ll",
+        "pair.ll",
         "-o",
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/emit-out/x86_64-macos-candidate.o"
+        "x86_64-macos-candidate.o"
       ],
       "rc": 0,
       "sha256": "fe797745173062a3e478a25b94796d4f449865478cbd40f2b0b6e7733d29245a",
@@ -26,13 +26,13 @@
       "arm": "cut-producer",
       "llc_sha256": "c219456a2be514e8cbfda380e4f196009292c2a2b9a0aaa092de3dfdd55185b6",
       "command": [
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/tools/cut-producer/llc",
+        "llc",
         "--cangjie-pipeline",
         "-mtriple=x86_64-apple-macosx11.0",
         "-filetype=obj",
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/src-candidate/llvm/utils/return-poll-native/pair.ll",
+        "pair.ll",
         "-o",
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/emit-out/x86_64-macos-cut-producer.o"
+        "x86_64-macos-cut-producer.o"
       ],
       "rc": 0,
       "sha256": "33845fc1c1c3674e5a745df0de81e378fed6cbb9d78d2d170ea8b5a93984e94a",
@@ -44,13 +44,13 @@
       "arm": "candidate",
       "llc_sha256": "41ad559cd00e1c4da7f090938b6cb0d18d37300c95c318f3335c1609ed327c01",
       "command": [
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/tools/release/llc",
+        "llc",
         "--cangjie-pipeline",
         "-mtriple=aarch64-apple-macosx11.0",
         "-filetype=obj",
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/src-candidate/llvm/utils/return-poll-native/pair.ll",
+        "pair.ll",
         "-o",
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/emit-out/aarch64-macos-candidate.o"
+        "aarch64-macos-candidate.o"
       ],
       "rc": 0,
       "sha256": "a32b501232473d74c26ddeb76ab8b2c99cae37c15f854741ed122fe0b62f037b",
@@ -62,13 +62,13 @@
       "arm": "cut-producer",
       "llc_sha256": "c219456a2be514e8cbfda380e4f196009292c2a2b9a0aaa092de3dfdd55185b6",
       "command": [
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/tools/cut-producer/llc",
+        "llc",
         "--cangjie-pipeline",
         "-mtriple=aarch64-apple-macosx11.0",
         "-filetype=obj",
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/src-candidate/llvm/utils/return-poll-native/pair.ll",
+        "pair.ll",
         "-o",
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/emit-out/aarch64-macos-cut-producer.o"
+        "aarch64-macos-cut-producer.o"
       ],
       "rc": 0,
       "sha256": "db863deef8f01106d5819da01efd414e12a510e25cfe44372d261bffe1cb0e6e",
@@ -80,13 +80,13 @@
       "arm": "candidate",
       "llc_sha256": "41ad559cd00e1c4da7f090938b6cb0d18d37300c95c318f3335c1609ed327c01",
       "command": [
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/tools/release/llc",
+        "llc",
         "--cangjie-pipeline",
         "-mtriple=x86_64-pc-windows-msvc",
         "-filetype=obj",
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/src-candidate/llvm/utils/return-poll-native/pair.ll",
+        "pair.ll",
         "-o",
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/emit-out/x86_64-windows-candidate.o"
+        "x86_64-windows-candidate.o"
       ],
       "rc": 0,
       "sha256": "de8accfe9573d8206a066f7e18f4cd6c4b1511b8489af24cc24fc918e129fb8d",
@@ -98,13 +98,13 @@
       "arm": "cut-producer",
       "llc_sha256": "c219456a2be514e8cbfda380e4f196009292c2a2b9a0aaa092de3dfdd55185b6",
       "command": [
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/tools/cut-producer/llc",
+        "llc",
         "--cangjie-pipeline",
         "-mtriple=x86_64-pc-windows-msvc",
         "-filetype=obj",
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/src-candidate/llvm/utils/return-poll-native/pair.ll",
+        "pair.ll",
         "-o",
-        "/root/sym_cjcj_llvm_74_implement_r5859347952/emit-out/x86_64-windows-cut-producer.o"
+        "x86_64-windows-cut-producer.o"
       ],
       "rc": 0,
       "sha256": "ae50603b26f649ca64aa63d5e8648d00f844504ff4f3308b24341c6f547a212b",

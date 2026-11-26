@@ -11,8 +11,10 @@ entry. It tests root preservation through the handshake, not a complete GC cycle
 `objects.json` contains actual cross-target object bytes emitted on the LLVM
 build host, so the native runners need not rebuild LLVM. It is an input artifact,
 not expected output. Each object records its successful compiler invocation,
-producer hash, input hash, and object hash. The ordinary and producer-cut llc
-binaries are identified by the LLVM #74 implementation report. The producer cut
+producer hash, input hash, and object hash. The recorded command uses file
+names for the compiler, input, and output so it is independent of the build host.
+The ordinary and producer-cut llc binaries are identified by the LLVM #74
+implementation report. The producer cut
 restricts the existing `emitInstruction` return routes to Linux. To regenerate:
 
 ```

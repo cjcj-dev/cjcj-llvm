@@ -34,12 +34,14 @@ for target, triple in [('x86_64-macos', 'x86_64-apple-macosx11.0'),
     for arm, toolarm in [('candidate', 'release'), ('cut-producer', 'cut-producer')]:
         llc = a.tools/toolarm/'llc'
         obj = a.out/(target+'-'+arm+'.o')
-        cmd = [str(llc), '--cangjie-pipeline', '-mtriple='+triple,
-               '-filetype=obj', str(source), '-o', str(obj)]
+        cmd = [llc, '--cangjie-pipeline', '-mtriple='+triple,
+               '-filetype=obj', source, '-o', obj]
         result = subprocess.run(cmd, capture_output=True, text=True)
         (a.out/(target+'-'+arm+'.log')).write_text(result.stdout+result.stderr)
         result.check_returncode()
         manifest['objects'].append({'target': target, 'triple': triple, 'arm': arm,
-            'llc_sha256': sha(llc), 'command': cmd, 'rc': result.returncode,
-            'sha256': sha(obj), 'base64': base64.b64encode(obj.read_bytes()).decode()})
+            'llc_sha256': sha(llc),
+            'command': [arg.name if isinstance(arg, Path) else arg for arg in cmd],
+            'rc': result.returncode, 'sha256': sha(obj),
+            'base64': base64.b64encode(obj.read_bytes()).decode()})
 (a.out/'objects.json').write_text(json.dumps(manifest, indent=2)+'\n')
