@@ -112,7 +112,7 @@ add_lldb_library(liblldb SHARED ${option_framework}
 
 # set rpath to link boundscheck indirectly
 if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
-  target_link_options(liblldb PUBLIC "-Wl,-rpath,${CMAKE_SOURCE_DIR}/../utils/boundscheck/lib/${CMAKE_SYSTEM_PROCESSOR}")
+  target_link_options(liblldb PRIVATE "-Wl,-rpath,@loader_path")
 else()
   string(REPLACE "AMD64" "x86_64" ARCH_NAME "${CMAKE_SYSTEM_PROCESSOR}")
   target_link_directories(lldbPluginExpressionParserCangjie PUBLIC ${CMAKE_SOURCE_DIR}/../utils/boundscheck/lib/${ARCH_NAME})

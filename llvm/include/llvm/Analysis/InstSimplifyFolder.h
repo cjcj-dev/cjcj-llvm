@@ -31,7 +31,7 @@ class Constant;
 /// InstSimplifyFolder - Use InstructionSimplify to fold operations to existing
 /// values. Also applies target-specific constant folding when not using
 /// InstructionSimplify.
-class InstSimplifyFolder final : public IRBuilderFolder {
+class InstSimplifyFolder : public IRBuilderFolder {
   TargetFolder ConstFolder;
   SimplifyQuery SQ;
 

@@ -60,6 +60,7 @@ add_lldb_library(lldbPluginExpressionParserCangjie
 endif()
 
 string(REPLACE "AMD64" "x86_64" ARCH_NAME "${CMAKE_SYSTEM_PROCESSOR}")
+string(REPLACE "arm64" "aarch64" ARCH_NAME "${ARCH_NAME}")
 target_link_directories(lldbPluginExpressionParserCangjie PUBLIC ${CMAKE_SOURCE_DIR}/../utils/boundscheck/lib/${ARCH_NAME})
 add_compile_definitions(CANGJIE_CODEGEN_CJNATIVE_BACKEND)
 add_compile_definitions(CANGJIE_AST2CHIR)

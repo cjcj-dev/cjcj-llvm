@@ -27,7 +27,7 @@
 namespace llvm {
 
 /// ConstantFolder - Create constants with minimum, target independent, folding.
-class ConstantFolder final : public IRBuilderFolder {
+class ConstantFolder : public IRBuilderFolder {
   virtual void anchor();
 
 public:

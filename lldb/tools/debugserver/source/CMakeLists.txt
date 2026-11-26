@@ -181,8 +181,20 @@ if (DEFINED MIG_ARCHS)
 endif()
 separate_arguments(MIG_ARCH_FLAGS_SEPARTED NATIVE_COMMAND "${MIG_ARCH_FLAGS}")
 
+if("${CMAKE_OSX_SYSROOT}" STREQUAL "")
+  execute_process(COMMAND xcrun --sdk macosx --show-sdk-path
+    RESULT_VARIABLE _lldb_mig_sdk_rc
+    OUTPUT_VARIABLE _lldb_mig_sysroot
+    ERROR_VARIABLE _lldb_mig_sdk_err
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(NOT _lldb_mig_sdk_rc EQUAL 0 OR "${_lldb_mig_sysroot}" STREQUAL "")
+    message(FATAL_ERROR "debugserver: CMAKE_OSX_SYSROOT is empty and 'xcrun --sdk macosx --show-sdk-path' gave no SDK for mig (rc=${_lldb_mig_sdk_rc}): ${_lldb_mig_sdk_err}")
+  endif()
+else()
+  set(_lldb_mig_sysroot "${CMAKE_OSX_SYSROOT}")
+endif()
 add_custom_command(OUTPUT ${generated_mach_interfaces}
-  VERBATIM COMMAND mig ${MIG_ARCH_FLAGS_SEPARTED} -isysroot ${CMAKE_OSX_SYSROOT} ${CMAKE_CURRENT_SOURCE_DIR}/MacOSX/dbgnub-mig.defs
+  VERBATIM COMMAND mig ${MIG_ARCH_FLAGS_SEPARTED} -isysroot "${_lldb_mig_sysroot}" ${CMAKE_CURRENT_SOURCE_DIR}/MacOSX/dbgnub-mig.defs
   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/MacOSX/dbgnub-mig.defs
   )
 

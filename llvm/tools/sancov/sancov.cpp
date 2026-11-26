@@ -529,10 +529,10 @@ private:
       return std::unique_ptr<SpecialCaseList>();
 
     if (!ClBlacklist.empty())
-      return SpecialCaseList::createOrDie({{ClBlacklist}},
+      return SpecialCaseList::createOrDie({ClBlacklist.getValue()},
                                           *vfs::getRealFileSystem());
 
-    return SpecialCaseList::createOrDie({{ClIgnorelist}},
+    return SpecialCaseList::createOrDie({ClIgnorelist.getValue()},
                                         *vfs::getRealFileSystem());
   }
   std::unique_ptr<SpecialCaseList> DefaultIgnorelist;
