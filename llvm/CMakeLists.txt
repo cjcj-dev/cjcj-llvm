@@ -300,7 +300,6 @@ if (CJ_LLVM_COMMIT_FROM_GIT)
     set(CJ_LLVM_COMMIT "${CJ_LLVM_COMMIT}-dirty")
   endif()
 endif()
-add_definitions(-DCJ_LLVM_COMMIT="${CJ_LLVM_COMMIT}")
 message(STATUS "CJ_LLVM_COMMIT=${CJ_LLVM_COMMIT}")
 
 option(LLVM_TOOL_LLVM_DRIVER_BUILD "Enables building the llvm multicall tool" OFF)

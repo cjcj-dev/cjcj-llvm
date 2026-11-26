@@ -118,6 +118,9 @@ endif()
 
 add_subdirectory(BLAKE3)
 
+set_source_files_properties(CJProvenance.cpp PROPERTIES
+  COMPILE_DEFINITIONS "CJ_LLVM_COMMIT=\"${CJ_LLVM_COMMIT}\"")
+
 add_llvm_component_library(LLVMSupport
   AddressRanges.cpp
   AArch64TargetParser.cpp
