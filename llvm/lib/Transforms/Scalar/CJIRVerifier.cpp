@@ -612,6 +612,12 @@ public:
         if (isCJTypedReadHelperCandidate(*Copy, DL))
           break;
       if (isNoReferenceMemTransfer(Dst, Src, SizeArg)) {
+        // Both sides are complete typed regions selected from AS0
+        // declarations: no heap carrier, no selected base and no cast
+        // between the declaration and its field selection.  The multi-index
+        // GEP is then a proven subobject, not an interior heap view.
+        if (isAS0DeclaredRootNoReferenceTransfer(Dst, Src, SizeArg))
+          break;
         // MULTI-index GEP / select-or-phi base can still recover a Plain
         // region and used to leave with rc=0 and empty stderr.  Fold that
         // fourth exit into the unknown report ledger.
@@ -2433,6 +2439,45 @@ private:
     if (Begin > PayloadSize || Size > PayloadSize - Begin)
       return KnownCarrierRange::Invalid;
     return classifyKnownLayoutRange(Layout, Begin, Begin + Size);
+  }
+
+  // True only for an AS0 typed region whose declaration root is an alloca,
+  // argument or global reached through AS0 outer bitcasts followed by GEPs
+  // only.  An addrspacecast, select, phi, or any cast between a GEP and its
+  // declaration leaves the root unproven.
+  bool isAS0DeclaredRootRegion(Value *Ptr) {
+    auto IsTypedAS0Pointer = [](const Value *V) {
+      auto *PtrTy = dyn_cast<PointerType>(V->getType());
+      return PtrTy && !PtrTy->isOpaque() && PtrTy->getAddressSpace() == 0;
+    };
+    Value *Current = Ptr;
+    if (!IsTypedAS0Pointer(Current))
+      return false;
+    while (auto *Cast = dyn_cast<BitCastOperator>(Current)) {
+      Current = Cast->getOperand(0);
+      if (!IsTypedAS0Pointer(Current))
+        return false;
+    }
+    while (auto *GEP = dyn_cast<GEPOperator>(Current)) {
+      Current = GEP->getPointerOperand();
+      if (!IsTypedAS0Pointer(Current))
+        return false;
+    }
+    return isa<AllocaInst>(Current) || isa<Argument>(Current) ||
+           isa<GlobalVariable>(Current);
+  }
+
+  // Both copy ends independently recover the same-size complete typed region
+  // (constant in-bounds selections, exact size) rooted at an AS0 declaration,
+  // and neither region holds a GC pointer.
+  bool isAS0DeclaredRootNoReferenceTransfer(Value *Dst, Value *Src,
+                                            Value *SizeValue) {
+    if (!isAS0DeclaredRootRegion(Dst) || !isAS0DeclaredRootRegion(Src))
+      return false;
+    Type *DstRegionTy = recoverCompleteTypedRegionType(Dst, SizeValue);
+    Type *SrcRegionTy = recoverCompleteTypedRegionType(Src, SizeValue);
+    return DstRegionTy && SrcRegionTy && !containsGCPtrType(DstRegionTy) &&
+           !containsGCPtrType(SrcRegionTy);
   }
 
   bool isNoReferenceMemTransfer(Value *Dst, Value *Src, Value *SizeValue) {
